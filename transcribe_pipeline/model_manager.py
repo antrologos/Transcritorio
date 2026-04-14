@@ -125,6 +125,56 @@ def status_text(cache_dir: Path | None = None) -> str:
     return "\n".join(lines)
 
 
+def _format_size(nbytes: int) -> str:
+    if nbytes >= 1_073_741_824:
+        return f"{nbytes / 1_073_741_824:.1f} GB"
+    if nbytes >= 1_048_576:
+        return f"{nbytes / 1_048_576:.0f} MB"
+    return f"{nbytes / 1024:.0f} KB"
+
+
+def _make_tqdm_class(
+    asset_label: str,
+    model_index: int,
+    total_models: int,
+    progress_callback: ProgressCallback | None,
+) -> type | None:
+    """Create a tqdm-compatible class that forwards byte progress to the GUI."""
+    if progress_callback is None:
+        return None
+
+    try:
+        from tqdm import tqdm as _tqdm_base
+    except ImportError:
+        return None
+
+    class _DownloadProgress(_tqdm_base):  # type: ignore[misc]
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            kwargs.setdefault("unit", "B")
+            kwargs.setdefault("unit_scale", True)
+            super().__init__(*args, **kwargs)
+
+        def update(self, n: int = 1) -> bool | None:  # type: ignore[override]
+            result = super().update(n)
+            total_bytes = self.total or 1
+            done_bytes = self.n
+            file_pct = min(100, int((done_bytes / total_bytes) * 100))
+            model_start = int(((model_index - 1) / total_models) * 100)
+            model_end = int((model_index / total_models) * 100)
+            overall = model_start + int((model_end - model_start) * file_pct / 100)
+            size_info = f"{_format_size(done_bytes)}/{_format_size(total_bytes)}"
+            progress_callback(
+                {
+                    "event": "model_download_bytes",
+                    "progress": overall,
+                    "message": f"Baixando {asset_label}: {size_info} ({file_pct}%)",
+                }
+            )
+            return result
+
+    return _DownloadProgress
+
+
 def download_required_models(
     *,
     token: str | None = None,
@@ -153,11 +203,12 @@ def download_required_models(
                 {
                     "event": "model_download_start",
                     "progress": int(((index - 1) / total) * 100),
-                    "message": f"Baixando {asset.label}.",
+                    "message": f"Baixando {asset.label} ({index}/{total})...",
                 }
             )
+        tqdm_cls = _make_tqdm_class(asset.label, index, total, progress_callback)
         try:
-            snapshot_download(
+            kwargs: dict[str, object] = dict(
                 repo_id=asset.repo_id,
                 repo_type="model",
                 cache_dir=str(cache_dir),
@@ -165,6 +216,9 @@ def download_required_models(
                 force_download=force,
                 local_files_only=False,
             )
+            if tqdm_cls is not None:
+                kwargs["tqdm_class"] = tqdm_cls
+            snapshot_download(**kwargs)
         except Exception as exc:  # noqa: BLE001 - keep batch progress visible.
             failures += 1
             if progress_callback is not None:
@@ -181,7 +235,7 @@ def download_required_models(
                 {
                     "event": "model_download_done",
                     "progress": int((index / total) * 100),
-                    "message": f"{asset.label} baixado.",
+                    "message": f"{asset.label} baixado ({index}/{total}).",
                 }
             )
     return failures

@@ -665,9 +665,14 @@ if QT_IMPORT_ERROR is None:
                 except (TypeError, ValueError):
                     inner_percent = 0
                 percent = start_percent + int(((end_percent - start_percent) * inner_percent) / 100)
-                label = message
-                if detail.get("event") == "asr_progress":
+                event = detail.get("event", "")
+                detail_message = detail.get("message")
+                if detail_message and event in ("model_download_bytes", "model_download_start", "model_download_done", "model_download_error"):
+                    label = str(detail_message)
+                elif event == "asr_progress":
                     label = f"{message} {inner_percent}%"
+                else:
+                    label = message
                 eta = eta_from_progress(self.started_monotonic, percent)
                 self.progress.emit(f"Etapa {index} de {total}: {label} - {percent}% - {eta}", percent)
 
@@ -1390,10 +1395,11 @@ if QT_IMPORT_ERROR is None:
             )
 
         def show_documentation(self) -> None:
-            docs = [
-                self.context.paths.project_root / "README_transcricoes.md",
-            ]
-            existing = [str(path) for path in docs if path.exists()]
+            if self.context is not None:
+                docs = [self.context.paths.project_root / "README_transcricoes.md"]
+                existing = [str(path) for path in docs if path.exists()]
+            else:
+                existing = []
             QMessageBox.information(
                 self,
                 "Documentacao",
@@ -1401,11 +1407,15 @@ if QT_IMPORT_ERROR is None:
             )
 
         def show_queue(self) -> None:
+            if not self._require_project("Fila de tarefas"):
+                return
             self.context = app_service.load_project(self.context.config_path)
             dialog = JobsDialog(self.context, self)
             dialog.exec()
 
         def configure_engine(self) -> None:
+            if not self._require_project("Configuracao do motor"):
+                return
             dialog = EngineSettingsDialog(self.context.config, self)
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 return
@@ -1555,6 +1565,26 @@ if QT_IMPORT_ERROR is None:
             open_button = self.action_button(self.open_transcript_action)
             layout.addWidget(open_button)
             return panel
+
+        def _has_project(self) -> bool:
+            return self.context is not None
+
+        def _require_project(self, action_label: str = "Esta acao") -> bool:
+            """Show a message and return False if no project is loaded."""
+            if self.context is not None:
+                return True
+            QMessageBox.information(
+                self,
+                "Nenhum projeto aberto",
+                f"{action_label} requer um projeto aberto.\n\n"
+                "Use Projeto > Novo projeto ou Projeto > Abrir projeto.",
+            )
+            return False
+
+        def _browse_dir(self) -> str:
+            if self.context is not None:
+                return str(self.context.paths.project_root)
+            return str(Path.home())
 
         def project_header_text(self) -> str:
             if self.context is None:
@@ -1842,7 +1872,9 @@ if QT_IMPORT_ERROR is None:
             ]
 
         def add_audio_folder(self) -> None:
-            folder = QFileDialog.getExistingDirectory(self, "Escolha uma pasta com áudios ou vídeos", str(self.context.paths.project_root))
+            if not self._require_project("Adicionar pasta"):
+                return
+            folder = QFileDialog.getExistingDirectory(self, "Escolha uma pasta com áudios ou vídeos", self._browse_dir())
             if not folder:
                 return
             try:
@@ -1860,7 +1892,7 @@ if QT_IMPORT_ERROR is None:
         def new_project(self) -> None:
             if not self.save_current_turn():
                 return
-            base_folder = QFileDialog.getExistingDirectory(self, "Escolha onde criar o projeto", str(self.context.paths.project_root))
+            base_folder = QFileDialog.getExistingDirectory(self, "Escolha onde criar o projeto", self._browse_dir())
             if not base_folder:
                 return
             name, ok = QInputDialog.getText(self, "Novo projeto", "Nome do projeto:")
@@ -1883,7 +1915,7 @@ if QT_IMPORT_ERROR is None:
         def open_project(self) -> None:
             if not self.save_current_turn():
                 return
-            folder = QFileDialog.getExistingDirectory(self, "Escolha a pasta do projeto", str(self.context.paths.project_root))
+            folder = QFileDialog.getExistingDirectory(self, "Escolha a pasta do projeto", self._browse_dir())
             if not folder:
                 return
             try:
@@ -1914,11 +1946,13 @@ if QT_IMPORT_ERROR is None:
             self.refresh_interviews()
 
         def add_audio_files(self) -> None:
+            if not self._require_project("Adicionar arquivos"):
+                return
             extensions = " ".join(f"*{ext}" for ext in self.context.config.get("media_extensions", []))
             files, _filter = QFileDialog.getOpenFileNames(
                 self,
                 "Escolha arquivos de áudio ou vídeo",
-                str(self.context.paths.project_root),
+                self._browse_dir(),
                 f"Mídia ({extensions});;Todos os arquivos (*)",
             )
             if not files:
@@ -1932,11 +1966,15 @@ if QT_IMPORT_ERROR is None:
             QMessageBox.information(self, "Arquivos adicionados", f"{len(files)} arquivo(s) foram adicionados ao projeto.")
 
         def save_project_metadata(self) -> None:
+            if not self._require_project("Salvar projeto"):
+                return
             self.context = app_service.save_project_metadata(self.context)
             self.set_save_state("Projeto salvo.")
             self.refresh_interviews()
 
         def open_project_folder(self) -> None:
+            if not self._require_project("Abrir pasta do projeto"):
+                return
             os.startfile(str(self.context.paths.project_root))  # type: ignore[attr-defined]
 
         def apply_metadata_to_selected(self) -> None:
@@ -2071,7 +2109,7 @@ if QT_IMPORT_ERROR is None:
                 return None
 
         def speaker_options_for_current_file(self) -> list[str]:
-            metadata = self.context.metadata.get(self.current_interview_id or "", {})
+            metadata = (self.context.metadata if self.context else {}).get(self.current_interview_id or "", {})
             labels = project_store.speaker_labels_for_metadata(metadata)
             existing = {label.casefold() for label in labels}
             for turn in self.turns:
@@ -2100,6 +2138,8 @@ if QT_IMPORT_ERROR is None:
             source_path = self.media_candidates[0] if self.media_candidates else None
             if not source_path or not self.current_interview_id:
                 self.waveform_widget.set_waveform([], 0)
+                return
+            if self.context is None:
                 return
             cache_path = waveform_cache_path(self.context.paths.output_root, self.current_interview_id)
             cached = load_waveform_cache(cache_path, source_path)
@@ -2320,6 +2360,7 @@ if QT_IMPORT_ERROR is None:
             if not hasattr(self, "save_action"):
                 return
             busy = bool(self.worker and self.worker.isRunning())
+            has_project = self._has_project()
             has_selected = bool(self.selected_interview_id() or self.current_interview_id)
             has_table_selection = bool(self.selected_interview_ids())
             has_review = bool(self.current_interview_id and self.review)
@@ -2328,19 +2369,19 @@ if QT_IMPORT_ERROR is None:
             has_turn = bool(has_review and self.current_turn_id)
             self.new_project_action.setEnabled(not busy)
             self.open_project_action.setEnabled(not busy)
-            self.add_folder_action.setEnabled(not busy)
-            self.add_files_action.setEnabled(not busy)
-            self.save_project_action.setEnabled(not busy)
-            self.open_project_folder_action.setEnabled(not busy)
+            self.add_folder_action.setEnabled(not busy and has_project)
+            self.add_files_action.setEnabled(not busy and has_project)
+            self.save_project_action.setEnabled(not busy and has_project)
+            self.open_project_folder_action.setEnabled(not busy and has_project)
             self.startup_action.setEnabled(not busy)
             self.exit_action.setEnabled(True)
-            self.apply_metadata_action.setEnabled(not busy and has_table_selection)
-            self.queue_action.setEnabled(True)
+            self.apply_metadata_action.setEnabled(not busy and has_project and has_table_selection)
+            self.queue_action.setEnabled(has_project)
             self.model_setup_action.setEnabled(not busy)
             self.model_status_action.setEnabled(True)
-            self.engine_settings_action.setEnabled(not busy)
-            self.refresh_library_action.setEnabled(not busy)
-            self.reload_list_action.setEnabled(not busy)
+            self.engine_settings_action.setEnabled(not busy and has_project)
+            self.refresh_library_action.setEnabled(not busy and has_project)
+            self.reload_list_action.setEnabled(not busy and has_project)
             self.open_transcript_action.setEnabled(not busy and has_table_selection)
             self.transcribe_action.setEnabled(not busy and has_table_selection)
             self.transcribe_pending_action.setEnabled(not busy and bool(self.pending_transcription_ids()))
@@ -2580,6 +2621,8 @@ if QT_IMPORT_ERROR is None:
             return True
 
         def open_export_folder(self) -> None:
+            if not self._require_project("Abrir pasta de exportacao"):
+                return
             folder = self.context.paths.review_dir / "final"
             folder.mkdir(parents=True, exist_ok=True)
             os.startfile(str(folder))  # type: ignore[attr-defined]
@@ -3024,19 +3067,22 @@ if QT_IMPORT_ERROR is None:
 
         def closeEvent(self, event: Any) -> None:
             if self.worker and self.worker.isRunning():
-                answer = QMessageBox.question(
-                    self,
-                    "Tarefa em andamento",
-                    f"{self.current_job_label or 'Uma tarefa'} ainda esta em andamento. Deseja cancelar e fechar quando for seguro?",
-                )
-                if answer == QMessageBox.StandardButton.Yes:
-                    self._close_after_worker = True
-                    self.cancel_current_job()
-                event.ignore()
-                return
-            if not self.save_current_turn():
-                event.ignore()
-                return
+                msg = QMessageBox(self)
+                msg.setIcon(QMessageBox.Icon.Question)
+                msg.setWindowTitle("Tarefa em andamento")
+                msg.setText(f"{self.current_job_label or 'Uma tarefa'} ainda esta em andamento.")
+                wait_btn = msg.addButton("Aguardar", QMessageBox.ButtonRole.RejectRole)
+                msg.addButton("Fechar mesmo assim", QMessageBox.ButtonRole.AcceptRole)
+                msg.setDefaultButton(wait_btn)
+                msg.exec()
+                if msg.clickedButton() == wait_btn:
+                    event.ignore()
+                    return
+                # Force close: terminate the worker thread
+                self.worker.cancel_after_step = True
+                self.worker.terminate()
+                self.worker.wait(3000)
+            self.save_current_turn()
             self.player.stop()
             event.accept()
 
