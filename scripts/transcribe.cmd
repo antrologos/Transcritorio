@@ -18,6 +18,8 @@ set "TRANSCRITORIO_HOME=%LOCALAPPDATA%\Transcritorio"
 if "%TRANSCRICAO_VENV%"=="" (
   if exist "%TRANSCRITORIO_HOME%\transcricao-venv\Scripts\python.exe" (
     set "TRANSCRICAO_VENV=%TRANSCRITORIO_HOME%\transcricao-venv"
+  ) else if exist "%LOCALAPPDATA%\InfoCitizen\transcricao-venv\Scripts\python.exe" (
+    set "TRANSCRICAO_VENV=%LOCALAPPDATA%\InfoCitizen\transcricao-venv"
   ) else (
     set "TRANSCRICAO_VENV=%TRANSCRITORIO_HOME%\transcricao-venv"
   )
