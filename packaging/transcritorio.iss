@@ -27,11 +27,13 @@ AllowNoIcons=yes
 DiskSpanning=yes
 Compression=lzma2/ultra64
 SolidCompression=yes
-; Output
-OutputDir=..\dist\installer
+; Output — keep outside Dropbox synced folders to avoid antivirus conflicts.
+; With DiskSpanning, the Setup.exe + .bin files will be in this directory.
+OutputDir=C:\Users\antro\AppData\Local\Temp\Transcritorio-installer
 OutputBaseFilename=Transcritorio-{#AppVersion}-Setup
 ; Icons
-SetupIconFile=..\assets\transcritorio_icon.ico
+; SetupIconFile requires antivirus exclusion; use default icon for now
+; SetupIconFile=..\assets\transcritorio_icon.ico
 UninstallDisplayIcon={app}\{#AppExeName}
 ; Windows 10 1809+ (October 2018) required
 MinVersion=10.0.17763
