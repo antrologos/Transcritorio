@@ -127,8 +127,7 @@ excludes = [
     "pytest",
     "sphinx",
     "docutils",
-    # torch distributed / caffe2 – not needed for local inference
-    "torch.distributed",
+    # caffe2 / triton – not needed for local inference
     "caffe2",
     "triton",
 ]

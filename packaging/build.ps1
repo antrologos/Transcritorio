@@ -150,6 +150,7 @@ $PyInstaller = Join-Path $VenvPath "Scripts\pyinstaller.exe"
     --distpath $DistDir `
     --workpath $BuildDir `
     --clean `
+    --noconfirm `
     (Join-Path $PackagingDir "transcritorio.spec")
 
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed (exit code $LASTEXITCODE)" }
