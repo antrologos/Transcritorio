@@ -50,8 +50,33 @@ hidden_imports = [
 ]
 
 # collect_submodules for heavy packages whose internal structure is complex
-for pkg in ("torch", "torchaudio", "torchvision", "transformers"):
+for pkg in ("torch", "torchaudio", "torchvision"):
     hidden_imports += collect_submodules(pkg)
+
+# transformers: only collect the core + models actually used by whisperx/pyannote
+# (collecting ALL of transformers adds ~600 unused model modules and ~3 GB)
+hidden_imports += [
+    "transformers",
+    "transformers.models.wav2vec2",
+    "transformers.models.whisper",
+    "transformers.models.auto",
+    "transformers.pipelines",
+    "transformers.tokenization_utils",
+    "transformers.tokenization_utils_fast",
+    "transformers.feature_extraction_utils",
+    "transformers.modeling_utils",
+    "transformers.configuration_utils",
+]
+try:
+    # Collect non-model submodules (utils, generation, etc.) but skip models.*
+    for sub in collect_submodules("transformers"):
+        if not sub.startswith("transformers.models.") or any(
+            sub.startswith(f"transformers.models.{m}")
+            for m in ("wav2vec2", "whisper", "auto")
+        ):
+            hidden_imports.append(sub)
+except Exception:
+    pass
 
 # ---------------------------------------------------------------------------
 # Data files
@@ -127,7 +152,7 @@ common_kwargs = dict(
 # Analysis: GUI entry point
 # ---------------------------------------------------------------------------
 gui_a = Analysis(
-    [str(PACKAGE_DIR / "review_studio_qt.py")],
+    [str(PACKAGING_DIR / "gui_entry.py")],
     **common_kwargs,
 )
 gui_pyz = PYZ(gui_a.pure)
@@ -149,7 +174,7 @@ gui_exe = EXE(
 # Analysis: CLI entry point
 # ---------------------------------------------------------------------------
 cli_a = Analysis(
-    [str(PACKAGE_DIR / "__main__.py")],
+    [str(PACKAGING_DIR / "cli_entry.py")],
     **common_kwargs,
 )
 cli_pyz = PYZ(cli_a.pure)

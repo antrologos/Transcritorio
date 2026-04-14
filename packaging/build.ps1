@@ -25,8 +25,10 @@ $env:PYTHONDONTWRITEBYTECODE = "1"
 $RepoRoot    = (Resolve-Path "$PSScriptRoot\..").Path
 $PackagingDir = Join-Path $RepoRoot "packaging"
 $VendorDir    = Join-Path $PackagingDir "vendor"
-$DistDir      = Join-Path $RepoRoot "dist"
-$BuildDir     = Join-Path $RepoRoot "build"
+# Build/dist OUTSIDE Dropbox to avoid file-locking on .exe/.dll during PyInstaller
+$AppBuildRoot = Join-Path $env:LOCALAPPDATA "Transcritorio\packaging"
+$DistDir      = Join-Path $AppBuildRoot "dist"
+$BuildDir     = Join-Path $AppBuildRoot "build"
 
 Write-Host "=== Transcritorio Build ===" -ForegroundColor Cyan
 Write-Host "  Repo:  $RepoRoot"
@@ -48,27 +50,26 @@ if (-not $SkipVenv) {
     py -3 -m venv $VenvPath
     if ($LASTEXITCODE -ne 0) { throw "Failed to create venv" }
 
-    $Pip = Join-Path $VenvPath "Scripts\pip.exe"
     $Python = Join-Path $VenvPath "Scripts\python.exe"
 
-    & $Pip install --upgrade pip wheel setuptools
+    & $Python -m pip install --upgrade pip wheel setuptools
     if ($LASTEXITCODE -ne 0) { throw "Failed to upgrade pip" }
 
     Write-Host "  Installing PyTorch (CUDA 12.8)..."
-    & $Pip install torch==2.8.0 torchaudio==2.8.0 torchvision==0.23.0 `
+    & $Python -m pip install torch==2.8.0 torchaudio==2.8.0 torchvision==0.23.0 `
         --index-url https://download.pytorch.org/whl/cu128
     if ($LASTEXITCODE -ne 0) { throw "Failed to install PyTorch" }
 
     Write-Host "  Installing torchcodec..."
-    & $Pip install torchcodec==0.7.0
+    & $Python -m pip install torchcodec==0.7.0
     if ($LASTEXITCODE -ne 0) { throw "Failed to install torchcodec" }
 
     Write-Host "  Installing Transcritorio package..."
-    & $Pip install "$RepoRoot"
+    & $Python -m pip install "$RepoRoot"
     if ($LASTEXITCODE -ne 0) { throw "Failed to install Transcritorio" }
 
     Write-Host "  Installing PyInstaller..."
-    & $Pip install "pyinstaller>=6.0"
+    & $Python -m pip install "pyinstaller>=6.0"
     if ($LASTEXITCODE -ne 0) { throw "Failed to install PyInstaller" }
 
     Write-Host "  Venv ready." -ForegroundColor Green
@@ -84,11 +85,14 @@ if (-not $SkipFfmpeg) {
     Write-Host "--- [2/7] Downloading FFmpeg ---" -ForegroundColor Yellow
 
     $FfmpegUrl    = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-$FfmpegBuild.zip"
-    $FfmpegZip    = Join-Path $VendorDir "ffmpeg.zip"
-    $FfmpegExtract = Join-Path $VendorDir "ffmpeg-extract"
     $FfmpegTarget  = Join-Path $VendorDir "ffmpeg"
+    # Extract to TEMP (outside Dropbox) to avoid file-locking issues
+    $TempDir       = Join-Path $env:TEMP "transcritorio-ffmpeg-build"
+    $FfmpegZip     = Join-Path $TempDir "ffmpeg.zip"
+    $FfmpegExtract = Join-Path $TempDir "ffmpeg-extract"
 
     New-Item -ItemType Directory -Path $VendorDir -Force | Out-Null
+    New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
     if (Test-Path $FfmpegTarget) { Remove-Item $FfmpegTarget -Recurse -Force }
 
     Write-Host "  Downloading $FfmpegUrl ..."
@@ -99,10 +103,10 @@ if (-not $SkipFfmpeg) {
     Write-Host "  Extracting..."
     Expand-Archive -Path $FfmpegZip -DestinationPath $FfmpegExtract -Force
     $ExtractedDir = Get-ChildItem $FfmpegExtract -Directory | Select-Object -First 1
-    Move-Item $ExtractedDir.FullName $FfmpegTarget
+    # Copy (not Move) to Dropbox to avoid locking conflicts
+    Copy-Item $ExtractedDir.FullName $FfmpegTarget -Recurse -Force
 
-    Remove-Item $FfmpegZip -Force
-    Remove-Item $FfmpegExtract -Recurse -Force
+    Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue
 
     # Verify
     $FfmpegExe = Join-Path $FfmpegTarget "bin\ffmpeg.exe"
