@@ -50,6 +50,8 @@ try:
         QTextEdit,
         QVBoxLayout,
         QWidget,
+        QWizard,
+        QWizardPage,
     )
 except ImportError as exc:  # pragma: no cover
     QT_IMPORT_ERROR: ImportError | None = exc
@@ -1011,138 +1013,299 @@ if QT_IMPORT_ERROR is None:
                     self.table.setItem(row, column, item)
 
 
-    class SetupWizardDialog(QDialog):
-        """First-run wizard shown when AI components are not yet downloaded."""
+    # -----------------------------------------------------------------------
+    # First-Run Wizard (QWizard with 6 pages)
+    # -----------------------------------------------------------------------
+
+    class FirstRunWizard(QWizard):
+        """Step-by-step setup wizard for first-time users."""
+
+        PAGE_WELCOME = 0
+        PAGE_ACCOUNT = 1
+        PAGE_TERMS = 2
+        PAGE_TOKEN = 3
+        PAGE_DOWNLOAD = 4
+        PAGE_DONE = 5
 
         def __init__(self, parent: QWidget | None = None) -> None:
             super().__init__(parent)
             self.download_completed = False
             self.setWindowTitle(f"{APP_NAME} — Configuração inicial")
-            self.resize(620, 700)
-            layout = QVBoxLayout(self)
+            self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
+            self.setFixedWidth(680)
+            self.setMinimumHeight(520)
+            self.setOption(QWizard.WizardOption.NoCancelButton, False)
+            self.setButtonText(QWizard.WizardButton.NextButton, "Próximo →")
+            self.setButtonText(QWizard.WizardButton.BackButton, "← Voltar")
+            self.setButtonText(QWizard.WizardButton.CancelButton, "Pular por agora")
+            self.setButtonText(QWizard.WizardButton.FinishButton, "Começar a usar")
 
-            title = QLabel(f"Bem-vindo ao {APP_NAME}!")
-            title.setStyleSheet("font-size: 20px; font-weight: 700;")
-            layout.addWidget(title)
+            self.setPage(self.PAGE_WELCOME, self._make_welcome_page())
+            self.setPage(self.PAGE_ACCOUNT, self._make_account_page())
+            self.setPage(self.PAGE_TERMS, self._make_terms_page())
+            self.setPage(self.PAGE_TOKEN, self._make_token_page())
+            self.setPage(self.PAGE_DOWNLOAD, self._make_download_page())
+            self.setPage(self.PAGE_DONE, self._make_done_page())
 
+        # -- Page factories --
+
+        def _make_welcome_page(self) -> QWizardPage:
+            page = QWizardPage()
+            page.setTitle(f"Bem-vindo ao {APP_NAME}!")
+            page.setSubTitle("")
+            layout = QVBoxLayout(page)
             intro = QLabel(
-                "Para transcrever entrevistas, o Transcritório precisa baixar\n"
-                "componentes de inteligência artificial (~7 GB, apenas uma vez).\n\n"
-                "Siga os passos abaixo:"
+                "Este programa transcreve gravações de entrevistas automaticamente, "
+                "usando inteligência artificial que funciona no seu próprio computador.\n\n"
+                "Nenhum áudio será enviado para a internet. "
+                "Suas gravações ficam sempre no seu computador.\n\n"
+                "Para funcionar, o programa precisa baixar alguns componentes de "
+                "inteligência artificial (arquivos grandes, cerca de 7 GB). "
+                "Isso é feito uma única vez.\n\n"
+                "Vamos guiá-lo passo a passo. O processo leva uns 10 minutos "
+                "e você só precisa fazer isso na primeira vez."
             )
             intro.setWordWrap(True)
-            intro.setStyleSheet("margin-bottom: 8px;")
             layout.addWidget(intro)
-
-            # Step 1
-            step1 = QGroupBox("Passo 1 — Criar conta")
-            s1 = QVBoxLayout(step1)
-            s1.addWidget(QLabel("Crie uma conta gratuita no Hugging Face (repositório de componentes de IA)."))
-            btn1 = QPushButton("Criar conta →")
-            btn1.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://huggingface.co/join")))
-            s1.addWidget(btn1)
-            layout.addWidget(step1)
-
-            # Step 2
-            step2 = QGroupBox("Passo 2 — Aceitar termos de uso")
-            s2 = QVBoxLayout(step2)
-            s2.addWidget(QLabel(
-                "Aceite os termos do componente de identificação de falantes.\n"
-                "É necessário estar logado no Hugging Face."
+            faq = QGroupBox("O que são \"componentes de IA\"?")
+            faq.setCheckable(False)
+            faq_layout = QVBoxLayout(faq)
+            faq_layout.addWidget(QLabel(
+                "São arquivos que ensinam o computador a reconhecer fala em português. "
+                "Funcionam como um dicionário muito sofisticado. "
+                "Depois de baixados, tudo funciona sem internet."
             ))
-            btn2 = QPushButton("Aceitar termos →")
-            btn2.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://huggingface.co/pyannote/speaker-diarization-community-1")))
-            s2.addWidget(btn2)
-            layout.addWidget(step2)
+            layout.addWidget(faq)
+            layout.addStretch()
+            return page
 
-            # Step 3
-            step3 = QGroupBox("Passo 3 — Criar chave de acesso")
-            s3 = QVBoxLayout(step3)
-            s3.addWidget(QLabel("Crie um token de acesso do tipo \"Read\" (leitura)."))
-            btn3 = QPushButton("Criar chave de acesso →")
-            btn3.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://huggingface.co/settings/tokens")))
-            s3.addWidget(btn3)
-            layout.addWidget(step3)
+        def _make_account_page(self) -> QWizardPage:
+            page = QWizardPage()
+            page.setTitle("Passo 1 de 4: Criar uma conta gratuita")
+            layout = QVBoxLayout(page)
+            layout.addWidget(QLabel(
+                "Os componentes de transcrição ficam em um site chamado Hugging Face — "
+                "uma biblioteca pública de inteligência artificial. É gratuito e seguro, "
+                "como se fosse um \"Google Acadêmico\" de modelos de IA.\n\n"
+                "Você precisa criar uma conta lá para poder baixar os componentes. "
+                "Use qualquer e-mail (pode ser o institucional)."
+            ))
+            btn = QPushButton("Abrir site para criar minha conta →")
+            btn.setStyleSheet("font-weight: 700; padding: 8px; color: #2e7d32;")
+            btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://huggingface.co/join")))
+            layout.addWidget(btn)
+            layout.addWidget(QLabel(
+                "\nDepois de criar sua conta no site (no navegador), "
+                "volte aqui e clique em \"Próximo\".\n\n"
+                "Já tem conta? Pode pular direto para o próximo passo."
+            ))
+            faq = QGroupBox("Dúvidas frequentes")
+            faq_l = QVBoxLayout(faq)
+            faq_l.addWidget(QLabel(
+                "\"É seguro criar conta?\" — Sim. Hugging Face é reconhecido pela comunidade científica.\n\n"
+                "\"Vou pagar alguma coisa?\" — Não. A conta gratuita é suficiente.\n\n"
+                "\"Posso usar conta do Google?\" — Sim, o site permite login com Google."
+            ))
+            layout.addWidget(faq)
+            layout.addStretch()
+            return page
 
-            # Step 4
-            step4 = QGroupBox("Passo 4 — Baixar componentes")
-            s4 = QVBoxLayout(step4)
-            s4.addWidget(QLabel("Cole a chave de acesso aqui:"))
-            self.token_edit = QLineEdit()
-            self.token_edit.setEchoMode(QLineEdit.EchoMode.Password)
-            self.token_edit.setPlaceholderText("hf_...")
-            s4.addWidget(self.token_edit)
-            self.download_button = QPushButton("Baixar componentes")
-            self.download_button.setStyleSheet("font-weight: 700; padding: 8px;")
-            self.download_button.clicked.connect(self._start_download)
-            s4.addWidget(self.download_button)
-            self.progress_label = QLabel("")
-            self.progress_label.setWordWrap(True)
-            s4.addWidget(self.progress_label)
-            self.progress_bar = QProgressBar()
-            self.progress_bar.setRange(0, 100)
-            self.progress_bar.setVisible(False)
-            s4.addWidget(self.progress_bar)
-            layout.addWidget(step4)
+        def _make_terms_page(self) -> QWizardPage:
+            page = QWizardPage()
+            page.setTitle("Passo 2 de 4: Autorizar o modelo de identificação de falantes")
+            layout = QVBoxLayout(page)
+            layout.addWidget(QLabel(
+                "Além do modelo de transcrição (que é livre), usamos um segundo modelo "
+                "que identifica quem está falando em cada trecho — ou seja, separa a fala "
+                "do entrevistador da fala do entrevistado.\n\n"
+                "Esse modelo exige que você aceite os termos de uso no site. "
+                "É só fazer login e clicar em \"Agree and access repository\" (Concordar).\n\n"
+                "Se o site estiver em inglês, procure o botão azul \"Agree\"."
+            ))
+            btn = QPushButton("Abrir página do modelo para aceitar os termos →")
+            btn.setStyleSheet("font-weight: 700; padding: 8px; color: #2e7d32;")
+            btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://huggingface.co/pyannote/speaker-diarization-community-1")))
+            layout.addWidget(btn)
+            faq = QGroupBox("O que estou aceitando?")
+            faq_l = QVBoxLayout(faq)
+            faq_l.addWidget(QLabel(
+                "Você está aceitando os termos de uso do modelo \"pyannote\", criado por "
+                "pesquisadores franceses. Os termos dizem basicamente que você usará o modelo "
+                "para fins legítimos. Não há custo e não há coleta de dados."
+            ))
+            layout.addWidget(faq)
+            layout.addStretch()
+            return page
 
-            # Privacy note
-            privacy = QLabel(
-                "Seus áudios e vídeos nunca saem deste computador.\n"
-                "A chave de acesso é usada apenas para baixar os componentes e depois é descartada."
+        def _make_token_page(self) -> QWizardPage:
+            page = _TokenWizardPage()
+            return page
+
+        def _make_download_page(self) -> QWizardPage:
+            page = _DownloadWizardPage(self)
+            return page
+
+        def _make_done_page(self) -> QWizardPage:
+            page = QWizardPage()
+            page.setTitle("Tudo pronto!")
+            page.setFinalPage(True)
+            layout = QVBoxLayout(page)
+            done_label = QLabel(
+                "Os componentes de inteligência artificial foram instalados com sucesso.\n\n"
+                "O Transcritório está pronto para usar!\n\n"
+                "A partir de agora, toda a transcrição acontece no seu computador, "
+                "sem enviar nada para a internet.\n\n"
+                "Para começar:\n"
+                "  1. Crie ou abra um projeto (pasta com gravações)\n"
+                "  2. O programa vai listar as entrevistas encontradas\n"
+                "  3. Selecione quais deseja transcrever"
             )
-            privacy.setStyleSheet("color: #555; font-size: 11px; margin-top: 4px;")
+            done_label.setWordWrap(True)
+            layout.addWidget(done_label)
+            layout.addStretch()
+            return page
+
+    class _TokenWizardPage(QWizardPage):
+        """Page 3: token entry with pre-validation."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.setTitle("Passo 3 de 4: Criar e colar a chave de acesso")
+            self._validated = False
+            layout = QVBoxLayout(self)
+            layout.addWidget(QLabel(
+                "Agora você precisa criar uma \"chave de acesso\" no Hugging Face. "
+                "É como uma senha temporária que permite ao Transcritório baixar os componentes.\n\n"
+                "Como criar (3 cliques):\n"
+                "  1. Clique no botão abaixo para abrir a página de chaves.\n"
+                "  2. Clique em \"Create new token\".\n"
+                "     • Em \"Token name\", escreva: Transcritorio\n"
+                "     • Em \"Type\", selecione: Read\n"
+                "     • Clique em \"Create token\"\n"
+                "  3. Copie a chave gerada e cole no campo abaixo."
+            ))
+            btn = QPushButton("Abrir página de chaves no Hugging Face →")
+            btn.setStyleSheet("font-weight: 700; padding: 8px; color: #2e7d32;")
+            btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://huggingface.co/settings/tokens")))
+            layout.addWidget(btn)
+            layout.addSpacing(12)
+            layout.addWidget(QLabel("Cole sua chave aqui:"))
+            self.token_edit = QLineEdit()
+            self.token_edit.setPlaceholderText("Cole aqui a chave (começa com hf_...)")
+            # Plain text field so user can see what they pasted
+            self.token_edit.textChanged.connect(self._on_token_changed)
+            layout.addWidget(self.token_edit)
+            self.status_label = QLabel("")
+            self.status_label.setWordWrap(True)
+            layout.addWidget(self.status_label)
+            layout.addStretch()
+            privacy = QLabel(
+                "A chave é usada apenas para baixar os componentes e depois é descartada.\n"
+                "Ela nunca é enviada para nenhum outro servidor."
+            )
+            privacy.setStyleSheet("color: #555; font-size: 11px;")
             privacy.setWordWrap(True)
             layout.addWidget(privacy)
 
-            layout.addStretch()
-            self.skip_button = QPushButton("Pular por agora")
-            self.skip_button.setToolTip("Você poderá baixar os componentes depois em Configurações.")
-            self.skip_button.clicked.connect(self.reject)
-            layout.addWidget(self.skip_button)
+        def _on_token_changed(self) -> None:
+            self._validated = False
+            self.status_label.setText("")
+            self.status_label.setStyleSheet("")
+            self.completeChanged.emit()
 
-        def _start_download(self) -> None:
+        def isComplete(self) -> bool:
+            return self._validated
+
+        def validatePage(self) -> bool:
+            from . import model_manager
             token = self.token_edit.text().strip()
             if not token:
-                QMessageBox.warning(
-                    self,
-                    "Chave de acesso necessária",
-                    "Cole a chave de acesso (token) do Hugging Face para baixar os componentes.",
-                )
+                self.status_label.setText("Cole a chave de acesso no campo acima.")
+                self.status_label.setStyleSheet("color: #c00;")
+                return False
+            self.status_label.setText("Verificando sua chave...")
+            self.status_label.setStyleSheet("color: #555;")
+            # Force UI repaint before blocking call
+            from PySide6.QtCore import QCoreApplication
+            QCoreApplication.processEvents()
+            # Validate token
+            result = model_manager.validate_token(token)
+            if not result["valid"]:
+                self.status_label.setText(result["message"])
+                self.status_label.setStyleSheet("color: #c00;")
+                return False
+            # Check gated model access
+            gated = model_manager.check_gated_access(token)
+            if not gated["access"]:
+                self.status_label.setText(gated["message"])
+                self.status_label.setStyleSheet("color: #e65100;")
+                return False
+            self.status_label.setText(f"✓ {result['message']} {gated['message']}")
+            self.status_label.setStyleSheet("color: #2e7d32; font-weight: 700;")
+            self._validated = True
+            self.completeChanged.emit()
+            return True
+
+        def token(self) -> str:
+            return self.token_edit.text().strip()
+
+    class _DownloadWizardPage(QWizardPage):
+        """Page 4: model download with progress."""
+
+        def __init__(self, wizard: "FirstRunWizard") -> None:
+            super().__init__()
+            self._wizard = wizard
+            self._download_started = False
+            self._download_done = False
+            self.setTitle("Passo 4 de 4: Baixar os componentes")
+            self.setFinalPage(False)
+            layout = QVBoxLayout(self)
+            layout.addWidget(QLabel(
+                "Tudo pronto! Agora vamos baixar os componentes de inteligência artificial.\n\n"
+                "Isso pode levar de 5 a 30 minutos, dependendo da velocidade da sua internet. "
+                "Você pode continuar usando o computador normalmente."
+            ))
+            self.progress_label = QLabel("")
+            self.progress_label.setWordWrap(True)
+            layout.addWidget(self.progress_label)
+            self.progress_bar = QProgressBar()
+            self.progress_bar.setRange(0, 100)
+            layout.addWidget(self.progress_bar)
+            layout.addStretch()
+
+        def initializePage(self) -> None:
+            if self._download_started:
                 return
-            self.download_button.setEnabled(False)
-            self.skip_button.setEnabled(False)
-            self.token_edit.setEnabled(False)
-            self.progress_bar.setVisible(True)
-            self.progress_bar.setValue(0)
+            self._download_started = True
+            token_page = self._wizard.page(FirstRunWizard.PAGE_TOKEN)
+            token = token_page.token() if hasattr(token_page, "token") else ""
             self.progress_label.setText("Iniciando download...")
+            self.progress_bar.setValue(0)
             self._worker = _SetupDownloadThread(token)
             self._worker.progress.connect(self._on_progress)
             self._worker.finished_ok.connect(self._on_done)
             self._worker.failed.connect(self._on_failed)
             self._worker.start()
 
+        def isComplete(self) -> bool:
+            return self._download_done
+
         def _on_progress(self, message: str, percent: int) -> None:
             self.progress_label.setText(message)
             self.progress_bar.setValue(max(0, min(100, percent)))
 
         def _on_done(self) -> None:
-            self.download_completed = True
+            self._download_done = True
+            self._wizard.download_completed = True
             self.progress_bar.setValue(100)
             self.progress_label.setText("Componentes baixados e verificados com sucesso!")
             self.progress_label.setStyleSheet("color: #2e7d32; font-weight: 700;")
-            self.download_button.setText("Concluído ✓")
-            self.skip_button.setText("Continuar")
-            self.skip_button.setEnabled(True)
-            self.skip_button.clicked.disconnect()
-            self.skip_button.clicked.connect(self.accept)
+            self.completeChanged.emit()
 
         def _on_failed(self, message: str) -> None:
-            self.progress_label.setText(f"Erro: {message}")
+            self.progress_label.setText(f"Erro: {message}\n\nVerifique sua conexão e tente novamente.")
             self.progress_label.setStyleSheet("color: #c00;")
-            self.download_button.setEnabled(True)
-            self.download_button.setText("Tentar novamente")
-            self.skip_button.setEnabled(True)
-            self.token_edit.setEnabled(True)
+            self._download_started = False  # allow retry via Back + Next
 
     class _SetupDownloadThread(QThread):
         progress = Signal(str, int)
@@ -1651,7 +1814,7 @@ if QT_IMPORT_ERROR is None:
         def show_startup_dialog(self) -> None:
             # Tela A: Setup wizard when AI components are missing
             if not app_service.required_models_ready():
-                wizard = SetupWizardDialog(self)
+                wizard = FirstRunWizard(self)
                 result = wizard.exec()
                 if result == QDialog.DialogCode.Accepted and wizard.download_completed:
                     # Components installed — show project chooser

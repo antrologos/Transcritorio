@@ -14,6 +14,65 @@ ProgressCallback = Callable[[dict[str, Any]], None]
 ShouldCancel = Callable[[], bool]
 
 LOCAL_PYANNOTE_MODEL = "pyannote/speaker-diarization-community-1"
+
+
+# ---------------------------------------------------------------------------
+# Token and gated-model pre-validation
+# ---------------------------------------------------------------------------
+
+def validate_token(token: str) -> dict[str, Any]:
+    """Validate a HuggingFace token and return user info.
+
+    Returns dict with keys:
+      "valid": bool
+      "username": str (if valid)
+      "error": str (if invalid) — one of "invalid_format", "unauthorized", "network"
+      "message": str — user-friendly Portuguese message
+    """
+    token = token.strip()
+    if not token.startswith("hf_") or len(token) < 10:
+        return {"valid": False, "error": "invalid_format",
+                "message": "A chave deve começar com 'hf_' e ter pelo menos 10 caracteres."}
+    try:
+        from huggingface_hub import HfApi
+        api = HfApi()
+        user = api.whoami(token=token)
+        return {"valid": True, "username": user.get("name", user.get("fullname", "")),
+                "message": f"Chave válida! Conectado como \"{user.get('name', '')}\"."}
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "unauthorized" in msg or "401" in msg or "invalid" in msg:
+            return {"valid": False, "error": "unauthorized",
+                    "message": "Chave não reconhecida. Verifique se copiou o texto completo."}
+        return {"valid": False, "error": "network",
+                "message": "Não foi possível conectar ao Hugging Face. Verifique sua internet."}
+
+
+def check_gated_access(token: str) -> dict[str, Any]:
+    """Check if the token has access to the gated pyannote model.
+
+    Returns dict with keys:
+      "access": bool
+      "error": str | None — "gated", "unauthorized", "network"
+      "message": str — user-friendly Portuguese message
+    """
+    token = token.strip()
+    try:
+        from huggingface_hub import model_info as hf_model_info
+        hf_model_info(LOCAL_PYANNOTE_MODEL, token=token)
+        return {"access": True, "error": None,
+                "message": "Acesso ao modelo de identificação de falantes confirmado."}
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "gated" in msg or "403" in msg or "access" in msg:
+            return {"access": False, "error": "gated",
+                    "message": "Você ainda não aceitou os termos do modelo de identificação de falantes.\n"
+                               "Volte ao passo anterior e aceite os termos no site."}
+        if "401" in msg or "unauthorized" in msg:
+            return {"access": False, "error": "unauthorized",
+                    "message": "Chave não reconhecida para este modelo."}
+        return {"access": False, "error": "network",
+                "message": "Não foi possível verificar acesso ao modelo. Verifique sua internet."}
 REMOTE_DIARIZATION_MARKERS = ("precision-2", "cloud", "pyannoteai")
 
 
