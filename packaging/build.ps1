@@ -84,25 +84,27 @@ if (-not $SkipVenv) {
 # -----------------------------------------------------------------------
 Write-Host "--- Stamping build and reinstalling package ---" -ForegroundColor Yellow
 
-# 1. Write build timestamp into __init__.py (will be baked into the frozen exe)
-$InitFile = Join-Path $RepoRoot "transcribe_pipeline\__init__.py"
-$BuildTimestamp = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-$InitContent = (Get-Content $InitFile -Raw) -replace '__build__ = "dev"', "__build__ = `"$BuildTimestamp`""
-Set-Content $InitFile $InitContent -NoNewline
+# 1. Stamp build timestamp into __init__.py
+$StampScript = Join-Path $PackagingDir "stamp_build.py"
+$BuildTimestamp = (& $Python -B $StampScript stamp).Trim()
 Write-Host "  Build stamp: $BuildTimestamp"
 
-# 2. Force reinstall package from source (--no-build-isolation for speed)
-& $Python -m pip install --no-deps --force-reinstall "$RepoRoot" 2>&1 | Select-Object -Last 3
-if ($LASTEXITCODE -ne 0) { throw "Failed to update package from source" }
-
-# 3. Verify the installed code matches source (paranoid check)
-$InstalledInit = & $Python -c "import transcribe_pipeline; print(transcribe_pipeline.__build__)"
-if ($InstalledInit -ne $BuildTimestamp) {
-    throw "FATAL: Installed package has build='$InstalledInit' but expected '$BuildTimestamp'. pip install failed silently!"
+# 2. Force reinstall package from source
+& $Python -m pip install --force-reinstall "$RepoRoot" 2>&1 | Select-Object -Last 3
+if ($LASTEXITCODE -ne 0) {
+    & $Python -B $StampScript restore
+    throw "Failed to update package from source"
 }
-Write-Host "  Package verified: build=$InstalledInit" -ForegroundColor Green
 
-# 4. Nuke ALL PyInstaller cache (prevents stale code in bundle)
+# 3. Verify installed code has the correct build timestamp
+$InstalledBuild = (& $Python -B -c "import transcribe_pipeline; print(transcribe_pipeline.__build__)").Trim()
+if ($InstalledBuild -ne $BuildTimestamp) {
+    & $Python -B $StampScript restore
+    throw "FATAL: Installed build='$InstalledBuild' but expected '$BuildTimestamp'. Stale code detected!"
+}
+Write-Host "  Package verified: build=$InstalledBuild" -ForegroundColor Green
+
+# 4. Nuke ALL caches (no stale artifacts possible)
 if (Test-Path $BuildDir) { Remove-Item $BuildDir -Recurse -Force }
 if (Test-Path $DistDir) { Remove-Item $DistDir -Recurse -Force }
 $PyInstallerCache = Join-Path $env:LOCALAPPDATA "pyinstaller"
@@ -110,8 +112,7 @@ if (Test-Path $PyInstallerCache) { Remove-Item $PyInstallerCache -Recurse -Force
 Write-Host "  All caches nuked." -ForegroundColor Green
 
 # 5. Restore __init__.py to "dev" (keep git clean)
-$InitContent = $InitContent -replace "__build__ = `"$BuildTimestamp`"", '__build__ = "dev"'
-Set-Content $InitFile $InitContent -NoNewline
+& $Python -B $StampScript restore
 
 # -----------------------------------------------------------------------
 # Step 2: Download FFmpeg
