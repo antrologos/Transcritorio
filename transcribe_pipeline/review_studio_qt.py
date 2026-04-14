@@ -1276,6 +1276,13 @@ if QT_IMPORT_ERROR is None:
         def initializePage(self) -> None:
             if self._download_started:
                 return
+            # Check disk space before starting download
+            from . import model_manager
+            disk = model_manager.check_disk_space()
+            if not disk["ok"]:
+                self.progress_label.setText(disk["message"])
+                self.progress_label.setStyleSheet("color: #c00;")
+                return
             self._download_started = True
             token_page = self._wizard.page(FirstRunWizard.PAGE_TOKEN)
             token = token_page.token() if hasattr(token_page, "token") else ""
@@ -2835,6 +2842,13 @@ if QT_IMPORT_ERROR is None:
                 self.update_action_states()
                 return False
 
+        def _set_action(self, action: QAction, enabled: bool, disabled_reason: str = "") -> None:
+            """Enable/disable an action and update its tooltip with the reason."""
+            action.setEnabled(enabled)
+            if not enabled and disabled_reason:
+                base = action.toolTip().split("\n")[0] if action.toolTip() else action.text()
+                action.setToolTip(f"{base}\n({disabled_reason})")
+
         def update_action_states(self) -> None:
             if not hasattr(self, "save_action"):
                 return
@@ -2846,35 +2860,40 @@ if QT_IMPORT_ERROR is None:
             has_open_file = bool(self.current_interview_id)
             has_untranscribed_open_file = bool(self.current_interview_id and not self.review)
             has_turn = bool(has_review and self.current_turn_id)
-            self.new_project_action.setEnabled(not busy)
-            self.open_project_action.setEnabled(not busy)
-            self.add_folder_action.setEnabled(not busy and has_project)
-            self.add_files_action.setEnabled(not busy and has_project)
-            self.save_project_action.setEnabled(not busy and has_project)
-            self.open_project_folder_action.setEnabled(not busy and has_project)
+            reason_busy = "Aguarde a tarefa atual terminar."
+            reason_project = "Abra ou crie um projeto primeiro."
+            reason_select = "Selecione ao menos um arquivo na lista."
+            reason_open = "Abra uma transcrição primeiro."
+            reason_turn = "Selecione um bloco na transcrição."
+            self._set_action(self.new_project_action, not busy, reason_busy)
+            self._set_action(self.open_project_action, not busy, reason_busy)
+            self._set_action(self.add_folder_action, not busy and has_project, reason_busy if busy else reason_project)
+            self._set_action(self.add_files_action, not busy and has_project, reason_busy if busy else reason_project)
+            self._set_action(self.save_project_action, not busy and has_project, reason_busy if busy else reason_project)
+            self._set_action(self.open_project_folder_action, not busy and has_project, reason_busy if busy else reason_project)
             self.startup_action.setEnabled(not busy)
             self.exit_action.setEnabled(True)
             self.apply_metadata_action.setEnabled(not busy and has_project and has_table_selection)
             self.queue_action.setEnabled(has_project)
-            self.model_setup_action.setEnabled(not busy)
+            self._set_action(self.model_setup_action, not busy, reason_busy)
             self.model_status_action.setEnabled(True)
-            self.engine_settings_action.setEnabled(not busy and has_project)
-            self.refresh_library_action.setEnabled(not busy and has_project)
-            self.reload_list_action.setEnabled(not busy and has_project)
-            self.open_transcript_action.setEnabled(not busy and has_table_selection)
-            self.transcribe_action.setEnabled(not busy and has_table_selection)
-            self.transcribe_pending_action.setEnabled(not busy and bool(self.pending_transcription_ids()))
-            self.transcribe_current_action.setEnabled(not busy and has_untranscribed_open_file)
-            self.save_action.setEnabled(not busy and has_turn)
-            self.generate_files_action.setEnabled(not busy and (has_review or has_table_selection or any(status.review_exists or status.canonical_exists for status in self.statuses)))
-            self.export_selected_action.setEnabled(not busy and has_table_selection)
-            self.export_current_action.setEnabled(not busy and has_review)
-            self.close_open_file_action.setEnabled(not busy and has_open_file)
-            self.open_export_folder_action.setEnabled(not busy)
-            self.diarize_action.setEnabled(not busy and has_selected)
-            self.improve_speakers_action.setEnabled(not busy and has_review)
-            self.render_action.setEnabled(not busy and has_selected)
-            self.qc_action.setEnabled(not busy)
+            self._set_action(self.engine_settings_action, not busy and has_project, reason_busy if busy else reason_project)
+            self._set_action(self.refresh_library_action, not busy and has_project, reason_busy if busy else reason_project)
+            self._set_action(self.reload_list_action, not busy and has_project, reason_busy if busy else reason_project)
+            self._set_action(self.open_transcript_action, not busy and has_table_selection, reason_busy if busy else reason_select)
+            self._set_action(self.transcribe_action, not busy and has_table_selection, reason_busy if busy else reason_select)
+            self._set_action(self.transcribe_pending_action, not busy and bool(self.pending_transcription_ids()), reason_busy if busy else "Não há arquivos pendentes.")
+            self._set_action(self.transcribe_current_action, not busy and has_untranscribed_open_file, reason_busy if busy else reason_open)
+            self._set_action(self.save_action, not busy and has_turn, reason_busy if busy else reason_turn)
+            self._set_action(self.generate_files_action, not busy and (has_review or has_table_selection or any(status.review_exists or status.canonical_exists for status in self.statuses)), reason_busy if busy else "Nenhuma transcrição disponível.")
+            self._set_action(self.export_selected_action, not busy and has_table_selection, reason_busy if busy else reason_select)
+            self._set_action(self.export_current_action, not busy and has_review, reason_busy if busy else reason_open)
+            self._set_action(self.close_open_file_action, not busy and has_open_file, reason_busy if busy else "Nenhum arquivo aberto.")
+            self._set_action(self.open_export_folder_action, not busy, reason_busy)
+            self._set_action(self.diarize_action, not busy and has_selected, reason_busy if busy else reason_select)
+            self._set_action(self.improve_speakers_action, not busy and has_review, reason_busy if busy else reason_open)
+            self._set_action(self.render_action, not busy and has_selected, reason_busy if busy else reason_select)
+            self._set_action(self.qc_action, not busy, reason_busy)
             self.cancel_job_action.setEnabled(busy)
             if hasattr(self, "progress_bar"):
                 self.progress_bar.setVisible(busy)

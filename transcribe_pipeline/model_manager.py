@@ -6,8 +6,27 @@ from typing import Any, Callable
 import json
 import os
 
+import shutil
+
 from . import runtime
 from .utils import sanitize_message
+
+MINIMUM_DISK_GB = 10  # Minimum free disk space required for model downloads
+
+
+def check_disk_space() -> dict[str, Any]:
+    """Check if there is enough free disk space for model downloads."""
+    cache_dir = runtime.model_cache_dir()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    usage = shutil.disk_usage(str(cache_dir))
+    free_gb = usage.free / (1024 ** 3)
+    if free_gb >= MINIMUM_DISK_GB:
+        return {"ok": True, "free_gb": round(free_gb, 1),
+                "message": f"Espaço disponível: {free_gb:.1f} GB."}
+    return {"ok": False, "free_gb": round(free_gb, 1),
+            "message": (f"Espaço insuficiente no disco. "
+                        f"Disponível: {free_gb:.1f} GB. Necessário: pelo menos {MINIMUM_DISK_GB} GB.\n"
+                        f"Libere espaço e tente novamente.")}
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]

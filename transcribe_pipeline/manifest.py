@@ -10,6 +10,9 @@ from .config import Paths
 from .runtime import resolve_executable
 from .utils import relative_to, run_command, sha256_file
 
+# Cache ffprobe results keyed by (path, mtime, size) to avoid re-probing unchanged files.
+_probe_cache: dict[tuple[str, float, int], dict[str, str]] = {}
+
 
 MEDIA_ID_RE = re.compile(r"^(?P<interview_id>[A-Z]\d{2}[RP]_\d{4})(?:_(?P<source_kind>A|V))?", re.IGNORECASE)
 TCLE_ID_RE = re.compile(r"^(?P<code>[A-Z]\d{2}[RP])_(?P<date>\d{4})", re.IGNORECASE)
@@ -111,6 +114,13 @@ def build_manifest(config: dict, paths: Paths, hash_files: bool = False) -> list
 
 
 def probe_audio_metadata(path: Path) -> dict[str, str]:
+    try:
+        stat = path.stat()
+        cache_key = (str(path), stat.st_mtime, stat.st_size)
+        if cache_key in _probe_cache:
+            return _probe_cache[cache_key]
+    except OSError:
+        cache_key = None
     result = run_command(
         [
             resolve_executable("ffprobe"),
@@ -137,7 +147,7 @@ def probe_audio_metadata(path: Path) -> dict[str, str]:
     first_video = video_streams[0] if video_streams else {}
     format_info = payload.get("format", {})
     duration = payload.get("format", {}).get("duration", "")
-    return {
+    probe_result = {
         "duration_sec": _format_float(duration, digits=3),
         "source_audio_streams": str(len(audio_streams)),
         "source_audio_codec": str(first_audio.get("codec_name", "")),
@@ -154,6 +164,9 @@ def probe_audio_metadata(path: Path) -> dict[str, str]:
         "source_format_long_name": str(format_info.get("format_long_name", "")),
         "probe_status": "ok",
     }
+    if cache_key is not None:
+        _probe_cache[cache_key] = probe_result
+    return probe_result
 
 
 def write_manifest(rows: list[dict[str, str]], path: Path) -> None:
