@@ -48,14 +48,22 @@ def runtime_roots() -> list[Path]:
     configured = os.environ.get(APP_RUNTIME_ENV)
     if configured:
         roots.append(Path(configured).expanduser())
-    package_root = Path(__file__).resolve().parent.parent
-    roots.extend(
-        [
-            package_root / "runtime" / platform_tag(),
-            package_root / "runtime",
-            Path(sys.executable).resolve().parent,
-        ]
-    )
+    if getattr(sys, "frozen", False):
+        # PyInstaller bundle: _MEIPASS (onedir == exe parent) and exe dir.
+        meipass = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+        roots.append(meipass)
+        exe_dir = Path(sys.executable).resolve().parent
+        if exe_dir != meipass:
+            roots.append(exe_dir)
+    else:
+        package_root = Path(__file__).resolve().parent.parent
+        roots.extend(
+            [
+                package_root / "runtime" / platform_tag(),
+                package_root / "runtime",
+                Path(sys.executable).resolve().parent,
+            ]
+        )
     result: list[Path] = []
     for root in roots:
         if root not in result:

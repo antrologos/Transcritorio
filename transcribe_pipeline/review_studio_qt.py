@@ -66,7 +66,11 @@ WAVEFORM_CACHE_VERSION = 1
 
 
 def app_asset_path(filename: str) -> Path:
-    return Path(__file__).resolve().parent.parent / "assets" / filename
+    if getattr(sys, "frozen", False):
+        base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+    else:
+        base = Path(__file__).resolve().parent.parent
+    return base / "assets" / filename
 
 
 def format_clock(seconds: float | int | None) -> str:

@@ -22,11 +22,14 @@ transcricao-venv/
 runtime/
 build/
 dist/
-*.spec
 *.msi
 *.dmg
 *.pkg
 *.AppImage
+*.exe
+
+# Build-time staging (downloaded by build.ps1)
+packaging/vendor/
 
 # Local model/download caches
 models/
