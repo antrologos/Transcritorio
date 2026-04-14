@@ -1,0 +1,252 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable
+import json
+import os
+
+from . import runtime
+
+
+ProgressCallback = Callable[[dict[str, Any]], None]
+ShouldCancel = Callable[[], bool]
+
+LOCAL_PYANNOTE_MODEL = "pyannote/speaker-diarization-community-1"
+REMOTE_DIARIZATION_MARKERS = ("precision-2", "cloud", "pyannoteai")
+
+
+@dataclass(frozen=True)
+class ModelAsset:
+    key: str
+    label: str
+    repo_id: str
+    purpose: str
+    gated: bool = False
+
+
+@dataclass(frozen=True)
+class ModelStatus:
+    asset: ModelAsset
+    cached: bool
+    path: Path | None
+    message: str = ""
+
+
+REQUIRED_MODELS: tuple[ModelAsset, ...] = (
+    ModelAsset("asr", "Whisper large-v3", "Systran/faster-whisper-large-v3", "transcricao"),
+    ModelAsset("alignment_pt", "Alinhamento portugues", "jonatasgrosman/wav2vec2-large-xlsr-53-portuguese", "timestamps por palavra"),
+    ModelAsset("diarization", "Separacao de falantes", LOCAL_PYANNOTE_MODEL, "diarizacao local", gated=True),
+)
+
+
+def validate_local_diarization_model(model_name: str | os.PathLike[str] | None) -> str:
+    value = str(model_name or LOCAL_PYANNOTE_MODEL).strip()
+    if not value:
+        return LOCAL_PYANNOTE_MODEL
+    if Path(value).exists():
+        return value
+    lowered = value.lower()
+    if any(marker in lowered for marker in REMOTE_DIARIZATION_MARKERS):
+        raise ValueError(
+            "Modelo de diarizacao remoto/cloud bloqueado. Use apenas "
+            f"{LOCAL_PYANNOTE_MODEL} ou um caminho local ja baixado."
+        )
+    if lowered != LOCAL_PYANNOTE_MODEL:
+        raise ValueError(
+            "Modelo de diarizacao nao permitido no modo standalone. Use apenas "
+            f"{LOCAL_PYANNOTE_MODEL} ou um caminho local ja baixado."
+        )
+    return LOCAL_PYANNOTE_MODEL
+
+
+def hf_cache_path(repo_id: str, cache_dir: Path | None = None) -> Path:
+    root = cache_dir or runtime.model_cache_dir()
+    return root / ("models--" + repo_id.replace("/", "--"))
+
+
+def cached_snapshot_path(repo_id: str, cache_dir: Path | None = None) -> Path | None:
+    repo_cache = hf_cache_path(repo_id, cache_dir)
+    snapshots = repo_cache / "snapshots"
+    refs_main = repo_cache / "refs" / "main"
+    if refs_main.exists():
+        revision = refs_main.read_text(encoding="utf-8").strip()
+        candidate = snapshots / revision
+        if candidate.exists():
+            return candidate
+    if not snapshots.exists():
+        return None
+    candidates = [path for path in snapshots.iterdir() if path.is_dir()]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
+def status(cache_dir: Path | None = None) -> list[ModelStatus]:
+    result: list[ModelStatus] = []
+    for asset in REQUIRED_MODELS:
+        path = cached_snapshot_path(asset.repo_id, cache_dir)
+        cached = bool(path and any(path.iterdir()))
+        result.append(ModelStatus(asset=asset, cached=cached, path=path if cached else None))
+    return result
+
+
+def all_required_models_cached(cache_dir: Path | None = None) -> bool:
+    return all(item.cached for item in status(cache_dir))
+
+
+def status_as_dict(cache_dir: Path | None = None) -> dict[str, Any]:
+    cache = cache_dir or runtime.model_cache_dir()
+    return {
+        "cache_dir": str(cache),
+        "models": [
+            {
+                "key": item.asset.key,
+                "label": item.asset.label,
+                "repo_id": item.asset.repo_id,
+                "purpose": item.asset.purpose,
+                "gated": item.asset.gated,
+                "cached": item.cached,
+                "path": str(item.path) if item.path else "",
+                "message": item.message,
+            }
+            for item in status(cache)
+        ],
+    }
+
+
+def status_text(cache_dir: Path | None = None) -> str:
+    data = status_as_dict(cache_dir)
+    lines = [f"Cache de modelos: {data['cache_dir']}"]
+    for item in data["models"]:
+        state = "baixado" if item["cached"] else "pendente"
+        gated = " - requer aceite/token do Hugging Face" if item["gated"] else ""
+        lines.append(f"- {item['label']}: {state} ({item['repo_id']}){gated}")
+    return "\n".join(lines)
+
+
+def download_required_models(
+    *,
+    token: str | None = None,
+    token_env: str = "TRANSCRITORIO_MODEL_DOWNLOAD_TOKEN",
+    force: bool = False,
+    progress_callback: ProgressCallback | None = None,
+    should_cancel: ShouldCancel | None = None,
+) -> int:
+    cache_dir = runtime.model_cache_dir()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    runtime.apply_secure_hf_environment(offline=False, token=token, token_env=token_env)
+    token_value = token if token is not None else os.environ.get(token_env)
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError as exc:
+        raise RuntimeError(f"Dependencia ausente: huggingface_hub ({exc})") from exc
+
+    failures = 0
+    total = max(1, len(REQUIRED_MODELS))
+    for index, asset in enumerate(REQUIRED_MODELS, start=1):
+        if should_cancel is not None and should_cancel():
+            failures += 1
+            break
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "event": "model_download_start",
+                    "progress": int(((index - 1) / total) * 100),
+                    "message": f"Baixando {asset.label}.",
+                }
+            )
+        try:
+            snapshot_download(
+                repo_id=asset.repo_id,
+                repo_type="model",
+                cache_dir=str(cache_dir),
+                token=token_value if asset.gated else None,
+                force_download=force,
+                local_files_only=False,
+            )
+        except Exception as exc:  # noqa: BLE001 - keep batch progress visible.
+            failures += 1
+            if progress_callback is not None:
+                progress_callback(
+                    {
+                        "event": "model_download_error",
+                        "progress": int((index / total) * 100),
+                        "message": f"Falha ao baixar {asset.label}: {exc}",
+                    }
+                )
+            continue
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "event": "model_download_done",
+                    "progress": int((index / total) * 100),
+                    "message": f"{asset.label} baixado.",
+                }
+            )
+    return failures
+
+
+def verify_required_models(progress_callback: ProgressCallback | None = None) -> int:
+    cache_dir = runtime.model_cache_dir()
+    runtime.apply_secure_hf_environment(offline=True)
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError as exc:
+        raise RuntimeError(f"Dependencia ausente: huggingface_hub ({exc})") from exc
+
+    failures = 0
+    total = max(1, len(REQUIRED_MODELS))
+    for index, asset in enumerate(REQUIRED_MODELS, start=1):
+        try:
+            snapshot_download(
+                repo_id=asset.repo_id,
+                repo_type="model",
+                cache_dir=str(cache_dir),
+                local_files_only=True,
+                token=None,
+            )
+            ok = True
+            message = f"{asset.label} pronto para uso local."
+        except Exception as exc:  # noqa: BLE001 - report missing/offline failures as actionable status.
+            failures += 1
+            ok = False
+            message = f"{asset.label} ausente ou incompleto: {exc}"
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "event": "model_verify",
+                    "progress": int((index / total) * 100),
+                    "message": message,
+                    "ok": ok,
+                }
+            )
+    return failures
+
+
+def local_pyannote_checkpoint() -> str:
+    validate_local_diarization_model(LOCAL_PYANNOTE_MODEL)
+    cache_dir = runtime.model_cache_dir()
+    runtime.apply_secure_hf_environment(offline=True)
+    try:
+        from huggingface_hub import snapshot_download
+
+        return snapshot_download(
+            repo_id=LOCAL_PYANNOTE_MODEL,
+            repo_type="model",
+            cache_dir=str(cache_dir),
+            local_files_only=True,
+            token=None,
+        )
+    except Exception as exc:  # noqa: BLE001 - fallback preserves a clearer domain error.
+        fallback = cached_snapshot_path(LOCAL_PYANNOTE_MODEL, cache_dir)
+        if fallback is not None:
+            return str(fallback)
+        raise RuntimeError(
+            "Modelo de diarizacao local nao encontrado. Rode `transcribe_pipeline models download` "
+            "com o token Hugging Face do usuario antes de diarizar."
+        ) from exc
+
+
+def write_status_json(path: Path) -> None:
+    path.write_text(json.dumps(status_as_dict(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

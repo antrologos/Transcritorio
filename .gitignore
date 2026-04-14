@@ -1,0 +1,54 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local virtual environments
+.venv/
+venv/
+env/
+.venv-transcricao/
+transcricao-venv/
+
+# Local editor state
+.vscode/
+.idea/
+.github_publish/
+
+# Runtime/build outputs
+runtime/
+build/
+dist/
+*.spec
+*.msi
+*.dmg
+*.pkg
+*.AppImage
+
+# Local model/download caches
+models/
+.cache/
+huggingface/
+
+# Transcription project outputs and sensitive media
+Transcricoes/
+*.transcricao/
+*.wav
+*.mp3
+*.m4a
+*.mp4
+*.mov
+*.flac
+*.avi
+*.mkv
+*.docx
+*.jsonl
+*.srt
+*.vtt
+
+# OS noise
+.DS_Store
+Thumbs.db

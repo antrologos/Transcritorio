@@ -1,0 +1,38 @@
+{
+  "app": "Transcritorio",
+  "runtime_contract_version": 1,
+  "platforms": [
+    "windows-x64",
+    "linux-x64",
+    "macos-arm64"
+  ],
+  "required_executables": [
+    "python",
+    "ffmpeg",
+    "ffprobe",
+    "whisperx"
+  ],
+  "required_python_packages": {
+    "PySide6": "6.11.0",
+    "torch": "2.8.0",
+    "torchaudio": "2.8.0",
+    "torchvision": "0.23.0",
+    "torchcodec": "0.7.0",
+    "whisperx": "3.8.5",
+    "pyannote-audio": "4.0.4",
+    "faster-whisper": "1.2.1",
+    "huggingface_hub": ">=0.28.1",
+    "python-docx": ">=1.2.0"
+  },
+  "required_models": [
+    "Systran/faster-whisper-large-v3",
+    "jonatasgrosman/wav2vec2-large-xlsr-53-portuguese",
+    "pyannote/speaker-diarization-community-1"
+  ],
+  "security_defaults": {
+    "HF_HUB_DISABLE_TELEMETRY": "1",
+    "HF_HUB_DISABLE_IMPLICIT_TOKEN": "1",
+    "DO_NOT_TRACK": "1",
+    "PYANNOTE_METRICS_ENABLED": "0"
+  }
+}

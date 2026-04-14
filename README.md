@@ -1,0 +1,99 @@
+# Transcritorio
+
+App desktop para transcricao automatica local de entrevistas com separacao de falantes.
+
+Autor: Rogerio Jeronimo Barbosa - https://antrologos.github.io/
+
+O software vive nesta pasta e abre projetos de transcricao de qualquer lugar. Use `--project` para apontar para a pasta do projeto, ou rode de dentro da pasta do projeto (fallback CWD).
+
+Para segredos locais, leia `docs/SEGURANCA_SEGREDOS.md`.
+
+Fluxo principal (CLI):
+
+```cmd
+scripts\transcribe.cmd --project "C:\caminho\do\projeto" manifest
+scripts\transcribe.cmd --project "C:\caminho\do\projeto" prepare-audio --ids ID
+scripts\transcribe.cmd --project "C:\caminho\do\projeto" transcribe --ids ID
+scripts\transcribe.cmd --project "C:\caminho\do\projeto" diarize --ids ID
+scripts\transcribe.cmd --project "C:\caminho\do\projeto" render --ids ID
+scripts\transcribe.cmd --project "C:\caminho\do\projeto" qc --ids ID
+```
+
+Tambem ha um wrapper PowerShell em `scripts/Invoke-TranscriptionPipeline.ps1`, mas ele depende da politica local de execucao de scripts.
+
+Para abrir o prototipo inicial de interface grafica:
+
+```powershell
+.\scripts\transcription_gui.cmd
+```
+
+Para abrir o novo Estudio de Revisao com player, waveform com zoom, transcricao sincronizada e edicao por bloco:
+
+```powershell
+.\scripts\review_studio.cmd
+```
+
+Para preparar os modelos locais no primeiro uso, cada usuario deve usar o proprio token Hugging Face:
+
+```powershell
+$env:TRANSCRITORIO_MODEL_DOWNLOAD_TOKEN="COLE_O_TOKEN_DE_LEITURA_AQUI"
+.\scripts\transcribe.cmd models download
+.\scripts\transcribe.cmd models verify
+```
+
+Na GUI, use `Configuracoes > Configurar modelos...` para seguir o passo a passo em portugues. O token serve apenas para baixar os modelos; audios, videos e transcricoes continuam no computador local. Depois da verificacao, a execucao usa cache local/offline.
+
+Na interface, a lista `Arquivos do projeto` aceita selecao multipla. Use `Adicionar midia...` para escolher arquivos individuais ou uma pasta, e `Editar propriedades...` junto da lista para definir lingua, quantidade de falantes, rotulos e contexto opcional nos arquivos selecionados. O botao `Transcrever` executa o fluxo completo da selecao: preparar audio, transcrever, identificar falantes, montar a transcricao editavel e verificar arquivos gerados. A barra de progresso acompanha percentuais reais emitidos pelo WhisperX quando disponiveis e usa progresso por etapa como fallback, sem exibir texto bruto da transcricao no status. A barra some quando nao ha processamento ativo. Use `Salvar transcricao` para gravar a transcricao editavel e `Exportar...` para gerar `DOCX`, `MD`, `SRT`, `VTT`, `CSV/TSV` e `NVivo`. `Fila de processamento` e `Configurar transcricao...` ficam no menu `Ferramentas`.
+
+O menu `Projeto` tambem tem `Novo projeto...` e `Abrir projeto...`. Projetos novos sao criados como uma pasta `*.transcricao`; para portabilidade real, em etapa posterior ainda falta implementar a opcao de copiar midias para dentro dessa pasta em vez de apenas referenciar arquivos externos.
+
+O projeto agora tambem possui arquivos de organizacao de alto nivel:
+
+- `projeto.transcricao.json`: descritor do projeto de transcricoes.
+- `metadados.csv`: tabela editavel/auditavel com uma linha por arquivo selecionado, incluindo metadados de origem/audio/video, lingua, falantes, rotulos e contexto opcional.
+- `Transcricoes/00_project/jobs.json`: fila, estado e progresso por arquivo para acompanhamento e retomada basica.
+
+Antes de transcrever em ambiente de desenvolvimento:
+
+- Instale FFmpeg shared e garanta que `ffmpeg` e `ffprobe` estejam no PATH.
+- Crie o ambiente Python local executando `.\scripts\setup_transcription_env.cmd`. Por padrao, ele fica fora do Dropbox em `%LOCALAPPDATA%\Transcritorio\transcricao-venv`; os wrappers reutilizam o caminho local legado se ele ja existir.
+- Instale `whisperx==3.8.5`, `PySide6` e dependencias CUDA/PyTorch. `scripts\setup_transcription_env.cmd` ja inclui esses pacotes.
+- Aceite o modelo `pyannote/speaker-diarization-community-1` no Hugging Face.
+- Use `models download` com o token do proprio usuario para baixar os modelos. Os wrappers nao carregam tokens persistidos automaticamente.
+
+Saidas principais:
+
+- `Transcricoes/00_manifest/manifest.csv`
+- `projeto.transcricao.json`
+- `metadados.csv`
+- `Transcricoes/00_project/jobs.json`
+- `Transcricoes/00_manifest/speakers_map.csv`
+- `Transcricoes/01_audio_wav16k_mono/*.wav`
+- `Transcricoes/02_asr_raw/`
+- `Transcricoes/02_asr_variants/<nome>/` para testes A/B que nao sobrescrevem o baseline
+- `Transcricoes/03_diarization/json/*.regular.json` e `*.exclusive.json`
+- `Transcricoes/03_diarization/rttm/*.regular.rttm` e `*.exclusive.rttm`
+- `Transcricoes/04_canonical/json/*.canonical.json`
+- `Transcricoes/05_transcripts_review/md/*.md`
+- `Transcricoes/05_transcripts_review/docx/*.docx`
+- `Transcricoes/05_transcripts_review/edits/*.review.json`
+- `Transcricoes/05_transcripts_review/final/` para exportacoes revisadas em `MD`, `DOCX`, `SRT`, `VTT`, `CSV`, `TSV` e `NVivo`
+- `Transcricoes/06_qc/qc_metrics.csv`
+
+As versoes `md` e `docx` sao a camada de leitura: agrupam falas consecutivas do mesmo falante, mostram timestamp apenas no inicio de cada bloco e usam `Entrevistador:`/`Entrevistado:` em negrito. As camadas `json`, `srt`, `vtt` e `tsv` preservam a granularidade para auditoria e importacao.
+
+Testes A/B de ASR ja previstos no CLI:
+
+```powershell
+.\scripts\transcribe.cmd transcribe --ids A01P_0608 --variant float16 --compute-type float16 --no-diarize
+.\scripts\transcribe.cmd transcribe --ids A01P_0608 --variant large-v3-turbo_float16 --model large-v3-turbo --compute-type float16 --no-diarize
+.\scripts\transcribe.cmd diarize --ids A01P_0608 --dry-run --num-speakers 2
+```
+
+`manifest` agora preenche metadados de audio, video e formato via `ffprobe`, e `qc` usa esses dados para checar cobertura, duracao, gaps e sinais basicos do JSON bruto do WhisperX.
+
+No piloto `A01P_0608`, `float16` ficou proximo do baseline; `float16_prompt`, `prompt_roteiro_curto` e `prompt_contexto_minimo` foram reprovados por eco/alucinacao/perda de conteudo; `large-v3-turbo_float16` mostrou erros qualitativos. Um teste adicional `float16` vs `int8_control` em 5 entrevistas esta em `Transcricoes/06_qc/asr_float16_5interviews_report.md`. Decisao atual: usar `float16` como padrao, sem prompt/hotwords, com fallback `int8` se a VRAM estiver apertada.
+
+Para testes A/B de ASR, use `--variant <nome>` para gravar em `Transcricoes/02_asr_variants/<nome>/`. Nao sobrescreva `Transcricoes/02_asr_raw` sem decisao explicita, porque o render atual usa esses arquivos como baseline.
+
+O CLI tambem aceita `--initial-prompt-file` para reprodutibilidade de testes, mas os prompts atualmente em `Transcricoes/00_config/prompts/` foram reprovados no piloto e nao devem ser usados como padrao.
