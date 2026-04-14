@@ -78,6 +78,11 @@ if (-not $SkipVenv) {
     $Python = Join-Path $VenvPath "Scripts\python.exe"
 }
 
+# Always reinstall the package to pick up source code changes
+Write-Host "--- Updating package from source ---" -ForegroundColor Yellow
+& $Python -m pip install --no-deps --force-reinstall "$RepoRoot" 2>&1 | Select-Object -Last 3
+if ($LASTEXITCODE -ne 0) { throw "Failed to update package from source" }
+
 # -----------------------------------------------------------------------
 # Step 2: Download FFmpeg
 # -----------------------------------------------------------------------

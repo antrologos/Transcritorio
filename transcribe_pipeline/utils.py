@@ -9,6 +9,7 @@ import os
 import queue
 import re
 import subprocess
+import sys
 import threading
 import time
 
@@ -50,6 +51,13 @@ def append_jsonl(path: Path, payload: dict[str, Any]) -> None:
         handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
 
 
+def _no_window_flags() -> dict[str, int]:
+    """Return creationflags to suppress console window on Windows."""
+    if sys.platform == "win32":
+        return {"creationflags": subprocess.CREATE_NO_WINDOW}
+    return {}
+
+
 def run_command(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         args,
@@ -59,6 +67,7 @@ def run_command(args: list[str], cwd: Path | None = None) -> subprocess.Complete
         text=True,
         encoding="utf-8",
         errors="replace",
+        **_no_window_flags(),
     )
 
 
@@ -87,6 +96,7 @@ def run_command_stream(
         errors="replace",
         bufsize=1,
         env=secure_subprocess_env(),
+        **_no_window_flags(),
     )
     stdout_parts: list[str] = []
     output_queue: queue.Queue[str] = queue.Queue()
