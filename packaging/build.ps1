@@ -78,10 +78,40 @@ if (-not $SkipVenv) {
     $Python = Join-Path $VenvPath "Scripts\python.exe"
 }
 
-# Always reinstall the package to pick up source code changes
-Write-Host "--- Updating package from source ---" -ForegroundColor Yellow
+# -----------------------------------------------------------------------
+# CRITICAL: Stamp build timestamp + reinstall + nuke cache
+# This block guarantees the bundle always contains the current source.
+# -----------------------------------------------------------------------
+Write-Host "--- Stamping build and reinstalling package ---" -ForegroundColor Yellow
+
+# 1. Write build timestamp into __init__.py (will be baked into the frozen exe)
+$InitFile = Join-Path $RepoRoot "transcribe_pipeline\__init__.py"
+$BuildTimestamp = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+$InitContent = (Get-Content $InitFile -Raw) -replace '__build__ = "dev"', "__build__ = `"$BuildTimestamp`""
+Set-Content $InitFile $InitContent -NoNewline
+Write-Host "  Build stamp: $BuildTimestamp"
+
+# 2. Force reinstall package from source (--no-build-isolation for speed)
 & $Python -m pip install --no-deps --force-reinstall "$RepoRoot" 2>&1 | Select-Object -Last 3
 if ($LASTEXITCODE -ne 0) { throw "Failed to update package from source" }
+
+# 3. Verify the installed code matches source (paranoid check)
+$InstalledInit = & $Python -c "import transcribe_pipeline; print(transcribe_pipeline.__build__)"
+if ($InstalledInit -ne $BuildTimestamp) {
+    throw "FATAL: Installed package has build='$InstalledInit' but expected '$BuildTimestamp'. pip install failed silently!"
+}
+Write-Host "  Package verified: build=$InstalledInit" -ForegroundColor Green
+
+# 4. Nuke ALL PyInstaller cache (prevents stale code in bundle)
+if (Test-Path $BuildDir) { Remove-Item $BuildDir -Recurse -Force }
+if (Test-Path $DistDir) { Remove-Item $DistDir -Recurse -Force }
+$PyInstallerCache = Join-Path $env:LOCALAPPDATA "pyinstaller"
+if (Test-Path $PyInstallerCache) { Remove-Item $PyInstallerCache -Recurse -Force }
+Write-Host "  All caches nuked." -ForegroundColor Green
+
+# 5. Restore __init__.py to "dev" (keep git clean)
+$InitContent = $InitContent -replace "__build__ = `"$BuildTimestamp`"", '__build__ = "dev"'
+Set-Content $InitFile $InitContent -NoNewline
 
 # -----------------------------------------------------------------------
 # Step 2: Download FFmpeg
@@ -197,6 +227,13 @@ $SizeGB = [math]::Round(
 Write-Host "  Bundle size: $SizeGB GB"
 
 if (-not $AllPresent) { throw "Build incomplete - required executables missing" }
+
+# Post-build integrity check: run the CLI to verify build timestamp
+$CliBuildCheck = & (Join-Path $OutputDir "transcritorio-cli.exe") --help 2>&1 | Out-String
+if ($LASTEXITCODE -ne 0) {
+    throw "FATAL: transcritorio-cli.exe failed to run! The bundle may be corrupted."
+}
+Write-Host "  CLI runs OK." -ForegroundColor Green
 Write-Host "  Build verified." -ForegroundColor Green
 
 # -----------------------------------------------------------------------

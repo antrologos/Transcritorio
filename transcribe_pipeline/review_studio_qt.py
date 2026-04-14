@@ -1779,10 +1779,12 @@ if QT_IMPORT_ERROR is None:
             )
 
         def show_about(self) -> None:
+            from . import __version__, __build__
+            build_info = f"Build: {__build__}" if __build__ != "dev" else "Versão de desenvolvimento (fonte)"
             QMessageBox.information(
                 self,
                 f"Sobre {APP_NAME}",
-                f"{APP_NAME}\n\nCreditos: {APP_CREDITS}\n\nTranscricao local com WhisperX e pyannote.",
+                f"{APP_NAME} v{__version__}\n\n{build_info}\n\nCréditos: {APP_CREDITS}\n\nTranscrição local com WhisperX e pyannote.",
             )
 
         def show_documentation(self) -> None:
