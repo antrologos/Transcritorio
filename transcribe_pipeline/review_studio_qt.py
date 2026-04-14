@@ -100,6 +100,19 @@ def format_timecode(seconds: float | int | None) -> str:
     return f"{total_seconds // 3600:02d}:{(total_seconds % 3600) // 60:02d}:{total_seconds % 60:02d}.{ms:03d}"
 
 
+def media_format_label(status: object) -> str:
+    """Return user-friendly media format, e.g. 'Áudio M4A' or 'Vídeo MP4 (WAV pronto)'."""
+    ext = getattr(status, "source_ext", "").lower().lstrip(".")
+    if not ext:
+        return ""
+    is_video = f".{ext}" in VIDEO_SUFFIXES
+    tipo = "Vídeo" if is_video else "Áudio"
+    label = f"{tipo} {ext.upper()}"
+    if getattr(status, "wav_exists", False) and ext != "wav":
+        label += " (WAV pronto)"
+    return label
+
+
 def parse_timecode(value: str) -> float:
     cleaned = value.strip().replace(",", ".")
     if not cleaned:
@@ -1206,6 +1219,7 @@ if QT_IMPORT_ERROR is None:
             self.save_project_action.triggered.connect(self.save_project_metadata)
 
             self.open_project_folder_action = QAction("Abrir pasta do projeto", self)
+            self.open_project_folder_action.setToolTip("Abrir a pasta do projeto no Explorador de Arquivos.\nDesativado sem projeto aberto.")
             self.open_project_folder_action.triggered.connect(self.open_project_folder)
 
             self.startup_action = QAction("Comecar", self)
@@ -1213,6 +1227,7 @@ if QT_IMPORT_ERROR is None:
             self.startup_action.triggered.connect(self.show_startup_dialog)
 
             self.exit_action = QAction("Sair", self)
+            self.exit_action.setToolTip("Fechar o Transcritório.")
             self.exit_action.triggered.connect(self.close)
 
             self.apply_metadata_action = QAction("Editar propriedades...", self)
@@ -1241,10 +1256,12 @@ if QT_IMPORT_ERROR is None:
 
             self.reload_list_action = QAction("Recarregar lista", self)
             self.reload_list_action.setShortcut(QKeySequence("F5"))
+            self.reload_list_action.setToolTip("Recarregar a lista de entrevistas a partir dos arquivos do projeto. (F5)")
             self.reload_list_action.triggered.connect(self.refresh_interviews)
 
             self.open_transcript_action = QAction("Abrir arquivo", self)
             self.open_transcript_action.setShortcut(QKeySequence.StandardKey.Open)
+            self.open_transcript_action.setToolTip("Abrir a transcrição do arquivo selecionado para edição. (Ctrl+O)\nSelecione um arquivo na lista.")
             self.open_transcript_action.triggered.connect(self.open_selected_review)
 
             self.transcribe_action = QAction("Transcrever selecionados", self)
@@ -1278,12 +1295,15 @@ if QT_IMPORT_ERROR is None:
             self.export_current_action.triggered.connect(self.export_current_review)
 
             self.close_open_file_action = QAction("Fechar arquivo aberto", self)
+            self.close_open_file_action.setToolTip("Fechar o arquivo aberto e voltar à lista de entrevistas.")
             self.close_open_file_action.triggered.connect(self.close_open_file)
 
             self.open_export_folder_action = QAction("Abrir pasta de arquivos gerados", self)
+            self.open_export_folder_action.setToolTip("Abrir no Explorador a pasta onde ficam os arquivos exportados.")
             self.open_export_folder_action.triggered.connect(self.open_export_folder)
 
             self.diarize_action = QAction("Reprocessar falantes", self)
+            self.diarize_action.setToolTip("Reprocessar a identificação de falantes para os arquivos selecionados.\nSelecione ao menos um arquivo.")
             self.diarize_action.triggered.connect(self.run_diarization_job)
 
             self.improve_speakers_action = QAction("Melhorar falantes deste arquivo", self)
@@ -1291,18 +1311,23 @@ if QT_IMPORT_ERROR is None:
             self.improve_speakers_action.triggered.connect(self.improve_speakers_current_file)
 
             self.render_action = QAction("Atualizar transcricao editavel", self)
+            self.render_action.setToolTip("Remontar a transcrição editável a partir dos dados brutos (ASR + diarização).\nSelecione ao menos um arquivo.")
             self.render_action.triggered.connect(self.run_render_job)
 
             self.qc_action = QAction("Verificar exportacoes", self)
+            self.qc_action.setToolTip("Verificar a qualidade das transcrições geradas (integridade e consistência).")
             self.qc_action.triggered.connect(self.run_qc_job)
 
             self.about_action = QAction("Sobre", self)
+            self.about_action.setToolTip("Informações sobre o Transcritório: versão e créditos.")
             self.about_action.triggered.connect(self.show_about)
 
             self.credits_action = QAction("Creditos", self)
+            self.credits_action.setToolTip("Ver os créditos do Transcritório.")
             self.credits_action.triggered.connect(self.show_about)
 
             self.documentation_action = QAction("Documentacao", self)
+            self.documentation_action.setToolTip("Abrir a documentação do projeto, se disponível.")
             self.documentation_action.triggered.connect(self.show_documentation)
 
             self.cancel_job_action = QAction("Cancelar", self)
@@ -1573,17 +1598,33 @@ if QT_IMPORT_ERROR is None:
             panel = QWidget()
             layout = QVBoxLayout(panel)
             layout.addWidget(QLabel("Arquivos do projeto"))
-            self.interview_table = QTableWidget(0, 8)
+            # Filter toolbar
+            filter_row = QHBoxLayout()
+            filter_row.addWidget(QLabel("Status:"))
+            self.filter_status_combo = QComboBox()
+            self.filter_status_combo.addItems(["Todas", "Transcritas", "Pendentes", "Processando"])
+            self.filter_status_combo.setToolTip("Filtrar por status de transcrição.")
+            self.filter_status_combo.currentIndexChanged.connect(self._apply_interview_filter)
+            filter_row.addWidget(self.filter_status_combo)
+            filter_row.addSpacing(12)
+            filter_row.addWidget(QLabel("Buscar:"))
+            self.filter_text_edit = QLineEdit()
+            self.filter_text_edit.setPlaceholderText("ID da entrevista...")
+            self.filter_text_edit.setClearButtonEnabled(True)
+            self.filter_text_edit.setToolTip("Filtrar por ID (busca parcial).")
+            self.filter_text_edit.textChanged.connect(self._apply_interview_filter)
+            filter_row.addWidget(self.filter_text_edit)
+            layout.addLayout(filter_row)
+            # Interview table (9 columns)
+            self.interview_table = QTableWidget(0, 9)
             self.interview_table.setAccessibleName("Arquivos do projeto")
-            self.interview_table.setHorizontalHeaderLabels(["Arquivo", "Transcricao", "Duracao", "Lingua", "Falantes", "Rotulos", "Contexto", "Avisos"])
-            self.interview_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-            self.interview_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-            self.interview_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-            self.interview_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-            self.interview_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-            self.interview_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
-            self.interview_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
-            self.interview_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)
+            self.interview_table.setHorizontalHeaderLabels([
+                "Arquivo", "Formato", "Transcrição", "Duração",
+                "Língua", "Falantes", "Rótulos", "Contexto", "Avisos",
+            ])
+            for col in range(8):
+                self.interview_table.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+            self.interview_table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeMode.Stretch)
             self.interview_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
             self.interview_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
             self.interview_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -1683,29 +1724,31 @@ if QT_IMPORT_ERROR is None:
             self.play_button = QPushButton("Reproduzir")
             self.play_button.setAccessibleName("Reproduzir ou pausar")
             self.play_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
-            self.play_button.setToolTip("Play/Pause")
+            self.play_button.setToolTip("Reproduzir ou pausar o áudio da entrevista. (Espaço)")
             self.play_button.clicked.connect(self.toggle_playback)
             media_controls.addWidget(self.play_button)
             stop_button = QPushButton("Parar")
             stop_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaStop))
-            stop_button.setToolTip("Parar")
+            stop_button.setToolTip("Parar a reprodução e voltar ao início.")
             stop_button.clicked.connect(self.stop_playback)
             media_controls.addWidget(stop_button)
             back_button = QPushButton("-5s")
             back_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaSeekBackward))
-            back_button.setToolTip("Voltar 5 segundos")
+            back_button.setToolTip("Voltar 5 segundos no áudio. (Ctrl+Esquerda)")
             back_button.clicked.connect(lambda: self.seek_relative(-5))
             media_controls.addWidget(back_button)
             forward_button = QPushButton("+5s")
             forward_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaSeekForward))
-            forward_button.setToolTip("Avançar 5 segundos")
+            forward_button.setToolTip("Avançar 5 segundos no áudio. (Ctrl+Direita)")
             forward_button.clicked.connect(lambda: self.seek_relative(5))
             media_controls.addWidget(forward_button)
             repeat_button = QPushButton("Repetir bloco")
+            repeat_button.setToolTip("Reproduzir novamente o trecho do bloco selecionado na tabela.")
             repeat_button.clicked.connect(self.repeat_current_turn)
             media_controls.addWidget(repeat_button)
             self.position_slider = QSlider(Qt.Orientation.Horizontal)
             self.position_slider.setAccessibleName("Posição do áudio")
+            self.position_slider.setToolTip("Arraste para navegar no áudio da entrevista.")
             self.position_slider.sliderPressed.connect(self._slider_pressed)
             self.position_slider.sliderReleased.connect(self._slider_released)
             media_controls.addWidget(self.position_slider, stretch=1)
@@ -1713,12 +1756,22 @@ if QT_IMPORT_ERROR is None:
             media_controls.addWidget(self.time_label)
             self.speed_combo = QComboBox()
             self.speed_combo.setAccessibleName("Velocidade de reprodução")
+            self.speed_combo.setToolTip("Velocidade de reprodução do áudio (0.75x a 2.0x).")
             for label, rate in [("0.75x", 0.75), ("1.0x", 1.0), ("1.25x", 1.25), ("1.5x", 1.5), ("2.0x", 2.0)]:
                 self.speed_combo.addItem(label, rate)
             self.speed_combo.setCurrentIndex(1)
             self.speed_combo.currentIndexChanged.connect(self.update_playback_rate)
             media_controls.addWidget(self.speed_combo)
+            media_controls.addWidget(QLabel("Vol:"))
+            self.volume_slider = QSlider(Qt.Orientation.Horizontal)
+            self.volume_slider.setRange(0, 100)
+            self.volume_slider.setValue(100)
+            self.volume_slider.setFixedWidth(80)
+            self.volume_slider.setToolTip("Volume de reprodução do áudio.")
+            self.volume_slider.valueChanged.connect(lambda v: self.audio_output.setVolume(v / 100))
+            media_controls.addWidget(self.volume_slider)
             self.follow_playback_checkbox = QCheckBox("Acompanhar reprodução")
+            self.follow_playback_checkbox.setToolTip("Quando ativo, a tabela de blocos acompanha automaticamente o ponto de reprodução do áudio.")
             self.follow_playback_checkbox.setChecked(True)
             media_controls.addWidget(self.follow_playback_checkbox)
             media_layout.addLayout(media_controls)
@@ -1863,6 +1916,7 @@ if QT_IMPORT_ERROR is None:
                 job = self.context.jobs.get(status.interview_id, {})
                 values = [
                     status.interview_id,
+                    media_format_label(status),
                     self.friendly_state(status, job),
                     format_clock(float(status.duration_sec) if status.duration_sec else 0),
                     metadata_display["language"],
@@ -1883,8 +1937,40 @@ if QT_IMPORT_ERROR is None:
             self.interview_table.setVisible(has_rows)
             if hasattr(self, "_empty_table_label"):
                 self._empty_table_label.setVisible(not has_rows)
-            self.progress_label.setText(f"{len(self.statuses)} entrevista(s) na lista." if has_rows else "Nenhuma entrevista na lista.")
+            self._apply_interview_filter()
             self.update_action_states()
+
+        def _apply_interview_filter(self) -> None:
+            """Hide/show table rows based on status combo and text search."""
+            if not hasattr(self, "filter_status_combo"):
+                return
+            status_filter = self.filter_status_combo.currentText()
+            text_filter = self.filter_text_edit.text().strip().lower()
+            visible_count = 0
+            for row_idx in range(self.interview_table.rowCount()):
+                id_item = self.interview_table.item(row_idx, 0)
+                state_item = self.interview_table.item(row_idx, 2)  # column 2 = Transcrição
+                if not id_item or not state_item:
+                    continue
+                interview_id = id_item.text().lower()
+                state_text = state_item.text()
+                show_by_status = True
+                if status_filter == "Transcritas":
+                    show_by_status = state_text == "Transcrita"
+                elif status_filter == "Pendentes":
+                    show_by_status = state_text == "Não transcrita"
+                elif status_filter == "Processando":
+                    show_by_status = state_text.startswith("Processando")
+                show_by_text = text_filter in interview_id if text_filter else True
+                hidden = not (show_by_status and show_by_text)
+                self.interview_table.setRowHidden(row_idx, hidden)
+                if not hidden:
+                    visible_count += 1
+            total = self.interview_table.rowCount()
+            if text_filter or status_filter != "Todas":
+                self.progress_label.setText(f"{visible_count} de {total} entrevista(s) visível(eis).")
+            else:
+                self.progress_label.setText(f"{total} entrevista(s) na lista." if total else "Nenhuma entrevista na lista.")
 
         def friendly_state(self, status: Any, job: dict[str, Any] | None = None) -> str:
             job = job or {}
