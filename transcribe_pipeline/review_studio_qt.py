@@ -1011,7 +1011,169 @@ if QT_IMPORT_ERROR is None:
                     self.table.setItem(row, column, item)
 
 
-    class StartupDialog(QDialog):
+    class SetupWizardDialog(QDialog):
+        """First-run wizard shown when AI components are not yet downloaded."""
+
+        def __init__(self, parent: QWidget | None = None) -> None:
+            super().__init__(parent)
+            self.download_completed = False
+            self.setWindowTitle(f"{APP_NAME} — Configuração inicial")
+            self.resize(620, 700)
+            layout = QVBoxLayout(self)
+
+            title = QLabel(f"Bem-vindo ao {APP_NAME}!")
+            title.setStyleSheet("font-size: 20px; font-weight: 700;")
+            layout.addWidget(title)
+
+            intro = QLabel(
+                "Para transcrever entrevistas, o Transcritório precisa baixar\n"
+                "componentes de inteligência artificial (~7 GB, apenas uma vez).\n\n"
+                "Siga os passos abaixo:"
+            )
+            intro.setWordWrap(True)
+            intro.setStyleSheet("margin-bottom: 8px;")
+            layout.addWidget(intro)
+
+            # Step 1
+            step1 = QGroupBox("Passo 1 — Criar conta")
+            s1 = QVBoxLayout(step1)
+            s1.addWidget(QLabel("Crie uma conta gratuita no Hugging Face (repositório de componentes de IA)."))
+            btn1 = QPushButton("Criar conta →")
+            btn1.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://huggingface.co/join")))
+            s1.addWidget(btn1)
+            layout.addWidget(step1)
+
+            # Step 2
+            step2 = QGroupBox("Passo 2 — Aceitar termos de uso")
+            s2 = QVBoxLayout(step2)
+            s2.addWidget(QLabel(
+                "Aceite os termos do componente de identificação de falantes.\n"
+                "É necessário estar logado no Hugging Face."
+            ))
+            btn2 = QPushButton("Aceitar termos →")
+            btn2.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://huggingface.co/pyannote/speaker-diarization-community-1")))
+            s2.addWidget(btn2)
+            layout.addWidget(step2)
+
+            # Step 3
+            step3 = QGroupBox("Passo 3 — Criar chave de acesso")
+            s3 = QVBoxLayout(step3)
+            s3.addWidget(QLabel("Crie um token de acesso do tipo \"Read\" (leitura)."))
+            btn3 = QPushButton("Criar chave de acesso →")
+            btn3.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://huggingface.co/settings/tokens")))
+            s3.addWidget(btn3)
+            layout.addWidget(step3)
+
+            # Step 4
+            step4 = QGroupBox("Passo 4 — Baixar componentes")
+            s4 = QVBoxLayout(step4)
+            s4.addWidget(QLabel("Cole a chave de acesso aqui:"))
+            self.token_edit = QLineEdit()
+            self.token_edit.setEchoMode(QLineEdit.EchoMode.Password)
+            self.token_edit.setPlaceholderText("hf_...")
+            s4.addWidget(self.token_edit)
+            self.download_button = QPushButton("Baixar componentes")
+            self.download_button.setStyleSheet("font-weight: 700; padding: 8px;")
+            self.download_button.clicked.connect(self._start_download)
+            s4.addWidget(self.download_button)
+            self.progress_label = QLabel("")
+            self.progress_label.setWordWrap(True)
+            s4.addWidget(self.progress_label)
+            self.progress_bar = QProgressBar()
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setVisible(False)
+            s4.addWidget(self.progress_bar)
+            layout.addWidget(step4)
+
+            # Privacy note
+            privacy = QLabel(
+                "Seus áudios e vídeos nunca saem deste computador.\n"
+                "A chave de acesso é usada apenas para baixar os componentes e depois é descartada."
+            )
+            privacy.setStyleSheet("color: #555; font-size: 11px; margin-top: 4px;")
+            privacy.setWordWrap(True)
+            layout.addWidget(privacy)
+
+            layout.addStretch()
+            self.skip_button = QPushButton("Pular por agora")
+            self.skip_button.setToolTip("Você poderá baixar os componentes depois em Configurações.")
+            self.skip_button.clicked.connect(self.reject)
+            layout.addWidget(self.skip_button)
+
+        def _start_download(self) -> None:
+            token = self.token_edit.text().strip()
+            if not token:
+                QMessageBox.warning(
+                    self,
+                    "Chave de acesso necessária",
+                    "Cole a chave de acesso (token) do Hugging Face para baixar os componentes.",
+                )
+                return
+            self.download_button.setEnabled(False)
+            self.skip_button.setEnabled(False)
+            self.token_edit.setEnabled(False)
+            self.progress_bar.setVisible(True)
+            self.progress_bar.setValue(0)
+            self.progress_label.setText("Iniciando download...")
+            self._worker = _SetupDownloadThread(token)
+            self._worker.progress.connect(self._on_progress)
+            self._worker.finished_ok.connect(self._on_done)
+            self._worker.failed.connect(self._on_failed)
+            self._worker.start()
+
+        def _on_progress(self, message: str, percent: int) -> None:
+            self.progress_label.setText(message)
+            self.progress_bar.setValue(max(0, min(100, percent)))
+
+        def _on_done(self) -> None:
+            self.download_completed = True
+            self.progress_bar.setValue(100)
+            self.progress_label.setText("Componentes baixados e verificados com sucesso!")
+            self.progress_label.setStyleSheet("color: #2e7d32; font-weight: 700;")
+            self.download_button.setText("Concluído ✓")
+            self.skip_button.setText("Continuar")
+            self.skip_button.setEnabled(True)
+            self.skip_button.clicked.disconnect()
+            self.skip_button.clicked.connect(self.accept)
+
+        def _on_failed(self, message: str) -> None:
+            self.progress_label.setText(f"Erro: {message}")
+            self.progress_label.setStyleSheet("color: #c00;")
+            self.download_button.setEnabled(True)
+            self.download_button.setText("Tentar novamente")
+            self.skip_button.setEnabled(True)
+            self.token_edit.setEnabled(True)
+
+    class _SetupDownloadThread(QThread):
+        progress = Signal(str, int)
+        finished_ok = Signal()
+        failed = Signal(str)
+
+        def __init__(self, token: str) -> None:
+            super().__init__()
+            self.token = token
+
+        def run(self) -> None:
+            try:
+                def on_progress(detail: dict) -> None:
+                    msg = detail.get("message", "")
+                    pct = int(detail.get("progress", 0))
+                    self.progress.emit(msg, pct)
+                result = app_service.download_models(
+                    token=self.token,
+                    progress_callback=on_progress,
+                )
+                if getattr(result, "failures", 0):
+                    self.failed.emit(str(getattr(result, "message", "Falha ao baixar um ou mais componentes.")))
+                else:
+                    self.finished_ok.emit()
+            except Exception as exc:
+                from .utils import sanitize_message
+                self.failed.emit(sanitize_message(str(exc)))
+
+    class ProjectChooserDialog(QDialog):
+        """Shown when AI components are ready — lets user pick or create a project."""
+
         def __init__(self, context: app_service.ProjectContext | None, parent: QWidget | None = None) -> None:
             super().__init__(parent)
             self.choice = "continue"
@@ -1049,15 +1211,19 @@ if QT_IMPORT_ERROR is None:
 
             layout.addSpacing(12)
             for choice, label, help_text in [
-                ("models", "Preparar modelos", "Baixar e verificar os modelos locais de transcricao e falantes."),
-                ("new", "Novo projeto", "Escolher uma pasta e criar um projeto autocontido."),
-                ("open", "Abrir projeto existente", "Selecionar uma pasta de projeto ja existente."),
+                ("new", "Novo projeto", "Escolher uma pasta e criar um novo projeto de transcrição."),
+                ("open", "Abrir projeto existente", "Selecionar uma pasta de projeto já existente."),
             ]:
                 button = QPushButton(label)
                 button.setToolTip(help_text)
                 button.clicked.connect(lambda _checked=False, selected=choice: self.select_choice(selected))
                 layout.addWidget(button)
+
             layout.addStretch()
+            status_label = QLabel("✓ Componentes de IA instalados")
+            status_label.setStyleSheet("color: #2e7d32; font-size: 11px;")
+            status_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+            layout.addWidget(status_label)
 
         def select_choice(self, choice: str) -> None:
             self.choice = choice
@@ -1483,7 +1649,30 @@ if QT_IMPORT_ERROR is None:
             self.progress_label.setText("Configuracao de transcricao atualizada.")
 
         def show_startup_dialog(self) -> None:
-            dialog = StartupDialog(self.context, self)
+            # Tela A: Setup wizard when AI components are missing
+            if not app_service.required_models_ready():
+                wizard = SetupWizardDialog(self)
+                result = wizard.exec()
+                if result == QDialog.DialogCode.Accepted and wizard.download_completed:
+                    # Components installed — show project chooser
+                    self.progress_label.setText("Componentes de IA instalados.")
+                else:
+                    # Skipped or cancelled — show warning
+                    if not app_service.required_models_ready():
+                        self.progress_label.setText(
+                            "⚠ Componentes de IA não instalados. "
+                            "Use Configurações > Configurar modelos."
+                        )
+                        self.progress_label.setStyleSheet("color: #c00; font-weight: 700;")
+                        self.refresh_interviews()
+                        return
+                # Fall through to project chooser if models are now ready
+                if not app_service.required_models_ready():
+                    self.refresh_interviews()
+                    return
+
+            # Tela B: Project chooser when everything is ready
+            dialog = ProjectChooserDialog(self.context, self)
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 if self.context is None:
                     return
@@ -1493,8 +1682,6 @@ if QT_IMPORT_ERROR is None:
                 self.new_project()
             elif dialog.choice == "open":
                 self.open_project()
-            elif dialog.choice == "models":
-                self.show_model_setup()
             elif dialog.choice == "recent" and dialog.selected_recent is not None:
                 self._open_project_path(dialog.selected_recent)
             else:
