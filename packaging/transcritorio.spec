@@ -20,7 +20,7 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-REPO_ROOT = Path(SPECPATH).resolve().parent          # d:/Dropbox/Transcritorio
+REPO_ROOT = Path(SPECPATH).resolve().parent.parent    # d:/Dropbox/Transcritorio (SPECPATH is in packaging/)
 PACKAGE_DIR = REPO_ROOT / "transcribe_pipeline"
 ASSETS_DIR = REPO_ROOT / "assets"
 PACKAGING_DIR = REPO_ROOT / "packaging"

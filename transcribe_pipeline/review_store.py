@@ -229,7 +229,8 @@ def merge_turn_with_next(review: dict[str, Any], turn_id: str) -> str:
     following = turns.pop(index + 1)
     if turn_speaker_key(current) != turn_speaker_key(following):
         turns.insert(index + 1, following)
-        raise ValueError("Nao e possivel fundir turnos de falantes diferentes. Troque o falante primeiro, se essa for a correcao desejada.")
+        raise ValueError("Não é possível fundir turnos de falantes diferentes. Troque o falante primeiro, se essa for a correção desejada.")
+    current["start"] = min(float(current.get("start", 0) or 0), float(following.get("start", 0) or 0))
     current["end"] = max(float(current.get("end", 0) or 0), float(following.get("end", 0) or 0))
     current["text"] = " ".join([str(current.get("text", "")).strip(), str(following.get("text", "")).strip()]).strip()
     current["flags"] = sorted(set(current.get("flags", [])) | set(following.get("flags", [])))
@@ -257,11 +258,11 @@ def split_turn(review: dict[str, Any], turn_id: str, split_time: float | None = 
 
     next_id = next_turn_id(turns)
     new_turn = deepcopy(current)
-    current["end"] = split_time
+    current["end"] = round(float(split_time), 3)
     current["text"] = left_text
     current["edited"] = True
     new_turn["id"] = next_id
-    new_turn["start"] = split_time
+    new_turn["start"] = round(float(split_time), 3)
     new_turn["text"] = right_text
     new_turn["edited"] = True
     turns.insert(index + 1, new_turn)

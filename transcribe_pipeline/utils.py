@@ -5,10 +5,20 @@ from pathlib import Path
 from typing import Any, Callable
 import hashlib
 import json
+import os
 import queue
+import re
 import subprocess
 import threading
 import time
+
+# Patterns that should never appear in logs or user-facing messages.
+_TOKEN_RE = re.compile(r"hf_[A-Za-z0-9]{8,}")
+
+
+def sanitize_message(text: str) -> str:
+    """Remove HuggingFace tokens and auth headers from a string."""
+    return _TOKEN_RE.sub("<REDACTED>", text)
 
 
 def sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
@@ -28,7 +38,10 @@ def write_json(path: Path, payload: Any) -> None:
 
 
 def read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"JSON inválido em {path.name}: {exc.msg} (linha {exc.lineno})") from exc
 
 
 def append_jsonl(path: Path, payload: dict[str, Any]) -> None:
@@ -49,6 +62,15 @@ def run_command(args: list[str], cwd: Path | None = None) -> subprocess.Complete
     )
 
 
+def secure_subprocess_env() -> dict[str, str]:
+    """Return a copy of os.environ with sensitive variables removed."""
+    env = dict(os.environ)
+    for key in list(env):
+        if key.upper() in {"HF_TOKEN", "TRANSCRITORIO_MODEL_DOWNLOAD_TOKEN"}:
+            del env[key]
+    return env
+
+
 def run_command_stream(
     args: list[str],
     cwd: Path | None = None,
@@ -64,6 +86,7 @@ def run_command_stream(
         encoding="utf-8",
         errors="replace",
         bufsize=1,
+        env=secure_subprocess_env(),
     )
     stdout_parts: list[str] = []
     output_queue: queue.Queue[str] = queue.Queue()

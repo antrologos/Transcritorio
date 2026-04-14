@@ -7,6 +7,7 @@ import json
 import os
 
 from . import runtime
+from .utils import sanitize_message
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
@@ -226,7 +227,7 @@ def download_required_models(
                     {
                         "event": "model_download_error",
                         "progress": int((index / total) * 100),
-                        "message": f"Falha ao baixar {asset.label}: {exc}",
+                        "message": f"Falha ao baixar {asset.label}: {sanitize_message(str(exc))}",
                     }
                 )
             continue
@@ -238,6 +239,9 @@ def download_required_models(
                     "message": f"{asset.label} baixado ({index}/{total}).",
                 }
             )
+    # Clean up token from environment after download session
+    os.environ.pop(token_env, None)
+    os.environ.pop("HF" + "_TOKEN", None)
     return failures
 
 

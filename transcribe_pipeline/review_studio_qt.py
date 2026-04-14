@@ -14,6 +14,7 @@ import wave
 
 from . import app_service, project_store, review_store
 from .runtime import resolve_executable
+from .utils import sanitize_message
 
 try:
     from PySide6.QtCore import QPointF, QThread, QTimer, Qt, QUrl, Signal
@@ -63,6 +64,16 @@ APP_NAME = "Transcrit\u00f3rio"
 APP_CREDITS = "Rog\u00e9rio Jer\u00f4nimo Barbosa - https://antrologos.github.io/"
 APP_ICON_FILE = "transcritorio_icon.svg"
 WAVEFORM_CACHE_VERSION = 1
+
+
+def open_folder_in_explorer(path: Path) -> None:
+    """Open a folder in the platform's file manager."""
+    if sys.platform == "win32":
+        os.startfile(str(path))  # type: ignore[attr-defined]
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(path)])
+    else:
+        subprocess.Popen(["xdg-open", str(path)])
 
 
 def app_asset_path(filename: str) -> Path:
@@ -1135,8 +1146,10 @@ if QT_IMPORT_ERROR is None:
                 self.context = app_service.load_project(project_root=project_root)
                 from . import recent_projects
                 recent_projects.save_recent(self.context.paths.project_root)
-            except (FileNotFoundError, Exception):
+            except FileNotFoundError:
                 pass
+            except Exception as exc:
+                print(f"Aviso: não foi possível carregar o projeto: {exc}", file=sys.stderr)
             self.statuses = []
             self.review: dict[str, Any] | None = None
             self.current_interview_id: str | None = None
@@ -1300,6 +1313,22 @@ if QT_IMPORT_ERROR is None:
             self.redo_action = self.undo_stack.createRedoAction(self, "Refazer")
             self.redo_action.setShortcut(QKeySequence.StandardKey.Redo)
 
+            # Playback keyboard shortcuts
+            self.play_action = QAction("Reproduzir/Pausar", self)
+            self.play_action.setShortcut(Qt.Key.Key_Space)
+            self.play_action.triggered.connect(self.toggle_playback)
+            self.addAction(self.play_action)
+
+            self.seek_back_action = QAction("Voltar 5s", self)
+            self.seek_back_action.setShortcut(QKeySequence("Ctrl+Left"))
+            self.seek_back_action.triggered.connect(lambda: self.seek_relative(-5))
+            self.addAction(self.seek_back_action)
+
+            self.seek_forward_action = QAction("Avancar 5s", self)
+            self.seek_forward_action.setShortcut(QKeySequence("Ctrl+Right"))
+            self.seek_forward_action.triggered.connect(lambda: self.seek_relative(5))
+            self.addAction(self.seek_forward_action)
+
         def action_button(self, action: QAction, primary: bool = False) -> QPushButton:
             button = QPushButton(action.text())
             button.setToolTip(action.toolTip())
@@ -1422,7 +1451,7 @@ if QT_IMPORT_ERROR is None:
             try:
                 self.context = app_service.update_engine_config(self.context, dialog.updates())
             except Exception as exc:
-                QMessageBox.critical(self, "Nao foi possivel salvar a configuracao", str(exc))
+                QMessageBox.critical(self, "Não foi possível salvar a configuração", sanitize_message(str(exc)))
                 return
             self.refresh_interviews()
             self.progress_label.setText("Configuracao de transcricao atualizada.")
@@ -1815,6 +1844,7 @@ if QT_IMPORT_ERROR is None:
             self.statuses = app_service.list_interviews(self.context)
             if hasattr(self, "project_label"):
                 self.project_label.setText(self.project_header_text())
+            self.interview_table.blockSignals(True)
             self.interview_table.setRowCount(0)
             for status in self.statuses:
                 row = self.interview_table.rowCount()
@@ -1838,6 +1868,7 @@ if QT_IMPORT_ERROR is None:
                     if column == 0:
                         item.setData(Qt.ItemDataRole.UserRole, status.interview_id)
                     self.interview_table.setItem(row, column, item)
+            self.interview_table.blockSignals(False)
             self.progress_label.setText(f"{len(self.statuses)} entrevista(s) na lista.")
             self.update_action_states()
 
@@ -1847,7 +1878,7 @@ if QT_IMPORT_ERROR is None:
                 return f"Processando {job.get('progress', 0)}%"
             if status.review_exists or status.canonical_exists:
                 return "Transcrita"
-            return "Nao transcrita"
+            return "Não transcrita"
 
         def selected_interview_id(self) -> str | None:
             ids = self.selected_interview_ids()
@@ -1880,7 +1911,7 @@ if QT_IMPORT_ERROR is None:
             try:
                 self.context = app_service.add_audio_root(self.context, Path(folder))
             except Exception as exc:
-                QMessageBox.critical(self, "Não foi possível adicionar a pasta", str(exc))
+                QMessageBox.critical(self, "Não foi possível adicionar a pasta", sanitize_message(str(exc)))
                 return
             self.refresh_interviews()
             QMessageBox.information(
@@ -1907,7 +1938,7 @@ if QT_IMPORT_ERROR is None:
             try:
                 context = app_service.create_project(project_root, project_name=name)
             except Exception as exc:
-                QMessageBox.critical(self, "Não foi possível criar o projeto", str(exc))
+                QMessageBox.critical(self, "Não foi possível criar o projeto", sanitize_message(str(exc)))
                 return
             self.switch_project_context(context)
             self.progress_label.setText("Projeto criado. Use Arquivos > Adicionar midia para comecar.")
@@ -1921,7 +1952,7 @@ if QT_IMPORT_ERROR is None:
             try:
                 context = app_service.open_project(Path(folder))
             except Exception as exc:
-                QMessageBox.critical(self, "Não foi possível abrir o projeto", str(exc))
+                QMessageBox.critical(self, "Não foi possível abrir o projeto", sanitize_message(str(exc)))
                 return
             self.switch_project_context(context)
             self.progress_label.setText("Projeto aberto.")
@@ -1960,7 +1991,7 @@ if QT_IMPORT_ERROR is None:
             try:
                 self.context = app_service.add_audio_files(self.context, [Path(path) for path in files])
             except Exception as exc:
-                QMessageBox.critical(self, "Não foi possível adicionar os arquivos", str(exc))
+                QMessageBox.critical(self, "Não foi possível adicionar os arquivos", sanitize_message(str(exc)))
                 return
             self.refresh_interviews()
             QMessageBox.information(self, "Arquivos adicionados", f"{len(files)} arquivo(s) foram adicionados ao projeto.")
@@ -1975,7 +2006,7 @@ if QT_IMPORT_ERROR is None:
         def open_project_folder(self) -> None:
             if not self._require_project("Abrir pasta do projeto"):
                 return
-            os.startfile(str(self.context.paths.project_root))  # type: ignore[attr-defined]
+            open_folder_in_explorer(self.context.paths.project_root)
 
         def apply_metadata_to_selected(self) -> None:
             ids = self.selected_interview_ids()
@@ -2019,7 +2050,7 @@ if QT_IMPORT_ERROR is None:
                 self.media_candidates = app_service.get_media_candidates(self.context, interview_id)
                 self.undo_stack.clear()
             except Exception as exc:
-                QMessageBox.critical(self, "Não foi possível abrir", str(exc))
+                QMessageBox.critical(self, "Não foi possível abrir", sanitize_message(str(exc)))
                 return
             if not self.media_candidates:
                 QMessageBox.critical(self, "Mídia não encontrada", "Não encontrei o áudio/vídeo desta entrevista.")
@@ -2038,10 +2069,10 @@ if QT_IMPORT_ERROR is None:
             try:
                 self.media_candidates = app_service.get_media_candidates(self.context, interview_id)
             except Exception as exc:
-                QMessageBox.critical(self, "Nao foi possivel abrir a midia", str(exc))
+                QMessageBox.critical(self, "Não foi possível abrir a mídia", sanitize_message(str(exc)))
                 return
             if not self.media_candidates:
-                QMessageBox.critical(self, "Midia nao encontrada", "Nao encontrei o audio/video deste arquivo.")
+                QMessageBox.critical(self, "Mídia não encontrada", "Não encontrei o áudio/vídeo deste arquivo.")
                 return
             self.player.stop()
             self.review = None
@@ -2338,6 +2369,7 @@ if QT_IMPORT_ERROR is None:
                 self.update_current_row_preview()
                 self._editor_dirty = False
                 self._save_failed = False
+                self.autosave_timer.stop()
                 self.set_save_state(saved_status_message())
                 self.progress_label.setText("Alterações salvas.")
                 self.update_action_states()
@@ -2351,7 +2383,7 @@ if QT_IMPORT_ERROR is None:
                 message.setWindowTitle("Não foi possível salvar")
                 message.setText("A transcrição não foi salva.")
                 message.setInformativeText("Corrija o problema indicado e tente salvar novamente antes de trocar de entrevista ou fechar o aplicativo.")
-                message.setDetailedText(str(exc))
+                message.setDetailedText(sanitize_message(str(exc)))
                 message.exec()
                 self.update_action_states()
                 return False
@@ -2466,7 +2498,7 @@ if QT_IMPORT_ERROR is None:
                 self.undo_stack.push(ReviewSnapshotCommand(self, "Juntar blocos", before, self.review, merged_id))
                 self.set_save_state(saved_status_message())
             except Exception as exc:
-                QMessageBox.warning(self, "Nao foi possivel juntar", str(exc))
+                QMessageBox.warning(self, "Não foi possível juntar", sanitize_message(str(exc)))
 
         def split_current_turn(self) -> None:
             if not self.review or not self.current_interview_id or not self.current_turn_id:
@@ -2476,7 +2508,7 @@ if QT_IMPORT_ERROR is None:
             try:
                 current_index = review_store.find_turn_index(self.review, self.current_turn_id)
             except KeyError as exc:
-                QMessageBox.warning(self, "Nao foi possivel dividir", str(exc))
+                QMessageBox.warning(self, "Não foi possível dividir", sanitize_message(str(exc)))
                 return
             before = deepcopy(self.review)
             current_turn = self.turns[current_index]
@@ -2508,7 +2540,7 @@ if QT_IMPORT_ERROR is None:
                 self.set_save_state(saved_status_message())
                 self.progress_label.setText(f"Bloco dividido; {split_note}. Ajuste Início/Fim se necessário.")
             except Exception as exc:
-                QMessageBox.warning(self, "Nao foi possivel dividir", str(exc))
+                QMessageBox.warning(self, "Não foi possível dividir", sanitize_message(str(exc)))
 
         def use_player_as_start(self) -> None:
             self.apply_player_time_to_boundary("start")
@@ -2555,7 +2587,7 @@ if QT_IMPORT_ERROR is None:
                 self.set_save_state(saved_status_message())
                 self.progress_label.setText("Tempo ajustado pela posição do player.")
             except Exception as exc:
-                QMessageBox.warning(self, "Não foi possível ajustar o tempo", str(exc))
+                QMessageBox.warning(self, "Não foi possível ajustar o tempo", sanitize_message(str(exc)))
 
         def export_current_review(self, *_args: Any) -> None:
             self.export_reviews(default_scope="current" if self.current_interview_id else "selected")
@@ -2578,7 +2610,7 @@ if QT_IMPORT_ERROR is None:
             scope = dialog.selected_scope()
             ids = self.ids_for_export_scope(scope)
             if not ids:
-                QMessageBox.information(self, "Nada para exportar", "Nao encontrei transcricoes para o escopo escolhido.")
+                QMessageBox.information(self, "Nada para exportar", "Não encontrei transcrições para o escopo escolhido.")
                 return
             exported: list[Path] = []
             skipped: list[str] = []
@@ -2589,7 +2621,7 @@ if QT_IMPORT_ERROR is None:
                         continue
                     exported.extend(app_service.export_review(self.context, interview_id, formats=formats))
             except Exception as exc:
-                QMessageBox.critical(self, "Erro ao exportar", str(exc))
+                QMessageBox.critical(self, "Erro ao exportar", sanitize_message(str(exc)))
                 return
             message = QMessageBox(self)
             message.setIcon(QMessageBox.Icon.Information)
@@ -2625,7 +2657,7 @@ if QT_IMPORT_ERROR is None:
                 return
             folder = self.context.paths.review_dir / "final"
             folder.mkdir(parents=True, exist_ok=True)
-            os.startfile(str(folder))  # type: ignore[attr-defined]
+            open_folder_in_explorer(folder)
 
         def toggle_playback(self) -> None:
             if self.player.source().isEmpty():

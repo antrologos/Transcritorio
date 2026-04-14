@@ -1,8 +1,7 @@
-"""Manage the user-level recent projects list at %LOCALAPPDATA%/Transcritorio/recent_projects.json."""
+"""Manage the user-level recent projects list (cross-platform via runtime.app_data_dir)."""
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 MAX_RECENT = 10
@@ -10,7 +9,8 @@ CONFIG_FILENAME = "recent_projects.json"
 
 
 def _config_path() -> Path:
-    return Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "Transcritorio" / CONFIG_FILENAME
+    from . import runtime
+    return runtime.app_data_dir() / CONFIG_FILENAME
 
 
 def load_recent() -> list[Path]:

@@ -343,8 +343,15 @@ def sync_jobs(paths: Paths, rows: list[dict[str, str]]) -> dict[str, dict[str, A
         if not file_id:
             continue
         previous = jobs.get(file_id) if isinstance(jobs.get(file_id), dict) else {}
-        if previous.get("status") in {"Na fila", "Rodando", "Cancelando", "Falha"}:
+        if previous.get("status") in {"Na fila", "Cancelando", "Falha"}:
             jobs[file_id] = previous
+        elif previous.get("status") == "Rodando":
+            # Stale "Rodando" job from a crash — reset to artifact-based status
+            jobs[file_id] = {
+                **job_from_artifacts(paths, row),
+                "last_error": "Tarefa interrompida (provável crash ou fechamento forçado).",
+                **{key: previous[key] for key in ("queued_at", "started_at") if key in previous},
+            }
         else:
             jobs[file_id] = {
                 **job_from_artifacts(paths, row),

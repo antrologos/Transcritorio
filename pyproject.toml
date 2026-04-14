@@ -12,9 +12,10 @@ dependencies = [
     "whisperx==3.8.5",
     "pyannote-audio==4.0.4",
     "faster-whisper==1.2.1",
+    "torchcodec==0.7.0",
     "huggingface_hub>=0.28.1",
     "python-docx>=1.2.0",
-    "jiwer",
+    "jiwer>=3.0.0",
 ]
 
 [project.scripts]

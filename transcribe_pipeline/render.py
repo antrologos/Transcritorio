@@ -120,6 +120,7 @@ def load_external_diarization(paths: Paths, interview_id: str, config: dict) -> 
         return []
     path = paths.diarization_dir / "json" / f"{interview_id}.exclusive.json"
     if not path.exists():
+        print(f"Aviso: diarização pyannote_exclusive configurada mas arquivo não encontrado: {path.name}", flush=True)
         return []
     payload = read_json(path)
     return [segment for segment in payload.get("segments", []) if isinstance(segment, dict)]
