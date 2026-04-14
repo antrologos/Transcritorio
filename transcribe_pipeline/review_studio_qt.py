@@ -1151,6 +1151,7 @@ if QT_IMPORT_ERROR is None:
             except Exception as exc:
                 print(f"Aviso: não foi possível carregar o projeto: {exc}", file=sys.stderr)
             self.statuses = []
+            self._status_map: dict[str, Any] = {}
             self.review: dict[str, Any] | None = None
             self.current_interview_id: str | None = None
             self.turns: list[dict[str, Any]] = []
@@ -1586,9 +1587,15 @@ if QT_IMPORT_ERROR is None:
             self.interview_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
             self.interview_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
             self.interview_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+            self.interview_table.setSortingEnabled(True)
             self.interview_table.cellDoubleClicked.connect(self.open_review_from_row)
             self.interview_table.itemSelectionChanged.connect(self.update_action_states)
             layout.addWidget(self.interview_table, stretch=1)
+            self._empty_table_label = QLabel("Nenhuma entrevista.\nUse Arquivos \u203a Adicionar m\u00eddia.")
+            self._empty_table_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._empty_table_label.setStyleSheet("color: #888; font-size: 13px; padding: 24px;")
+            self._empty_table_label.setVisible(False)
+            layout.addWidget(self._empty_table_label)
             metadata_button = self.action_button(self.apply_metadata_action)
             layout.addWidget(metadata_button)
             open_button = self.action_button(self.open_transcript_action)
@@ -1842,8 +1849,10 @@ if QT_IMPORT_ERROR is None:
                 return
             self.context = app_service.load_project(config_path=self.context.config_path)
             self.statuses = app_service.list_interviews(self.context)
+            self._status_map = {s.interview_id: s for s in self.statuses}
             if hasattr(self, "project_label"):
                 self.project_label.setText(self.project_header_text())
+            self.interview_table.setSortingEnabled(False)
             self.interview_table.blockSignals(True)
             self.interview_table.setRowCount(0)
             for status in self.statuses:
@@ -1869,7 +1878,12 @@ if QT_IMPORT_ERROR is None:
                         item.setData(Qt.ItemDataRole.UserRole, status.interview_id)
                     self.interview_table.setItem(row, column, item)
             self.interview_table.blockSignals(False)
-            self.progress_label.setText(f"{len(self.statuses)} entrevista(s) na lista.")
+            self.interview_table.setSortingEnabled(True)
+            has_rows = len(self.statuses) > 0
+            self.interview_table.setVisible(has_rows)
+            if hasattr(self, "_empty_table_label"):
+                self._empty_table_label.setVisible(not has_rows)
+            self.progress_label.setText(f"{len(self.statuses)} entrevista(s) na lista." if has_rows else "Nenhuma entrevista na lista.")
             self.update_action_states()
 
         def friendly_state(self, status: Any, job: dict[str, Any] | None = None) -> str:
@@ -2126,10 +2140,7 @@ if QT_IMPORT_ERROR is None:
                 widget.setEnabled(enabled)
 
         def status_by_interview_id(self, interview_id: str) -> Any | None:
-            for status in self.statuses:
-                if status.interview_id == interview_id:
-                    return status
-            return None
+            return self._status_map.get(interview_id)
 
         def current_turn(self) -> dict[str, Any] | None:
             if not self.review or not self.current_turn_id:
@@ -2486,6 +2497,14 @@ if QT_IMPORT_ERROR is None:
         def merge_current_turn(self) -> None:
             if not self.review or not self.current_interview_id or not self.current_turn_id:
                 return
+            reply = QMessageBox.question(
+                self, "Juntar blocos",
+                "Isso vai juntar este bloco com o próximo, removendo a divisão entre eles.\n\nDeseja continuar?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
             if not self.save_current_turn():
                 return
             before = deepcopy(self.review)
@@ -2502,6 +2521,14 @@ if QT_IMPORT_ERROR is None:
 
         def split_current_turn(self) -> None:
             if not self.review or not self.current_interview_id or not self.current_turn_id:
+                return
+            reply = QMessageBox.question(
+                self, "Dividir bloco",
+                "Isso vai dividir este bloco em dois na posição atual do cursor.\n\nDeseja continuar?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
                 return
             if not self.save_current_turn():
                 return

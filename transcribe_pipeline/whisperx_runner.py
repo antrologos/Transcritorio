@@ -39,6 +39,9 @@ def run_whisperx(
         wav = paths.project_root / row["wav_path"]
         if config.get("diarize", True):
             validate_local_diarization_model(config.get("diarize_model"))
+        device, fell_back = runtime.resolve_device(config.get("asr_device"))
+        if fell_back:
+            print(f"[Transcritorio] CUDA indisponivel. Usando CPU para transcrever {row['interview_id']}.")
         command = [
             runtime.resolve_executable("whisperx"),
             str(wav),
@@ -47,7 +50,7 @@ def run_whisperx(
             "--model_dir",
             model_cache_dir,
             "--device",
-            str(config["asr_device"]),
+            device,
             "--compute_type",
             str(config["asr_compute_type"]),
             "--batch_size",

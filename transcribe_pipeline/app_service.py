@@ -133,6 +133,9 @@ def add_audio_root(context: ProjectContext, folder: Path) -> ProjectContext:
     if folder_text not in roots:
         roots.append(folder_text)
     config["audio_roots"] = roots
+    paths = make_paths(config, base_dir=context.paths.project_root)
+    ensure_directories(paths)
+    new_context = refresh_manifest(build_context(context.config_path, config, paths, context.rows))
     write_config(
         context.config_path,
         config,
@@ -141,9 +144,7 @@ def add_audio_root(context: ProjectContext, folder: Path) -> ProjectContext:
             "# audio_roots entries can point to additional folders selected in the Review Studio.",
         ],
     )
-    paths = make_paths(config, base_dir=context.paths.project_root)
-    ensure_directories(paths)
-    return refresh_manifest(build_context(context.config_path, config, paths, context.rows))
+    return new_context
 
 
 def add_audio_files(context: ProjectContext, files: list[Path]) -> ProjectContext:
@@ -154,6 +155,9 @@ def add_audio_files(context: ProjectContext, files: list[Path]) -> ProjectContex
         if file_text not in configured:
             configured.append(file_text)
     config["audio_files"] = configured
+    paths = make_paths(config, base_dir=context.paths.project_root)
+    ensure_directories(paths)
+    new_context = refresh_manifest(build_context(context.config_path, config, paths, context.rows))
     write_config(
         context.config_path,
         config,
@@ -162,9 +166,7 @@ def add_audio_files(context: ProjectContext, files: list[Path]) -> ProjectContex
             "# audio_files entries point to individual media files selected in the Review Studio.",
         ],
     )
-    paths = make_paths(config, base_dir=context.paths.project_root)
-    ensure_directories(paths)
-    return refresh_manifest(build_context(context.config_path, config, paths, context.rows))
+    return new_context
 
 
 def list_interviews(context: ProjectContext, ids: list[str] | None = None) -> list[InterviewStatus]:
@@ -318,10 +320,11 @@ def update_engine_config(context: ProjectContext, updates: dict[str, Any]) -> Pr
     for key, value in updates.items():
         if value is not None:
             config[key] = value
-    write_config(context.config_path, config, header=["# Local transcription pipeline configuration."])
     paths = make_paths(config, base_dir=context.paths.project_root)
     ensure_directories(paths)
-    return build_context(context.config_path, config, paths, context.rows)
+    new_context = build_context(context.config_path, config, paths, context.rows)
+    write_config(context.config_path, config, header=["# Local transcription pipeline configuration."])
+    return new_context
 
 
 def save_project_metadata(context: ProjectContext) -> ProjectContext:

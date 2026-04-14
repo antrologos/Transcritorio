@@ -18,9 +18,9 @@ DISPLAY_LABELS = {
     "ENTREVISTADO": "Entrevistado",
 }
 FLAG_DISPLAY_LABELS = {
-    "inaudivel": "inaud\u00edvel",
-    "duvida": "d\u00favida",
-    "sobreposicao": "sobreposi\u00e7\u00e3o",
+    "inaudivel": "Inaud\u00edvel",
+    "duvida": "D\u00favida",
+    "sobreposicao": "Sobreposi\u00e7\u00e3o",
 }
 
 

@@ -43,7 +43,10 @@ def run_pyannote_diarization(
         print(f"Missing pyannote dependencies: {exc}")
         return len(rows_to_run) or 1
 
-    device = torch.device(str(config.get("asr_device") or "cpu"))
+    effective_device, fell_back = runtime.resolve_device(config.get("asr_device"))
+    if fell_back:
+        print("[Transcritorio] CUDA indisponivel. Usando CPU para diarizacao.")
+    device = torch.device(effective_device)
     try:
         checkpoint = model_name if Path(model_name).exists() else model_manager.local_pyannote_checkpoint()
         pipeline = Pipeline.from_pretrained(checkpoint, token=None, cache_dir=str(runtime.model_cache_dir())).to(device)

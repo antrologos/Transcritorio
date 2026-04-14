@@ -136,3 +136,35 @@ def redacted_token_env(env: Mapping[str, str], token_env: str = "TRANSCRITORIO_M
     if redacted.get(token_env):
         redacted[token_env] = "<TRANSCRITORIO_MODEL_DOWNLOAD_TOKEN>"
     return redacted
+
+
+# ---------------------------------------------------------------------------
+# GPU / device detection (lazy: torch is only imported on first call)
+# ---------------------------------------------------------------------------
+
+_detected_device: str | None = None
+
+
+def detect_device() -> str:
+    """Return 'cuda' if a CUDA GPU is available, 'cpu' otherwise."""
+    global _detected_device
+    if _detected_device is not None:
+        return _detected_device
+    try:
+        import torch
+        available = torch.cuda.is_available()
+    except Exception:
+        available = False
+    _detected_device = "cuda" if available else "cpu"
+    return _detected_device
+
+
+def resolve_device(configured: str | None) -> tuple[str, bool]:
+    """Resolve effective device. Returns (device, fell_back)."""
+    wanted = (configured or "cuda").lower()
+    if wanted == "cpu":
+        return "cpu", False
+    detected = detect_device()
+    if detected == "cuda":
+        return "cuda", False
+    return "cpu", True
