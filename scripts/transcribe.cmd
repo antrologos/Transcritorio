@@ -16,13 +16,7 @@ for /d %%D in ("%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg.Shared_*") 
 )
 set "TRANSCRITORIO_HOME=%LOCALAPPDATA%\Transcritorio"
 if "%TRANSCRICAO_VENV%"=="" (
-  if exist "%TRANSCRITORIO_HOME%\transcricao-venv\Scripts\python.exe" (
-    set "TRANSCRICAO_VENV=%TRANSCRITORIO_HOME%\transcricao-venv"
-  ) else if exist "%LOCALAPPDATA%\InfoCitizen\transcricao-venv\Scripts\python.exe" (
-    set "TRANSCRICAO_VENV=%LOCALAPPDATA%\InfoCitizen\transcricao-venv"
-  ) else (
-    set "TRANSCRICAO_VENV=%TRANSCRITORIO_HOME%\transcricao-venv"
-  )
+  set "TRANSCRICAO_VENV=%TRANSCRITORIO_HOME%\transcricao-venv"
 )
 set "PYTHONPATH=%TRANSCRITORIO_ROOT%\scripts\python_sitecustomize;%TRANSCRITORIO_ROOT%;%PYTHONPATH%"
 if exist "%TRANSCRICAO_VENV%\Scripts\python.exe" (
