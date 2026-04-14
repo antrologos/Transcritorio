@@ -2,7 +2,11 @@
 ; Requires Inno Setup 6.2+ (DiskSpanning support)
 ;
 ; Build with:
-;   ISCC.exe packaging\transcritorio.iss
+;   ISCC.exe /DBundleDir=C:\path\to\dist\Transcritorio packaging\transcritorio.iss
+
+#ifndef BundleDir
+  #define BundleDir "..\dist\Transcritorio"
+#endif
 
 #define AppName      "Transcritorio"
 #define AppVersion   "0.1.0"
@@ -50,7 +54,7 @@ Name: "addtopath"; Description: "Adicionar CLI ao PATH do usuario"; GroupDescrip
 
 [Files]
 ; Bundle the entire PyInstaller output directory
-Source: "..\dist\Transcritorio\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#BundleDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"
