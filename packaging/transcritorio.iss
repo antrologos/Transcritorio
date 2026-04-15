@@ -27,9 +27,8 @@ AllowNoIcons=yes
 DiskSpanning=yes
 Compression=lzma2/ultra64
 SolidCompression=yes
-; Output — keep outside Dropbox synced folders to avoid antivirus conflicts.
-; With DiskSpanning, the Setup.exe + .bin files will be in this directory.
-OutputDir=C:\Users\antro\AppData\Local\Temp\Transcritorio-installer
+; Output — override with ISCC /O flag or build.ps1 sets it automatically.
+OutputDir={#BundleDir}\..\installer
 OutputBaseFilename=Transcritorio-{#AppVersion}-Setup
 ; Icons
 ; SetupIconFile requires antivirus exclusion; use default icon for now

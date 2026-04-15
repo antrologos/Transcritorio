@@ -3,8 +3,10 @@
     Build Transcritorio standalone distribution for Windows.
 
 .DESCRIPTION
-    Creates a build venv, installs all dependencies (including PyTorch CUDA),
-    downloads FFmpeg, runs PyInstaller, and verifies the output.
+    Copies source to a temporary directory OUTSIDE Dropbox, stamps the build,
+    installs into the build venv, runs PyInstaller, verifies the result, and
+    optionally generates an Inno Setup installer. All temporary files are
+    cleaned up at the end.
 
 .EXAMPLE
     powershell -NoProfile -ExecutionPolicy Bypass -File packaging\build.ps1
@@ -22,56 +24,51 @@ param(
 $ErrorActionPreference = "Stop"
 $env:PYTHONDONTWRITEBYTECODE = "1"
 
-$RepoRoot    = (Resolve-Path "$PSScriptRoot\..").Path
+$RepoRoot     = (Resolve-Path "$PSScriptRoot\..").Path
 $PackagingDir = Join-Path $RepoRoot "packaging"
 $VendorDir    = Join-Path $PackagingDir "vendor"
-# Build/dist OUTSIDE Dropbox to avoid file-locking on .exe/.dll during PyInstaller
-$AppBuildRoot = Join-Path $env:LOCALAPPDATA "Transcritorio\packaging"
-$DistDir      = Join-Path $AppBuildRoot "dist"
-$BuildDir     = Join-Path $AppBuildRoot "build"
+
+# ALL build work happens OUTSIDE Dropbox to avoid file-locking.
+$TempBuild    = Join-Path $env:TEMP "transcritorio-build-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+$DistDir      = Join-Path $TempBuild "dist"
+$WorkDir      = Join-Path $TempBuild "work"
+$SourceCopy   = Join-Path $TempBuild "source"
+$InstallerDir = Join-Path $TempBuild "installer"
+
+# Final output (persisted outside Dropbox)
+$FinalDist    = Join-Path $env:LOCALAPPDATA "Transcritorio\packaging\dist"
+$FinalInstaller = Join-Path $env:LOCALAPPDATA "Transcritorio\packaging\installer"
 
 Write-Host "=== Transcritorio Build ===" -ForegroundColor Cyan
-Write-Host "  Repo:  $RepoRoot"
-Write-Host "  Venv:  $VenvPath"
-Write-Host "  Dist:  $DistDir"
+Write-Host "  Source:   $RepoRoot"
+Write-Host "  Venv:     $VenvPath"
+Write-Host "  Temp:     $TempBuild"
+Write-Host "  Output:   $FinalDist"
 Write-Host ""
 
 # -----------------------------------------------------------------------
-# Step 1: Build venv
+# Step 1: Build venv (only if not skipped)
 # -----------------------------------------------------------------------
 if (-not $SkipVenv) {
     Write-Host "--- [1/7] Creating build venv ---" -ForegroundColor Yellow
-
     if (Test-Path $VenvPath) {
         Write-Host "  Removing existing venv..."
         Remove-Item $VenvPath -Recurse -Force
     }
-
     py -3 -m venv $VenvPath
     if ($LASTEXITCODE -ne 0) { throw "Failed to create venv" }
-
     $Python = Join-Path $VenvPath "Scripts\python.exe"
-
     & $Python -m pip install --upgrade pip wheel setuptools
     if ($LASTEXITCODE -ne 0) { throw "Failed to upgrade pip" }
-
     Write-Host "  Installing PyTorch (CUDA 12.8)..."
-    & $Python -m pip install torch==2.8.0 torchaudio==2.8.0 torchvision==0.23.0 `
-        --index-url https://download.pytorch.org/whl/cu128
+    & $Python -m pip install torch==2.8.0 torchaudio==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu128
     if ($LASTEXITCODE -ne 0) { throw "Failed to install PyTorch" }
-
     Write-Host "  Installing torchcodec..."
     & $Python -m pip install torchcodec==0.7.0
     if ($LASTEXITCODE -ne 0) { throw "Failed to install torchcodec" }
-
-    Write-Host "  Installing Transcritorio package..."
-    & $Python -m pip install "$RepoRoot"
+    Write-Host "  Installing Transcritorio + PyInstaller..."
+    & $Python -m pip install "$RepoRoot" "pyinstaller>=6.0"
     if ($LASTEXITCODE -ne 0) { throw "Failed to install Transcritorio" }
-
-    Write-Host "  Installing PyInstaller..."
-    & $Python -m pip install "pyinstaller>=6.0"
-    if ($LASTEXITCODE -ne 0) { throw "Failed to install PyInstaller" }
-
     Write-Host "  Venv ready." -ForegroundColor Green
 } else {
     Write-Host "--- [1/7] Skipping venv (--SkipVenv) ---" -ForegroundColor DarkGray
@@ -79,205 +76,173 @@ if (-not $SkipVenv) {
 }
 
 # -----------------------------------------------------------------------
-# CRITICAL: Stamp build timestamp + reinstall + nuke cache
-# This block guarantees the bundle always contains the current source.
+# Step 2: Copy source to temp dir + stamp + install (OUTSIDE DROPBOX)
 # -----------------------------------------------------------------------
-Write-Host "--- Stamping build and reinstalling package ---" -ForegroundColor Yellow
+Write-Host "--- [2/7] Copying source and stamping build ---" -ForegroundColor Yellow
 
-# 1. Stamp build timestamp into __init__.py
-$StampScript = Join-Path $PackagingDir "stamp_build.py"
+# Clean slate
+if (Test-Path $TempBuild) { Remove-Item $TempBuild -Recurse -Force }
+New-Item -ItemType Directory -Path $TempBuild -Force | Out-Null
+New-Item -ItemType Directory -Path $SourceCopy -Force | Out-Null
+
+# Copy source (only Python package + packaging files, skip heavy dirs)
+Copy-Item (Join-Path $RepoRoot "transcribe_pipeline") (Join-Path $SourceCopy "transcribe_pipeline") -Recurse
+Copy-Item (Join-Path $RepoRoot "packaging") (Join-Path $SourceCopy "packaging") -Recurse
+Copy-Item (Join-Path $RepoRoot "assets") (Join-Path $SourceCopy "assets") -Recurse
+Copy-Item (Join-Path $RepoRoot "pyproject.toml") $SourceCopy
+Copy-Item (Join-Path $RepoRoot "README.md") $SourceCopy -ErrorAction SilentlyContinue
+
+# Stamp build timestamp in the COPY (not the Dropbox original)
+$StampScript = Join-Path $SourceCopy "packaging\stamp_build.py"
 $BuildTimestamp = (& $Python -B $StampScript stamp).Trim()
 Write-Host "  Build stamp: $BuildTimestamp"
 
-# 2. Force reinstall package from source
-& $Python -m pip install --force-reinstall "$RepoRoot" 2>&1 | Select-Object -Last 3
-if ($LASTEXITCODE -ne 0) {
-    & $Python -B $StampScript restore
-    throw "Failed to update package from source"
+# Copy FFmpeg vendor if it exists (from Dropbox staging)
+$FfmpegVendor = Join-Path $VendorDir "ffmpeg"
+if (Test-Path $FfmpegVendor) {
+    Copy-Item $FfmpegVendor (Join-Path $SourceCopy "packaging\vendor\ffmpeg") -Recurse -Force
+    Write-Host "  FFmpeg vendor copied."
 }
 
-# 3. Verify installed code has the correct build timestamp
+# Install from the TEMP COPY (not from Dropbox)
+& $Python -m pip install --force-reinstall "$SourceCopy" 2>&1 | Select-Object -Last 5
+if ($LASTEXITCODE -ne 0) { throw "Failed to install package from temp copy" }
+
+# Verify the installed code matches the stamped version
 $InstalledBuild = (& $Python -B -c "import transcribe_pipeline; print(transcribe_pipeline.__build__)").Trim()
 if ($InstalledBuild -ne $BuildTimestamp) {
-    & $Python -B $StampScript restore
-    throw "FATAL: Installed build='$InstalledBuild' but expected '$BuildTimestamp'. Stale code detected!"
+    throw "FATAL: Installed build='$InstalledBuild' but expected '$BuildTimestamp'. Build pipeline broken!"
 }
 Write-Host "  Package verified: build=$InstalledBuild" -ForegroundColor Green
 
-# 4. Nuke ALL caches (no stale artifacts possible)
-if (Test-Path $BuildDir) { Remove-Item $BuildDir -Recurse -Force }
-if (Test-Path $DistDir) { Remove-Item $DistDir -Recurse -Force }
+# Nuke PyInstaller global cache
 $PyInstallerCache = Join-Path $env:LOCALAPPDATA "pyinstaller"
 if (Test-Path $PyInstallerCache) { Remove-Item $PyInstallerCache -Recurse -Force }
-Write-Host "  All caches nuked." -ForegroundColor Green
-
-# 5. Restore __init__.py to "dev" (keep git clean)
-& $Python -B $StampScript restore
+Write-Host "  PyInstaller cache cleared."
 
 # -----------------------------------------------------------------------
-# Step 2: Download FFmpeg
+# Step 3: Download FFmpeg (if needed)
 # -----------------------------------------------------------------------
 if (-not $SkipFfmpeg) {
-    Write-Host "--- [2/7] Downloading FFmpeg ---" -ForegroundColor Yellow
-
-    $FfmpegUrl    = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-$FfmpegBuild.zip"
-    $FfmpegTarget  = Join-Path $VendorDir "ffmpeg"
-    # Extract to TEMP (outside Dropbox) to avoid file-locking issues
-    $TempDir       = Join-Path $env:TEMP "transcritorio-ffmpeg-build"
-    $FfmpegZip     = Join-Path $TempDir "ffmpeg.zip"
-    $FfmpegExtract = Join-Path $TempDir "ffmpeg-extract"
-
-    New-Item -ItemType Directory -Path $VendorDir -Force | Out-Null
-    New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
+    Write-Host "--- [3/7] Downloading FFmpeg ---" -ForegroundColor Yellow
+    $FfmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-$FfmpegBuild.zip"
+    $FfmpegTarget = Join-Path $SourceCopy "packaging\vendor\ffmpeg"
+    $FfmpegZip = Join-Path $TempBuild "ffmpeg.zip"
+    $FfmpegExtract = Join-Path $TempBuild "ffmpeg-extract"
     if (Test-Path $FfmpegTarget) { Remove-Item $FfmpegTarget -Recurse -Force }
-
-    Write-Host "  Downloading $FfmpegUrl ..."
+    Write-Host "  Downloading..."
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     Invoke-WebRequest -Uri $FfmpegUrl -OutFile $FfmpegZip -UseBasicParsing
     if (-not (Test-Path $FfmpegZip)) { throw "FFmpeg download failed" }
-
-    Write-Host "  Extracting..."
     Expand-Archive -Path $FfmpegZip -DestinationPath $FfmpegExtract -Force
     $ExtractedDir = Get-ChildItem $FfmpegExtract -Directory | Select-Object -First 1
-    # Copy (not Move) to Dropbox to avoid locking conflicts
     Copy-Item $ExtractedDir.FullName $FfmpegTarget -Recurse -Force
-
-    Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue
-
-    # Verify
-    $FfmpegExe = Join-Path $FfmpegTarget "bin\ffmpeg.exe"
-    if (Test-Path $FfmpegExe) {
-        Write-Host "  FFmpeg staged at $FfmpegTarget" -ForegroundColor Green
-    } else {
-        throw "ffmpeg.exe not found after extraction"
-    }
+    Write-Host "  FFmpeg ready." -ForegroundColor Green
+    # Also update Dropbox staging copy
+    if (-not (Test-Path $VendorDir)) { New-Item -ItemType Directory -Path $VendorDir -Force | Out-Null }
+    Copy-Item $FfmpegTarget (Join-Path $VendorDir "ffmpeg") -Recurse -Force -ErrorAction SilentlyContinue
 } else {
-    Write-Host "--- [2/7] Skipping FFmpeg (--SkipFfmpeg) ---" -ForegroundColor DarkGray
+    Write-Host "--- [3/7] Skipping FFmpeg ---" -ForegroundColor DarkGray
 }
 
 # -----------------------------------------------------------------------
-# Step 3: Verify whisperx entry point
+# Step 4: Verify whisperx + icon
 # -----------------------------------------------------------------------
-Write-Host "--- [3/7] Verifying whisperx ---" -ForegroundColor Yellow
-& $Python -B -c "from whisperx.__main__ import cli; print('whisperx entry point OK')"
+Write-Host "--- [4/7] Verifying prerequisites ---" -ForegroundColor Yellow
+& $Python -B -c "from whisperx.__main__ import cli; print('  whisperx OK')"
 if ($LASTEXITCODE -ne 0) { throw "whisperx entry point not found" }
-
-# -----------------------------------------------------------------------
-# Step 4: Convert icon (if ImageMagick available)
-# -----------------------------------------------------------------------
-Write-Host "--- [4/7] Icon ---" -ForegroundColor Yellow
-$IcoPath = Join-Path $RepoRoot "assets\transcritorio_icon.ico"
+$IcoPath = Join-Path $SourceCopy "assets\transcritorio_icon.ico"
 if (Test-Path $IcoPath) {
-    Write-Host "  ICO already exists: $IcoPath" -ForegroundColor Green
-} elseif (Get-Command magick -ErrorAction SilentlyContinue) {
-    $SvgPath = Join-Path $RepoRoot "assets\transcritorio_icon.svg"
-    magick convert $SvgPath -define icon:auto-resize=256,128,64,48,32,16 $IcoPath
-    Write-Host "  ICO created: $IcoPath" -ForegroundColor Green
+    Write-Host "  ICO: $IcoPath" -ForegroundColor Green
 } else {
-    Write-Warning "  ImageMagick not found. Create $IcoPath manually for exe/installer icons."
+    Write-Warning "  ICO not found. Exe will have default icon."
 }
 
 # -----------------------------------------------------------------------
-# Step 5: Run PyInstaller
+# Step 5: Run PyInstaller (from temp copy, output to temp)
 # -----------------------------------------------------------------------
 Write-Host "--- [5/7] Running PyInstaller ---" -ForegroundColor Yellow
+$SpecFile = Join-Path $SourceCopy "packaging\transcritorio.spec"
 $PyInstaller = Join-Path $VenvPath "Scripts\pyinstaller.exe"
-& $PyInstaller `
-    --distpath $DistDir `
-    --workpath $BuildDir `
-    --clean `
-    --noconfirm `
-    (Join-Path $PackagingDir "transcritorio.spec")
-
+& $PyInstaller --distpath $DistDir --workpath $WorkDir --clean --noconfirm $SpecFile
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed (exit code $LASTEXITCODE)" }
 
 # -----------------------------------------------------------------------
 # Step 6: Verify output
 # -----------------------------------------------------------------------
-Write-Host "--- [6/7] Verifying build output ---" -ForegroundColor Yellow
+Write-Host "--- [6/7] Verifying build ---" -ForegroundColor Yellow
 $OutputDir = Join-Path $DistDir "Transcritorio"
 
-$RequiredFiles = @(
-    "Transcritorio.exe",
-    "transcritorio-cli.exe",
-    "whisperx.exe"
-)
-
-# FFmpeg is optional at this check (may be in vendor/ffmpeg/bin/)
-$FfmpegInBundle = Join-Path $OutputDir "vendor\ffmpeg\bin\ffmpeg.exe"
-if (Test-Path $FfmpegInBundle) {
-    Write-Host "  OK: vendor\ffmpeg\bin\ffmpeg.exe" -ForegroundColor Green
-} else {
-    Write-Warning "  FFmpeg not found in bundle. Verify packaging/vendor/ffmpeg/ was staged."
+foreach ($file in @("Transcritorio.exe", "transcritorio-cli.exe", "whisperx.exe")) {
+    $p = Join-Path $OutputDir $file
+    if (Test-Path $p) { Write-Host "  OK: $file" -ForegroundColor Green }
+    else { throw "MISSING: $file" }
 }
 
-$AllPresent = $true
-foreach ($file in $RequiredFiles) {
-    $FullPath = Join-Path $OutputDir $file
-    if (Test-Path $FullPath) {
-        Write-Host "  OK: $file" -ForegroundColor Green
-    } else {
-        Write-Host "  MISSING: $file" -ForegroundColor Red
-        $AllPresent = $false
+# Copy FFmpeg into bundle if not already there
+$FfmpegInBundle = Join-Path $OutputDir "vendor\ffmpeg\bin\ffmpeg.exe"
+if (-not (Test-Path $FfmpegInBundle)) {
+    $FfmpegSource = Join-Path $SourceCopy "packaging\vendor\ffmpeg\bin"
+    if (Test-Path $FfmpegSource) {
+        $FfmpegDest = Join-Path $OutputDir "vendor\ffmpeg\bin"
+        New-Item -ItemType Directory -Path $FfmpegDest -Force | Out-Null
+        Copy-Item "$FfmpegSource\*" $FfmpegDest -Force
+        Write-Host "  FFmpeg copied into bundle." -ForegroundColor Green
     }
 }
 
-$SizeGB = [math]::Round(
-    (Get-ChildItem $OutputDir -Recurse | Measure-Object Length -Sum).Sum / 1GB, 2
-)
+# Verify CLI runs
+$null = & (Join-Path $OutputDir "transcritorio-cli.exe") --help 2>&1
+if ($LASTEXITCODE -ne 0) { throw "FATAL: CLI exe doesn't run!" }
+Write-Host "  CLI verified." -ForegroundColor Green
+
+$SizeGB = [math]::Round((Get-ChildItem $OutputDir -Recurse | Measure-Object Length -Sum).Sum / 1GB, 2)
 Write-Host "  Bundle size: $SizeGB GB"
 
-if (-not $AllPresent) { throw "Build incomplete - required executables missing" }
-
-# Post-build integrity check: run the CLI to verify build timestamp
-$CliBuildCheck = & (Join-Path $OutputDir "transcritorio-cli.exe") --help 2>&1 | Out-String
-if ($LASTEXITCODE -ne 0) {
-    throw "FATAL: transcritorio-cli.exe failed to run! The bundle may be corrupted."
-}
-Write-Host "  CLI runs OK." -ForegroundColor Green
-Write-Host "  Build verified." -ForegroundColor Green
-
 # -----------------------------------------------------------------------
-# Step 7: Build Inno Setup installer (optional)
+# Step 7: Copy results to final location + optional installer
 # -----------------------------------------------------------------------
+Write-Host "--- [7/7] Finalizing ---" -ForegroundColor Yellow
+
+# Move bundle to final persistent location
+if (Test-Path $FinalDist) { Remove-Item $FinalDist -Recurse -Force }
+New-Item -ItemType Directory -Path (Split-Path $FinalDist) -Force | Out-Null
+Move-Item $OutputDir $FinalDist
+Write-Host "  Bundle: $FinalDist" -ForegroundColor Green
+
+# Build Inno Setup installer
 if (-not $SkipInstaller) {
-    Write-Host "--- [7/7] Building installer ---" -ForegroundColor Yellow
-
-    $IssFile = Join-Path $PackagingDir "transcritorio.iss"
+    $IssFile = Join-Path $SourceCopy "packaging\transcritorio.iss"
     $Iscc = $null
-
-    # Search common Inno Setup locations
-    foreach ($candidate in @(
+    foreach ($c in @(
+        "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
         "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
-        "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
-        (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
-    )) {
-        if ($candidate -and (Test-Path $candidate)) {
-            $Iscc = $candidate
-            break
-        }
-    }
+        "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+    )) { if (Test-Path $c) { $Iscc = $c; break } }
 
     if ($Iscc) {
-        & $Iscc $IssFile
+        if (Test-Path $FinalInstaller) { Remove-Item $FinalInstaller -Recurse -Force }
+        New-Item -ItemType Directory -Path $FinalInstaller -Force | Out-Null
+        & $Iscc "/DBundleDir=$FinalDist" "/O$FinalInstaller" $IssFile
         if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
-        Write-Host "  Installer built." -ForegroundColor Green
+        Write-Host "  Installer: $FinalInstaller" -ForegroundColor Green
     } else {
-        Write-Warning "  Inno Setup (ISCC.exe) not found. Install Inno Setup 6 to build the installer."
+        Write-Warning "  Inno Setup not found. Install it to build the installer."
     }
-} else {
-    Write-Host "--- [7/7] Skipping installer (--SkipInstaller) ---" -ForegroundColor DarkGray
 }
+
+# Clean up temp directory
+Remove-Item $TempBuild -Recurse -Force -ErrorAction SilentlyContinue
+Write-Host "  Temp cleaned up."
 
 # -----------------------------------------------------------------------
 # Done
 # -----------------------------------------------------------------------
 Write-Host ""
 Write-Host "=== Build complete ===" -ForegroundColor Cyan
-Write-Host "  Output directory: $OutputDir"
-Write-Host "  Bundle size:      $SizeGB GB"
-Write-Host ""
-Write-Host "Next steps:" -ForegroundColor Yellow
-Write-Host "  1. Test: $OutputDir\Transcritorio.exe"
-Write-Host "  2. Test: $OutputDir\transcritorio-cli.exe models status"
-Write-Host "  3. Test: $OutputDir\whisperx.exe --help"
+Write-Host "  Bundle:    $FinalDist\Transcritorio.exe"
+Write-Host "  Size:      $SizeGB GB"
+Write-Host "  Build:     $BuildTimestamp"
+if (Test-Path $FinalInstaller) {
+    Write-Host "  Installer: $FinalInstaller"
+}
