@@ -109,9 +109,14 @@ if ($LASTEXITCODE -ne 0) { throw "Failed to install package from temp copy" }
 
 # Overwrite __init__.py in site-packages with the stamped version
 # (pip's wheel build process uses its own temp dir and ignores our stamp)
-$SiteInit = & $Python -B -c "import transcribe_pipeline; print(transcribe_pipeline.__file__)"
+# Get site-packages path and overwrite __init__.py with stamped version
+$SiteInit = (& $Python -B -c "import transcribe_pipeline; print(transcribe_pipeline.__file__)").Trim()
+$SitePkg = Split-Path $SiteInit
 $StampedInit = Join-Path $SourceCopy "transcribe_pipeline\__init__.py"
-Copy-Item $StampedInit $SiteInit.Trim() -Force
+Copy-Item $StampedInit $SiteInit -Force
+# Delete __pycache__ to force Python to re-read the .py file
+$PyCache = Join-Path $SitePkg "__pycache__"
+if (Test-Path $PyCache) { Remove-Item $PyCache -Recurse -Force }
 Write-Host "  Stamped __init__.py copied to site-packages."
 
 # Verify the installed code matches the stamped version
