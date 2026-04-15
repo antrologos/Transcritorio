@@ -104,8 +104,8 @@ if (Test-Path $FfmpegVendor) {
     Write-Host "  FFmpeg vendor copied."
 }
 
-# Install from the TEMP COPY (not from Dropbox)
-& $Python -m pip install --force-reinstall "$SourceCopy" 2>&1 | Select-Object -Last 5
+# Install from the TEMP COPY (--no-cache-dir prevents pip using stale cached wheels)
+& $Python -m pip install --force-reinstall --no-cache-dir --no-deps "$SourceCopy" 2>&1 | Select-Object -Last 5
 if ($LASTEXITCODE -ne 0) { throw "Failed to install package from temp copy" }
 
 # Verify the installed code matches the stamped version
