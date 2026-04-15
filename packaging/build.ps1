@@ -104,9 +104,16 @@ if (Test-Path $FfmpegVendor) {
     Write-Host "  FFmpeg vendor copied."
 }
 
-# Install from the TEMP COPY (--no-cache-dir prevents pip using stale cached wheels)
+# Install package from the TEMP COPY
 & $Python -m pip install --force-reinstall --no-cache-dir --no-deps "$SourceCopy" 2>&1 | Select-Object -Last 5
 if ($LASTEXITCODE -ne 0) { throw "Failed to install package from temp copy" }
+
+# Overwrite __init__.py in site-packages with the stamped version
+# (pip's wheel build process uses its own temp dir and ignores our stamp)
+$SiteInit = & $Python -B -c "import transcribe_pipeline; print(transcribe_pipeline.__file__)"
+$StampedInit = Join-Path $SourceCopy "transcribe_pipeline\__init__.py"
+Copy-Item $StampedInit $SiteInit.Trim() -Force
+Write-Host "  Stamped __init__.py copied to site-packages."
 
 # Verify the installed code matches the stamped version
 $InstalledBuild = (& $Python -B -c "import transcribe_pipeline; print(transcribe_pipeline.__build__)").Trim()
