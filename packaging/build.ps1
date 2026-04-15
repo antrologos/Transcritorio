@@ -115,7 +115,7 @@ Push-Location $env:TEMP
 $SitePkgInit = (& $Python -B -c "import transcribe_pipeline; print(transcribe_pipeline.__file__)").Trim()
 $SitePkgDir = Split-Path $SitePkgInit
 # Copy the already-stamped __init__.py from source copy to site-packages
-$StampedInit = Join-Path $SourceCopy "transcribe_pipeline" "__init__.py"
+$StampedInit = Join-Path (Join-Path $SourceCopy "transcribe_pipeline") "__init__.py"
 Write-Host "  Copying $StampedInit -> $SitePkgInit"
 & $Python -B -c "import shutil; shutil.copy2(r'$StampedInit', r'$SitePkgInit'); print('  Copy OK')"
 # Delete pycache
