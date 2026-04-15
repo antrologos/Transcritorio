@@ -109,17 +109,23 @@ if ($LASTEXITCODE -ne 0) { throw "Failed to install package from temp copy" }
 
 # Overwrite __init__.py in site-packages with the stamped version
 # (pip's wheel build process uses its own temp dir and ignores our stamp)
-# Get site-packages path and overwrite __init__.py with stamped version
-$SiteInit = (& $Python -B -c "import transcribe_pipeline; print(transcribe_pipeline.__file__)").Trim()
-$SitePkg = Split-Path $SiteInit
+# Overwrite __init__.py in site-packages with stamped version using Python
+# (PowerShell Copy-Item has path escaping issues with site-packages paths)
 $StampedInit = Join-Path $SourceCopy "transcribe_pipeline\__init__.py"
-Copy-Item $StampedInit $SiteInit -Force
-# Delete __pycache__ to force Python to re-read the .py file
-$PyCache = Join-Path $SitePkg "__pycache__"
-if (Test-Path $PyCache) { Remove-Item $PyCache -Recurse -Force }
-Write-Host "  Stamped __init__.py copied to site-packages."
+& $Python -B -c "
+import shutil, importlib
+import transcribe_pipeline
+target = transcribe_pipeline.__file__
+pkg_dir = str(__import__('pathlib').Path(target).parent)
+shutil.copy2(r'$StampedInit', target)
+# Delete __pycache__ to force re-read
+cache = __import__('pathlib').Path(pkg_dir) / '__pycache__'
+if cache.exists():
+    shutil.rmtree(str(cache))
+print(f'  Stamped to: {target}')
+"
 
-# Verify the installed code matches the stamped version
+# Verify using a FRESH Python process
 $InstalledBuild = (& $Python -B -c "import transcribe_pipeline; print(transcribe_pipeline.__build__)").Trim()
 if ($InstalledBuild -ne $BuildTimestamp) {
     throw "FATAL: Installed build='$InstalledBuild' but expected '$BuildTimestamp'. Build pipeline broken!"
