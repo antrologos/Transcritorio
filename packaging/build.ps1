@@ -178,7 +178,10 @@ if (Test-Path $IcoPath) {
 Write-Host "--- [5/7] Running PyInstaller ---" -ForegroundColor Yellow
 $SpecFile = Join-Path $SourceCopy "packaging\transcritorio.spec"
 $PyInstaller = Join-Path $VenvPath "Scripts\pyinstaller.exe"
+# Set REPO_ROOT explicitly so the spec file doesn't depend on SPECPATH resolution
+$env:TRANSCRITORIO_REPO_ROOT = $SourceCopy
 & $PyInstaller --distpath $DistDir --workpath $WorkDir --clean --noconfirm $SpecFile
+$env:TRANSCRITORIO_REPO_ROOT = $null
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed (exit code $LASTEXITCODE)" }
 
 # -----------------------------------------------------------------------
@@ -205,6 +208,15 @@ if (-not (Test-Path $FfmpegInBundle)) {
     }
 }
 
+# Verify CUDA DLLs are present (critical for GPU transcription)
+$CudaDll = Join-Path $OutputDir "_internal\torch\lib\torch_cuda.dll"
+if (-not (Test-Path $CudaDll)) {
+    $TorchLibs = Get-ChildItem (Join-Path $OutputDir "_internal\torch\lib") -Filter "*.dll" -ErrorAction SilentlyContinue
+    Write-Host "  torch/lib DLLs found: $($TorchLibs.Count)" -ForegroundColor Red
+    throw "FATAL: CUDA DLLs missing from bundle! torch_cuda.dll not found. GPU transcription will not work."
+}
+Write-Host "  CUDA DLLs: present" -ForegroundColor Green
+
 # Verify CLI runs
 $null = & (Join-Path $OutputDir "transcritorio-cli.exe") --help 2>&1
 if ($LASTEXITCODE -ne 0) { throw "FATAL: CLI exe doesn't run!" }
@@ -212,6 +224,9 @@ Write-Host "  CLI verified." -ForegroundColor Green
 
 $SizeGB = [math]::Round((Get-ChildItem $OutputDir -Recurse | Measure-Object Length -Sum).Sum / 1GB, 2)
 Write-Host "  Bundle size: $SizeGB GB"
+if ($SizeGB -lt 3) {
+    throw "FATAL: Bundle too small ($SizeGB GB). Expected 4+ GB with CUDA. Something is missing."
+}
 
 # -----------------------------------------------------------------------
 # Step 7: Copy results to final location + optional installer

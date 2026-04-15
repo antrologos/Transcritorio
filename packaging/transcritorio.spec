@@ -18,11 +18,14 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 # ---------------------------------------------------------------------------
-# Paths
+# Paths — use env var if set by build.ps1 (avoids SPECPATH ambiguity)
 # ---------------------------------------------------------------------------
-# SPECPATH is the DIRECTORY containing the spec file (i.e., packaging/).
-# .parent goes up one level to the repo root.
-REPO_ROOT = Path(SPECPATH).resolve().parent
+_env_root = os.environ.get("TRANSCRITORIO_REPO_ROOT")
+if _env_root:
+    REPO_ROOT = Path(_env_root).resolve()
+else:
+    # Fallback: SPECPATH is the spec file's directory, go up one level.
+    REPO_ROOT = Path(SPECPATH).resolve().parent
 PACKAGE_DIR = REPO_ROOT / "transcribe_pipeline"
 ASSETS_DIR = REPO_ROOT / "assets"
 PACKAGING_DIR = REPO_ROOT / "packaging"
