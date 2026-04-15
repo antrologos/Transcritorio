@@ -109,23 +109,19 @@ if ($LASTEXITCODE -ne 0) { throw "Failed to install package from temp copy" }
 
 # Overwrite __init__.py in site-packages with the stamped version
 # (pip's wheel build process uses its own temp dir and ignores our stamp)
-# Overwrite __init__.py in site-packages with stamped version.
-# IMPORTANT: run Python from TEMP dir (not Dropbox) so it imports from site-packages.
-$StampedInit = Join-Path $SourceCopy "transcribe_pipeline\__init__.py"
+# Stamp __init__.py in site-packages.
+# Use stamp_build.py pointed at the site-packages copy (not the source copy).
 Push-Location $env:TEMP
-& $Python -B -c "
-import shutil
-import transcribe_pipeline
-target = transcribe_pipeline.__file__
-pkg_dir = str(__import__('pathlib').Path(target).parent)
-shutil.copy2(r'$StampedInit', target)
-cache = __import__('pathlib').Path(pkg_dir) / '__pycache__'
-if cache.exists():
-    shutil.rmtree(str(cache))
-print(f'  Stamped to: {target}')
-"
+$SitePkgInit = (& $Python -B -c "import transcribe_pipeline; print(transcribe_pipeline.__file__)").Trim()
+$SitePkgDir = Split-Path $SitePkgInit
+# Copy the already-stamped __init__.py from source copy to site-packages
+$StampedInit = Join-Path $SourceCopy "transcribe_pipeline" "__init__.py"
+Write-Host "  Copying $StampedInit -> $SitePkgInit"
+& $Python -B -c "import shutil; shutil.copy2(r'$StampedInit', r'$SitePkgInit'); print('  Copy OK')"
+# Delete pycache
+& $Python -B -c "import shutil, pathlib; c=pathlib.Path(r'$SitePkgDir')/'__pycache__'; shutil.rmtree(str(c)) if c.exists() else None"
 
-# Verify using a FRESH Python process (still from TEMP, not Dropbox)
+# Verify using a FRESH Python process
 $InstalledBuild = (& $Python -B -c "import transcribe_pipeline; print(transcribe_pipeline.__build__)").Trim()
 Pop-Location
 if ($InstalledBuild -ne $BuildTimestamp) {
