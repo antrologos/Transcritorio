@@ -26,6 +26,8 @@ if _env_root:
 else:
     # Fallback: SPECPATH is the spec file's directory, go up one level.
     REPO_ROOT = Path(SPECPATH).resolve().parent
+    print(f"WARNING: TRANSCRITORIO_REPO_ROOT not set. Using fallback: {REPO_ROOT}")
+    print("WARNING: Run via build.ps1 for verified builds.")
 PACKAGE_DIR = REPO_ROOT / "transcribe_pipeline"
 ASSETS_DIR = REPO_ROOT / "assets"
 PACKAGING_DIR = REPO_ROOT / "packaging"

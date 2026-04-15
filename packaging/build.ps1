@@ -129,6 +129,15 @@ if ($InstalledBuild -ne $BuildTimestamp) {
 }
 Write-Host "  Package verified: build=$InstalledBuild" -ForegroundColor Green
 
+# Verify a key module is actually the current version (not just __init__.py)
+$KeyModule = "cli.py"
+$SourceHash = (Get-FileHash (Join-Path $SourceCopy "transcribe_pipeline\$KeyModule") -Algorithm SHA256).Hash
+$SitePkgHash = (Get-FileHash (Join-Path $SitePkgDir $KeyModule) -Algorithm SHA256).Hash
+if ($SourceHash -ne $SitePkgHash) {
+    throw "FATAL: $KeyModule hash mismatch! Source=$SourceHash, Installed=$SitePkgHash. pip may have used stale cache."
+}
+Write-Host "  Code freshness verified ($KeyModule hash match)." -ForegroundColor Green
+
 # Nuke PyInstaller global cache
 $PyInstallerCache = Join-Path $env:LOCALAPPDATA "pyinstaller"
 if (Test-Path $PyInstallerCache) { Remove-Item $PyInstallerCache -Recurse -Force }
@@ -222,6 +231,21 @@ $null = & (Join-Path $OutputDir "transcritorio-cli.exe") --help 2>&1
 if ($LASTEXITCODE -ne 0) { throw "FATAL: CLI exe doesn't run!" }
 Write-Host "  CLI verified." -ForegroundColor Green
 
+# Run self-test inside the bundle (verifies CUDA, FFmpeg, imports)
+& (Join-Path $OutputDir "transcritorio-cli.exe") self-test 2>&1 | ForEach-Object { Write-Host "  $_" }
+if ($LASTEXITCODE -ne 0) { throw "FATAL: Bundle self-test failed!" }
+Write-Host "  Self-test passed." -ForegroundColor Green
+
+# GUI smoke test (headless, verifies PySide6 + Qt initialization)
+$env:QT_QPA_PLATFORM = "offscreen"
+& (Join-Path $OutputDir "Transcritorio.exe") --smoke-test 2>&1 | ForEach-Object { Write-Host "  $_" }
+$GuiExitCode = $LASTEXITCODE
+$env:QT_QPA_PLATFORM = $null
+if ($GuiExitCode -ne 0) {
+    Write-Warning "  GUI smoke test failed (exit code $GuiExitCode). PySide6 may have issues in the bundle."
+}
+else { Write-Host "  GUI smoke test passed." -ForegroundColor Green }
+
 $SizeGB = [math]::Round((Get-ChildItem $OutputDir -Recurse | Measure-Object Length -Sum).Sum / 1GB, 2)
 Write-Host "  Bundle size: $SizeGB GB"
 if ($SizeGB -lt 3) {
@@ -250,6 +274,21 @@ if (-not $SkipInstaller) {
     )) { if (Test-Path $c) { $Iscc = $c; break } }
 
     if ($Iscc) {
+        # Pre-flight: verify critical files before packaging installer
+        $CriticalFiles = @(
+            "Transcritorio.exe",
+            "transcritorio-cli.exe",
+            "whisperx.exe",
+            "_internal\torch\lib\torch_cuda.dll",
+            "vendor\ffmpeg\bin\ffmpeg.exe"
+        )
+        foreach ($file in $CriticalFiles) {
+            $p = Join-Path $FinalDist $file
+            if (-not (Test-Path $p)) {
+                throw "FATAL: Missing $file in bundle before installer build!"
+            }
+        }
+        Write-Host "  Pre-flight OK: all critical files present." -ForegroundColor Green
         if (Test-Path $FinalInstaller) { Remove-Item $FinalInstaller -Recurse -Force }
         New-Item -ItemType Directory -Path $FinalInstaller -Force | Out-Null
         & $Iscc "/DBundleDir=$FinalDist" "/O$FinalInstaller" $IssFile

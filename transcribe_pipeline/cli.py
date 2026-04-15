@@ -72,6 +72,9 @@ def main(argv: list[str] | None = None) -> int:
     models_verify_parser.add_argument("--json", action="store_true", dest="as_json")
     models_verify_parser.set_defaults(func=cmd_models_verify)
 
+    st_parser = subparsers.add_parser("self-test", help="Run installation diagnostics.")
+    st_parser.set_defaults(func=cmd_self_test)
+
     args = parser.parse_args(argv)
     return args.func(args)
 
@@ -244,6 +247,41 @@ def cmd_models_verify(args: argparse.Namespace) -> int:
         payload["verified"] = failures == 0
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0 if failures == 0 else 1
+
+
+def cmd_self_test(args: argparse.Namespace) -> int:
+    """Run installation health checks."""
+    from .runtime import detect_device, resolve_executable
+    from . import __version__, __build__
+    ok = True
+
+    # Build info
+    print(f"  Version: {__version__}, Build: {__build__}")
+
+    # CUDA
+    device = detect_device()
+    if device == "cuda":
+        print("  OK: CUDA available")
+    else:
+        print("  WARN: CUDA not available, will use CPU")
+
+    # FFmpeg
+    ffmpeg = resolve_executable("ffmpeg")
+    if Path(ffmpeg).exists():
+        print(f"  OK: FFmpeg found at {ffmpeg}")
+    else:
+        print(f"  FAIL: FFmpeg not found")
+        ok = False
+
+    # whisperx
+    try:
+        from whisperx.__main__ import cli as _wx_cli  # noqa: F401
+        print("  OK: whisperx importable")
+    except Exception as e:
+        print(f"  FAIL: whisperx import: {e}")
+        ok = False
+
+    return 0 if ok else 1
 
 
 def _print_model_progress(detail: dict) -> None:
