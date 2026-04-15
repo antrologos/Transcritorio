@@ -80,9 +80,8 @@ if (-not $SkipVenv) {
 # -----------------------------------------------------------------------
 Write-Host "--- [2/7] Copying source and stamping build ---" -ForegroundColor Yellow
 
-# Clean slate
+# Clean slate — SourceCopy IS the temp root (same directory depth as the repo)
 if (Test-Path $TempBuild) { Remove-Item $TempBuild -Recurse -Force }
-New-Item -ItemType Directory -Path $TempBuild -Force | Out-Null
 New-Item -ItemType Directory -Path $SourceCopy -Force | Out-Null
 
 # Copy source (only Python package + packaging files, skip heavy dirs)
