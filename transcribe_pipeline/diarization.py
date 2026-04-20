@@ -104,6 +104,18 @@ def run_pyannote_diarization(
         print(f"Could not load local pyannote model: {exc}")
         return len(rows_to_run) or 1
 
+    # Apply custom hyperparameters if configured
+    custom_params: dict = {}
+    clustering_threshold = config.get("diarization_clustering_threshold")
+    min_duration_off = config.get("diarization_min_duration_off")
+    if clustering_threshold is not None:
+        custom_params["clustering"] = {"threshold": float(clustering_threshold), "Fa": 0.07, "Fb": 0.8}
+    if min_duration_off is not None:
+        custom_params["segmentation"] = {"min_duration_off": float(min_duration_off)}
+    if custom_params:
+        pipeline.instantiate(custom_params)
+        print(f"[{_ts()}] [diarize] Hiperparametros customizados: {custom_params}", flush=True)
+
     print(f"[{_ts()}] [diarize] Pipeline carregado.", flush=True)
     emit("diarize_progress", 20, "Modelo carregado.")
     total = len(rows_to_run)

@@ -978,11 +978,18 @@ if QT_IMPORT_ERROR is None:
             grid.addWidget(QLabel("Idioma padrao:"), 3, 0)
             grid.addWidget(self.language_combo, 3, 1)
 
-            self.default_speakers_spin = QSpinBox()
-            self.default_speakers_spin.setRange(1, 20)
-            self.default_speakers_spin.setValue(int(config.get("diarization_num_speakers") or config.get("min_speakers") or 2))
-            grid.addWidget(QLabel("Falantes padrao:"), 4, 0)
-            grid.addWidget(self.default_speakers_spin, 4, 1)
+            self.min_speakers_spin = QSpinBox()
+            self.min_speakers_spin.setRange(1, 20)
+            self.min_speakers_spin.setValue(int(config.get("min_speakers") or 2))
+            self.max_speakers_spin = QSpinBox()
+            self.max_speakers_spin.setRange(1, 20)
+            self.max_speakers_spin.setValue(int(config.get("max_speakers") or 2))
+            speakers_row = QHBoxLayout()
+            speakers_row.addWidget(self.min_speakers_spin)
+            speakers_row.addWidget(QLabel("a"))
+            speakers_row.addWidget(self.max_speakers_spin)
+            grid.addWidget(QLabel("Falantes (min a max):"), 4, 0)
+            grid.addLayout(speakers_row, 4, 1)
 
             self.batch_spin = QSpinBox()
             self.batch_spin.setRange(1, 32)
@@ -993,6 +1000,18 @@ if QT_IMPORT_ERROR is None:
             advanced_layout = QGridLayout(advanced_group)
             advanced_layout.addWidget(QLabel("Batch:"), 0, 0)
             advanced_layout.addWidget(self.batch_spin, 0, 1)
+
+            self.min_pause_spin = QDoubleSpinBox()
+            self.min_pause_spin.setRange(0.0, 5.0)
+            self.min_pause_spin.setSingleStep(0.5)
+            self.min_pause_spin.setDecimals(1)
+            self.min_pause_spin.setSuffix(" s")
+            val = config.get("diarization_min_duration_off")
+            self.min_pause_spin.setValue(float(val) if val is not None else 0.0)
+            self.min_pause_spin.setToolTip("Pausas menores que este valor sao fundidas no mesmo falante. Aumentar reduz fragmentacao.")
+            advanced_layout.addWidget(QLabel("Pausa minima entre falantes:"), 1, 0)
+            advanced_layout.addWidget(self.min_pause_spin, 1, 1)
+
             layout.addWidget(advanced_group)
 
             hint = QLabel("Batch controla quantos trechos o Whisper processa por vez. Aumentar pode acelerar em GPU com memoria sobrando; reduzir evita falta de memoria. Para computador sem GPU NVIDIA, use CPU com int8 ou float32.")
@@ -1015,17 +1034,22 @@ if QT_IMPORT_ERROR is None:
             compute_type = str(self.compute_combo.currentData())
             if device == "cpu" and compute_type == "float16":
                 compute_type = "int8"
-            speaker_count = int(self.default_speakers_spin.value())
+            min_spk = int(self.min_speakers_spin.value())
+            max_spk = int(self.max_speakers_spin.value())
+            if max_spk < min_spk:
+                max_spk = min_spk
             language = str(self.language_combo.currentData())
+            min_pause = float(self.min_pause_spin.value())
             return {
                 "asr_model": str(self.model_combo.currentData() or self.model_combo.currentText() or "large-v3-turbo"),
                 "asr_device": device,
                 "asr_compute_type": compute_type,
                 "asr_batch_size": int(self.batch_spin.value()),
                 "asr_language": None if language == "auto" else language,
-                "diarization_num_speakers": speaker_count,
-                "min_speakers": speaker_count,
-                "max_speakers": speaker_count,
+                "diarization_num_speakers": min_spk if min_spk == max_spk else None,
+                "min_speakers": min_spk,
+                "max_speakers": max_spk,
+                "diarization_min_duration_off": min_pause if min_pause > 0 else None,
             }
 
 
