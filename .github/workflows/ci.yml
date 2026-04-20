@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancela runs antigos do mesmo branch quando chega um push novo
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install ffmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libxcb-cursor0 libxcb-shape0 libxcb-xinerama0 libxkbcommon-x11-0 libegl1 libxkbcommon0
+
+      - name: Install ffmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+
+      - name: Install ffmpeg (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg --no-progress -y
+        shell: pwsh
+
+      # Dependencias minimas para rodar os testes. NAO instalamos torch,
+      # whisperx, pyannote-audio, torchcodec, faster-whisper (3+ GB e
+      # nao necessarios para a logica testada — os testes usam mocks ou
+      # try/except ImportError nos caminhos pesados).
+      - name: Install minimal test deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install PySide6==6.11.0 numpy huggingface_hub python-docx jiwer keyring cryptography
+
+      # Instala o proprio pacote sem deps transitivas (ja cobertas acima).
+      - name: Install transcritorio package (no deps)
+        run: python -m pip install --no-deps -e .
+
+      - name: Run toy tests
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -e
+          failures=0
+          for t in tests/toy_*.py; do
+            # Skip toy_diarization_postprocess: requer pyannote (nao instalado no CI)
+            if [[ "$t" == *"toy_diarization_postprocess.py"* ]]; then
+              echo "SKIP: $t (requer pyannote — fora do dep set do CI)"
+              continue
+            fi
+            echo "=== $t ==="
+            if ! python -B "$t"; then
+              echo "FAIL: $t"
+              failures=$((failures + 1))
+            fi
+          done
+          if [ "$failures" -ne 0 ]; then
+            echo "$failures toy(s) falharam"
+            exit 1
+          fi
+          echo "Todos os toys passaram."
+
+      - name: Run smoke tests
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -e
+          failures=0
+          for t in tests/smoke_*.py; do
+            echo "=== $t ==="
+            if ! python -B "$t"; then
+              echo "FAIL: $t"
+              failures=$((failures + 1))
+            fi
+          done
+          if [ "$failures" -ne 0 ]; then
+            echo "$failures smoke(s) falharam"
+            exit 1
+          fi
+          echo "Todos os smokes passaram."

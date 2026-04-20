@@ -52,8 +52,11 @@ Transcricoes/
 *.srt
 *.vtt
 
-# Local tests and benchmarks
-tests/
+# Tests are tracked from 0.3+ (see .claude/rules/testing-protocol.md)
+# Benchmark CSVs and scratch data inside tests/ are still local-only
+tests/*.csv
+tests/benchmarks/
+tests/.tmp/
 scripts/capture_screenshots.py
 
 # Egg-info (editable install metadata)
