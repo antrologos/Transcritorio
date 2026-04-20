@@ -52,6 +52,16 @@ Transcricoes/
 *.srt
 *.vtt
 
+# Local tests and benchmarks
+tests/
+scripts/capture_screenshots.py
+
+# Egg-info (editable install metadata)
+*.egg-info/
+
+# Screenshots and temp images
+image.png
+
 # OS noise
 .DS_Store
 Thumbs.db
