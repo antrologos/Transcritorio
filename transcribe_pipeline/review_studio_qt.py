@@ -76,6 +76,8 @@ try:
         QInputDialog,
         QLabel,
         QLineEdit,
+        QListWidget,
+        QListWidgetItem,
         QMainWindow,
         QMenu,
         QMessageBox,
@@ -276,7 +278,11 @@ def display_flags(turn: dict[str, Any]) -> str:
 
 
 def saved_status_message() -> str:
-    return f"Salvo às {datetime.now().strftime('%H:%M')}."
+    return "Todas as alteracoes foram salvas"
+
+
+def saved_status_tooltip() -> str:
+    return f"Ultimo salvamento: {datetime.now().strftime('%H:%M:%S')}"
 
 
 def format_eta(seconds: float | None) -> str:
@@ -983,21 +989,63 @@ if QT_IMPORT_ERROR is None:
 
 
     class ExportDialog(QDialog):
-        def __init__(self, default_scope: str = "current", parent: QWidget | None = None) -> None:
+        """Dialog de exportacao com escopo auto-detectado.
+
+        Regras:
+          - n_selected > 0           -> escopo = selected (titulo lista N)
+          - senao, has_open           -> escopo = current
+          - senao                    -> escopo = all (com confirmacao obrigatoria se N>=20)
+        Link "Alterar escopo" expoe combo para trocar manualmente.
+        """
+        LARGE_EXPORT_THRESHOLD = 20
+
+        def __init__(
+            self,
+            has_open: bool = False,
+            open_title: str = "",
+            n_selected: int = 0,
+            n_total: int = 0,
+            parent: QWidget | None = None,
+        ) -> None:
             super().__init__(parent)
-            self.setWindowTitle("Exportar")
+            self._n_total = int(n_total)
+            # Escopo auto
+            if n_selected > 0:
+                default_scope = "selected"
+                title = f"Exportar {n_selected} transcricoes selecionadas"
+            elif has_open:
+                default_scope = "current"
+                title = f"Exportar: {open_title}" if open_title else "Exportar transcricao aberta"
+            else:
+                default_scope = "all"
+                title = f"Exportar todas ({n_total}) transcricoes"
+            self.setWindowTitle(title)
             layout = QVBoxLayout(self)
 
-            layout.addWidget(QLabel("O que exportar:"))
+            # Escopo oculto por default; exposto via link "Alterar escopo"
             self.scope_combo = QComboBox()
-            for value, label in [
-                ("current", "Arquivo aberto"),
-                ("selected", "Arquivos selecionados"),
-                ("all", "Todas as transcricoes do projeto"),
-            ]:
+            entries: list[tuple[str, str]] = []
+            if has_open:
+                entries.append(("current", f"Arquivo aberto: {open_title or '-'}"))
+            if n_selected > 0:
+                entries.append(("selected", f"{n_selected} arquivos selecionados"))
+            entries.append(("all", f"Todas ({n_total}) transcricoes do projeto"))
+            for value, label in entries:
                 self.scope_combo.addItem(label, value)
             self.scope_combo.setCurrentIndex(max(0, self.scope_combo.findData(default_scope)))
-            layout.addWidget(self.scope_combo)
+            self.scope_row = QWidget()
+            scope_layout = QHBoxLayout(self.scope_row)
+            scope_layout.setContentsMargins(0, 0, 0, 0)
+            scope_layout.addWidget(QLabel("O que exportar:"))
+            scope_layout.addWidget(self.scope_combo, stretch=1)
+            self.scope_row.setVisible(False)
+            layout.addWidget(self.scope_row)
+
+            change_scope_link = QLabel('<a href="#">Alterar escopo</a>')
+            change_scope_link.setStyleSheet(_style_muted())
+            change_scope_link.linkActivated.connect(lambda _: self.scope_row.setVisible(True))
+            if len(entries) > 1:
+                layout.addWidget(change_scope_link)
 
             layout.addWidget(QLabel("Formatos:"))
             self.checkboxes: dict[str, QCheckBox] = {}
@@ -1019,16 +1067,177 @@ if QT_IMPORT_ERROR is None:
             hint.setWordWrap(True)
             hint.setStyleSheet(_style_muted())
             layout.addWidget(hint)
+
+            # Confirmacao obrigatoria para exports grandes (all com N >= THRESHOLD)
+            self.large_confirm: QCheckBox | None = None
+            if default_scope == "all" and n_total >= self.LARGE_EXPORT_THRESHOLD:
+                self.large_confirm = QCheckBox(f"Confirmo gerar arquivos para {n_total} transcricoes")
+                self.large_confirm.setStyleSheet(_style_warn())
+                layout.addWidget(self.large_confirm)
+
             buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-            buttons.accepted.connect(self.accept)
+            self._ok_btn = buttons.button(QDialogButtonBox.StandardButton.Ok)
+            buttons.accepted.connect(self._maybe_accept)
             buttons.rejected.connect(self.reject)
             layout.addWidget(buttons)
+            # Se ha confirm de lote grande, OK comeca desabilitado
+            if self.large_confirm is not None:
+                self._ok_btn.setEnabled(False)
+                self.large_confirm.toggled.connect(self._ok_btn.setEnabled)
+            # Se escopo for alterado via combo para "all" N>=threshold, reavalie
+            self.scope_combo.currentIndexChanged.connect(self._reevaluate_confirm)
+
+        def _reevaluate_confirm(self) -> None:
+            scope = self.selected_scope()
+            needs = scope == "all" and self._n_total >= self.LARGE_EXPORT_THRESHOLD
+            if needs and self.large_confirm is None:
+                # Adicionar checkbox sob demanda nao e trivial aqui; apenas re-habilita OK
+                # via confirmacao implicita (click direto em OK seguido de AskQuestion).
+                pass
+            if self.large_confirm is not None:
+                self._ok_btn.setEnabled((not needs) or self.large_confirm.isChecked())
+
+        def _maybe_accept(self) -> None:
+            # Pergunta final se escopo = all com N>=threshold e nao ha checkbox explicito
+            scope = self.selected_scope()
+            if scope == "all" and self._n_total >= self.LARGE_EXPORT_THRESHOLD and self.large_confirm is None:
+                reply = QMessageBox.question(
+                    self,
+                    "Exportar todas as transcricoes",
+                    f"Voce esta prestes a gerar arquivos para {self._n_total} transcricoes.\nContinuar?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    return
+            self.accept()
 
         def selected_scope(self) -> str:
             return str(self.scope_combo.currentData())
 
         def selected_formats(self) -> list[str]:
             return [fmt for fmt, checkbox in self.checkboxes.items() if checkbox.isChecked()]
+
+
+    _FORMAT_LABELS = {
+        ".docx": "Word",
+        ".md": "Markdown",
+        ".srt": "Legenda SRT",
+        ".vtt": "Legenda VTT",
+        ".csv": "Planilha CSV",
+        ".tsv": "Planilha TSV",
+        ".txt": "Texto",
+    }
+
+
+    def _format_bytes(n: int) -> str:
+        for unit, threshold in [("KB", 1024), ("MB", 1024 ** 2), ("GB", 1024 ** 3)]:
+            if n < threshold * 1024:
+                return f"{n / threshold:.1f} {unit}"
+        return f"{n / (1024 ** 4):.1f} TB"
+
+
+    class ExportResultDialog(QDialog):
+        """Dialog pos-export: lista clicavel de arquivos gerados + acoes."""
+
+        def __init__(
+            self,
+            exported_paths: list[Path],
+            skipped_ids: list[str],
+            results_folder: Path,
+            parent: QWidget | None = None,
+        ) -> None:
+            super().__init__(parent)
+            self.exported_paths = [Path(p) for p in exported_paths]
+            self.skipped_ids = list(skipped_ids)
+            self.results_folder = Path(results_folder)
+            n = len(self.exported_paths)
+            self.setWindowTitle("Exportacao concluida")
+            self.resize(640, 440)
+
+            layout = QVBoxLayout(self)
+            title_text = f"{n} transcricao exportada" if n == 1 else f"{n} transcricoes exportadas"
+            title = QLabel(title_text)
+            title.setStyleSheet("font-size: 15px; font-weight: 700;")
+            layout.addWidget(title)
+
+            subtitle = QLabel(f"Pasta: {self.results_folder}")
+            subtitle.setStyleSheet(_style_muted())
+            subtitle.setWordWrap(True)
+            layout.addWidget(subtitle)
+
+            self.list = QListWidget()
+            for p in self.exported_paths:
+                fmt_label = _FORMAT_LABELS.get(p.suffix.lower(), p.suffix.lstrip(".").upper() or "Arquivo")
+                try:
+                    size = p.stat().st_size
+                    size_str = _format_bytes(size)
+                except OSError:
+                    size_str = "?"
+                item = QListWidgetItem(f"{p.name}  —  {size_str}  ·  {fmt_label}")
+                item.setData(Qt.ItemDataRole.UserRole, str(p))
+                item.setToolTip(str(p))
+                self.list.addItem(item)
+            self.list.itemActivated.connect(self._open_file)
+            layout.addWidget(self.list, stretch=1)
+
+            if self.skipped_ids:
+                warn = QLabel(f"{len(self.skipped_ids)} arquivo(s) sem transcricao exportavel — ignorado(s).")
+                warn.setStyleSheet(_style_warn())
+                warn.setWordWrap(True)
+                layout.addWidget(warn)
+
+            btn_row = QHBoxLayout()
+            self.open_folder_btn = QPushButton("Abrir pasta")
+            self.open_folder_btn.clicked.connect(self._open_folder)
+            btn_row.addWidget(self.open_folder_btn)
+
+            if sys.platform == "win32":
+                self.show_in_explorer_btn = QPushButton("Mostrar no Explorer")
+                self.show_in_explorer_btn.clicked.connect(self._show_in_explorer)
+                btn_row.addWidget(self.show_in_explorer_btn)
+
+            self.copy_path_btn = QPushButton("Copiar caminho")
+            self.copy_path_btn.clicked.connect(self._copy_path)
+            btn_row.addWidget(self.copy_path_btn)
+
+            btn_row.addStretch(1)
+            close_btn = QPushButton("Fechar")
+            close_btn.clicked.connect(self.accept)
+            close_btn.setDefault(True)
+            btn_row.addWidget(close_btn)
+            layout.addLayout(btn_row)
+
+        def _selected_path(self) -> Path | None:
+            item = self.list.currentItem()
+            if item is None:
+                return None
+            data = item.data(Qt.ItemDataRole.UserRole)
+            return Path(str(data)) if data else None
+
+        def _open_file(self, item: QListWidgetItem) -> None:
+            data = item.data(Qt.ItemDataRole.UserRole)
+            if not data:
+                return
+            p = Path(str(data))
+            if sys.platform == "win32":
+                os.startfile(str(p))  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(p)])
+            else:
+                subprocess.Popen(["xdg-open", str(p)])
+
+        def _open_folder(self) -> None:
+            open_folder_in_explorer(self.results_folder)
+
+        def _show_in_explorer(self) -> None:
+            target = self._selected_path() or self.results_folder
+            if sys.platform == "win32":
+                subprocess.Popen(["explorer", "/select,", str(target)])
+
+        def _copy_path(self) -> None:
+            target = self._selected_path() or self.results_folder
+            QApplication.clipboard().setText(str(target))
 
 
     class MetadataDialog(QDialog):
@@ -2078,8 +2287,8 @@ if QT_IMPORT_ERROR is None:
             self.export_selected_action.setToolTip("Exportar as transcricoes dos arquivos selecionados.")
             self.export_selected_action.triggered.connect(self.export_selected_reviews)
 
-            self.delete_transcription_action = QAction("Apagar transcricao...", self)
-            self.delete_transcription_action.setToolTip("Apagar todos os arquivos derivados dos selecionados, permitindo retranscrever. Originais nao sao alterados.")
+            self.delete_transcription_action = QAction("Limpar transcricao gerada...", self)
+            self.delete_transcription_action.setToolTip("Apagar apenas os arquivos de transcricao gerados. O audio original e mantido no projeto.")
             self.delete_transcription_action.triggered.connect(self.delete_selected_transcriptions)
 
             self.rename_interview_action = QAction("Renomear rotulo...", self)
@@ -2100,11 +2309,11 @@ if QT_IMPORT_ERROR is None:
             for _reorder_action in (self.rename_interview_action, self.move_up_action, self.move_down_action):
                 _reorder_action.setShortcutVisibleInContextMenu(True)
 
-            self.trash_selected_action = QAction("Mover para lixeira...", self)
+            self.trash_selected_action = QAction("Enviar para Lixeira...", self)
             self.trash_selected_action.setShortcut(QKeySequence(Qt.Key.Key_Delete))
             # ApplicationShortcut: Del dispara de qualquer lugar; effective_target_ids trata selecao.
             self.trash_selected_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
-            self.trash_selected_action.setToolTip("Mover os arquivos selecionados para 00_project/.trash/ (Del). Reversivel com Ctrl+Z nesta sessao.")
+            self.trash_selected_action.setToolTip("Enviar os arquivos selecionados (audio original + transcricao) para a Lixeira do projeto. Reversivel com Ctrl+Z nesta sessao. (Del)")
             self.trash_selected_action.triggered.connect(self.trash_selected_interviews)
 
             self.trash_undo_action = QAction("Desfazer exclusao", self)
@@ -3525,11 +3734,17 @@ if QT_IMPORT_ERROR is None:
             self.update_action_states()
             self.autosave_timer.start()
 
-        def set_save_state(self, message: str, error: bool = False) -> None:
+        def set_save_state(self, message: str, error: bool = False, tooltip: str | None = None) -> None:
             if not hasattr(self, "save_status_label"):
                 return
             self.save_status_label.setText(message)
             self.save_status_label.setStyleSheet(_style_err() if error else _style_muted())
+            if tooltip is not None:
+                self.save_status_label.setToolTip(tooltip)
+            elif message == saved_status_message():
+                self.save_status_label.setToolTip(saved_status_tooltip())
+            else:
+                self.save_status_label.setToolTip("")
 
         def save_current_turn(self, force: bool = False) -> bool:
             if not self.review or not self.current_interview_id or not self.current_turn_id:
@@ -3845,10 +4060,10 @@ if QT_IMPORT_ERROR is None:
                 QMessageBox.warning(self, "Não foi possível ajustar o tempo", sanitize_message(str(exc)))
 
         def export_current_review(self, *_args: Any) -> None:
-            self.export_reviews(default_scope="current" if self.current_interview_id else "selected")
+            self.export_reviews()
 
         def export_selected_reviews(self, *_args: Any) -> None:
-            self.export_reviews(default_scope="selected")
+            self.export_reviews()
 
         def delete_selected_transcriptions(self, *_args: Any) -> None:
             _logger.info("delete_selected_transcriptions triggered: context=%s", self.context is not None)
@@ -3860,17 +4075,18 @@ if QT_IMPORT_ERROR is None:
                          sorted(self._visually_selected_interview_ids()),
                          self.current_interview_id)
             if not ids:
-                QMessageBox.information(self, "Selecione arquivos", "Selecione ao menos um arquivo para apagar a transcricao.")
+                QMessageBox.information(self, "Selecione arquivos", "Selecione ao menos um arquivo para limpar a transcricao.")
                 return
             n = len(ids)
-            msg = (f"Apagar todos os arquivos de transcricao de {n} entrevista(s)?\n\n"
-                   "Isso inclui ASR, diarizacao, transcricao editavel e metricas.\n"
-                   "Os arquivos originais de audio/video NAO serao alterados.\n\n"
-                   "Esta acao nao pode ser desfeita.")
+            if n == 1:
+                msg = "Limpar a transcricao gerada deste arquivo?"
+            else:
+                msg = f"Limpar a transcricao gerada de {n} arquivos?"
             box = QMessageBox(self)
             box.setIcon(QMessageBox.Icon.Question)
-            box.setWindowTitle("Confirmar exclusao")
+            box.setWindowTitle("Limpar transcricao gerada")
             box.setText(msg)
+            box.setInformativeText("Os arquivos gerados (ASR, identificacao de falantes, transcricao editavel, metricas) serao apagados. O audio original e mantido no projeto — voce pode gerar a transcricao de novo depois.\n\nEsta acao nao pode ser desfeita.")
             box.setDetailedText("Arquivos afetados:\n\n" + "\n".join(ids))
             box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
             box.setDefaultButton(QMessageBox.StandardButton.No)
@@ -4017,26 +4233,36 @@ if QT_IMPORT_ERROR is None:
             _logger.info("  effective_target_ids: %s | checked=%s visual=%s",
                          ids, sorted(self._checked_ids), sorted(self._visually_selected_interview_ids()))
             if not ids:
-                QMessageBox.information(self, "Selecione arquivos", "Selecione ao menos um arquivo para mover para a lixeira.")
+                QMessageBox.information(self, "Selecione arquivos", "Selecione ao menos um arquivo para enviar a Lixeira.")
                 return
             busy_ids = [iid for iid in ids if (self.context.jobs.get(iid) or {}).get("status") in ("Executando", "Na fila")]
             if busy_ids:
-                QMessageBox.information(self, "Acao bloqueada", "Nao e possivel mover arquivos com transcricao em andamento. Aguarde ou cancele o job na fila de processamento.")
+                QMessageBox.information(self, "Acao bloqueada", "Nao e possivel enviar arquivos com transcricao em andamento. Aguarde ou cancele o job na fila de processamento.")
                 return
             n = len(ids)
             if n == 1:
-                text = "Mover este arquivo para a lixeira do projeto?"
+                text = "Enviar este arquivo para a Lixeira do projeto?"
             else:
-                text = f"Mover {n} arquivos para a lixeira do projeto?"
+                text = f"Enviar {n} arquivos para a Lixeira do projeto?"
             box = QMessageBox(self)
             box.setIcon(QMessageBox.Icon.Warning)
-            box.setWindowTitle("Confirmar exclusao")
+            box.setWindowTitle("Enviar para Lixeira")
             box.setText(text)
-            box.setInformativeText("O arquivo original, a transcricao e os metadados serao movidos para 00_project/.trash/. Voce pode desfazer com Ctrl+Z nesta sessao.")
+            box.setInformativeText("O audio original, a transcricao e os metadados serao movidos para a Lixeira do projeto (00_project/.trash/). Voce pode desfazer com Ctrl+Z enquanto esta sessao estiver aberta.")
             box.setDetailedText("Arquivos afetados:\n\n" + "\n".join(ids))
-            box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            box.setDefaultButton(QMessageBox.StandardButton.No)
-            if box.exec() != QMessageBox.StandardButton.Yes:
+            yes_btn = box.addButton("Enviar para Lixeira", QMessageBox.ButtonRole.DestructiveRole)
+            box.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)
+            box.setDefaultButton(yes_btn)
+            # Default must be Cancel for safety
+            cancel_btn = None
+            for btn in box.buttons():
+                if box.buttonRole(btn) == QMessageBox.ButtonRole.RejectRole:
+                    cancel_btn = btn
+                    break
+            if cancel_btn:
+                box.setDefaultButton(cancel_btn)
+            box.exec()
+            if box.clickedButton() is not yes_btn:
                 return
             if self.current_interview_id and self.current_interview_id in ids:
                 self.close_open_file()
@@ -4192,9 +4418,9 @@ if QT_IMPORT_ERROR is None:
             self.interview_table.setFocus()
             self.update_action_states()
             if n == 1:
-                self.progress_label.setText("1 arquivo movido para a lixeira. Ctrl+Z para desfazer.")
+                self.progress_label.setText("1 arquivo enviado para a Lixeira. Ctrl+Z para desfazer.")
             else:
-                self.progress_label.setText(f"{n} arquivos movidos para a lixeira. Ctrl+Z para desfazer.")
+                self.progress_label.setText(f"{n} arquivos enviados para a Lixeira. Ctrl+Z para desfazer.")
 
         def undo_last_trash(self, *_args: Any) -> None:
             if self._trash_busy or self.context is None or not self._trash_undo:
@@ -4238,7 +4464,7 @@ if QT_IMPORT_ERROR is None:
             self.refresh_interviews()
             self.interview_table.setFocus()
             self.update_action_states()
-            self.progress_label.setText(f"{n} arquivo(s) restaurado(s) da lixeira. Ctrl+Shift+Z para refazer.")
+            self.progress_label.setText(f"{n} arquivo(s) restaurado(s) da Lixeira. Ctrl+Shift+Z para refazer.")
             if warnings:
                 self.progress_label.setText(self.progress_label.text() + " Aviso: " + "; ".join(warnings))
 
@@ -4271,7 +4497,7 @@ if QT_IMPORT_ERROR is None:
             self.refresh_interviews()
             self.interview_table.setFocus()
             self.update_action_states()
-            self.progress_label.setText(f"{n} arquivo(s) movido(s) para a lixeira novamente.")
+            self.progress_label.setText(f"{n} arquivo(s) enviado(s) para a Lixeira novamente.")
 
         def _trash_entry_interview_ids(self, trash_id: str) -> list[str]:
             if self.context is None:
@@ -4380,12 +4606,23 @@ if QT_IMPORT_ERROR is None:
             menu.addAction(self.trash_selected_action)
             menu.exec(viewport.mapToGlobal(pos))
 
-        def export_reviews(self, default_scope: str = "current") -> None:
+        def export_reviews(self, *_args: Any) -> None:
             if not self.save_current_turn(force=bool(self.review and self.current_turn_id)):
                 return
-            if default_scope == "selected" and not self.selected_interview_ids():
-                default_scope = "current" if self.current_interview_id else "all"
-            dialog = ExportDialog(default_scope=default_scope, parent=self)
+            has_open = bool(self.current_interview_id)
+            open_title = ""
+            if has_open and self.context is not None:
+                metadata = self.context.metadata.get(self.current_interview_id, {}) or {}
+                open_title = str(metadata.get("title") or "").strip() or self.current_interview_id
+            n_selected = len(self.selected_interview_ids())
+            n_total = len(self.statuses)
+            dialog = ExportDialog(
+                has_open=has_open,
+                open_title=open_title,
+                n_selected=n_selected,
+                n_total=n_total,
+                parent=self,
+            )
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 return
             formats = dialog.selected_formats()
@@ -4395,7 +4632,7 @@ if QT_IMPORT_ERROR is None:
             scope = dialog.selected_scope()
             ids = self.ids_for_export_scope(scope)
             if not ids:
-                QMessageBox.information(self, "Nada para exportar", "Não encontrei transcrições para o escopo escolhido.")
+                QMessageBox.information(self, "Nada para exportar", "Nao encontrei transcricoes para o escopo escolhido.")
                 return
             exported: list[Path] = []
             skipped: list[str] = []
@@ -4408,18 +4645,24 @@ if QT_IMPORT_ERROR is None:
             except Exception as exc:
                 QMessageBox.critical(self, "Erro ao exportar", sanitize_message(str(exc)))
                 return
-            message = QMessageBox(self)
-            message.setIcon(QMessageBox.Icon.Information)
-            message.setWindowTitle("Exportacao concluida")
-            message.setText(f"{len(exported)} arquivo(s) exportado(s).")
-            message.setInformativeText(str(self.context.paths.review_dir / "final"))
-            details = [str(path) for path in exported]
-            if skipped:
-                details.append("")
-                details.append("Sem transcricao exportavel:")
-                details.extend(skipped)
-            message.setDetailedText("\n".join(details))
-            message.exec()
+            # Feedback de sucesso via ExportResultDialog (lista clicavel + botoes)
+            if exported:
+                result_dialog = ExportResultDialog(
+                    exported_paths=exported,
+                    skipped_ids=skipped,
+                    results_folder=self.context.paths.review_dir / "final",
+                    parent=self,
+                )
+                result_dialog.exec()
+                self.progress_label.setText(f"{len(exported)} arquivo(s) exportado(s).")
+            else:
+                QMessageBox.information(
+                    self,
+                    "Nada exportado",
+                    "Nenhum arquivo foi gerado. Verifique se as transcricoes estao prontas." + (
+                        "\n\nSem transcricao exportavel:\n" + "\n".join(skipped) if skipped else ""
+                    ),
+                )
 
         def ids_for_export_scope(self, scope: str) -> list[str]:
             if scope == "current":
