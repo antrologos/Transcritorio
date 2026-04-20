@@ -41,6 +41,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "diarization_source": "pyannote_exclusive",
     "min_speakers": 2,
     "max_speakers": 2,
+    "use_resultados_dir": True,
     "diarization_clustering_threshold": None,
     "diarization_min_duration_off": 0.5,
     "diarization_min_segment": 0.3,

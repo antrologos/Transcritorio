@@ -297,7 +297,17 @@ def rebuild_review(context: ProjectContext, interview_id: str) -> JobResult:
 
 
 def export_review(context: ProjectContext, interview_id: str, formats: list[str] | None = None) -> list[Path]:
-    return export_review_outputs(context.paths, interview_id, formats=formats)
+    exported = export_review_outputs(context.paths, interview_id, formats=formats)
+    # Mirror user-facing formats into {project_root}/Resultados/ (hardlink or copy fallback).
+    if context.config.get("use_resultados_dir", True) and exported:
+        user_facing = [p for p in exported if p.suffix.lower() in {".docx", ".md", ".srt", ".vtt", ".csv", ".tsv"}]
+        if user_facing:
+            try:
+                project_store.ensure_results_dir(context.paths.project_root, user_facing)
+            except Exception as exc:
+                import logging
+                logging.getLogger("transcritorio.gui").warning("ensure_results_dir falhou: %s", exc)
+    return exported
 
 
 def update_file_metadata(context: ProjectContext, ids: list[str], updates: dict[str, str]) -> ProjectContext:

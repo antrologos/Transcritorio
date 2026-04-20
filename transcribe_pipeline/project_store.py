@@ -17,6 +17,122 @@ INTERNAL_PROJECT_DIR = "00_project"
 JOBS_FILENAME = "jobs.json"
 TRASH_DIRNAME = ".trash"
 TRASH_MANIFEST = "undo.json"
+RESULTADOS_DIRNAME = "Resultados"
+RESULTADOS_README = "LEIA-ME.txt"
+RESULTADOS_README_TEXT = """Seus arquivos finais estao aqui
+===============================
+
+Esta pasta contem as transcricoes prontas para uso:
+
+  - .docx  Abra no Microsoft Word ou similar. Este e o formato recomendado
+           para leitura, revisao e impressao.
+  - .md    Texto simples com marcacao, util para pesquisa e versionamento.
+  - .srt   Legendas com tempo, para uso em videos.
+  - .csv/.tsv  Planilhas com turnos e metadados.
+
+As demais pastas do projeto (00_config, 00_manifest, 00_project,
+01_audio_wav16k_mono, 02_asr_raw, ..., 06_qc, logs) guardam arquivos
+tecnicos usados pelo programa. Voce nao precisa abri-las.
+
+Duvidas? Use o menu Ajuda > Documentacao dentro do Transcritorio.
+"""
+
+
+def ensure_results_dir(
+    project_root: Path,
+    exported_paths: list[Path],
+    *,
+    results_subpath: str = RESULTADOS_DIRNAME,
+) -> dict[str, Any]:
+    """Mirror exported files into {project_root}/Resultados/ via hardlink,
+    fallback to copy (+ read-only on Windows) if hardlink fails.
+
+    LEIA-ME.txt is written once (not overwritten if the user edited it).
+    Returns stats dict: {created: int, method: "hardlink"|"copy"|"mixed",
+    readme_created: bool}.
+    """
+    import errno
+    import os
+    import shutil as _shutil
+
+    project_root = Path(project_root)
+    results_dir = project_root / results_subpath
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    created = 0
+    methods: set[str] = set()
+    for src in exported_paths:
+        src_path = Path(src)
+        if not src_path.exists():
+            continue
+        dst = results_dir / src_path.name
+        # Se dst ja existe: reusar se ja e hardlink do mesmo arquivo; senao refazer
+        if dst.exists():
+            try:
+                s1 = src_path.stat()
+                s2 = dst.stat()
+                if s1.st_size == s2.st_size and (
+                    os.name == "nt" or (s1.st_ino == s2.st_ino and s1.st_dev == s2.st_dev)
+                ) and s1.st_mtime <= s2.st_mtime + 1:
+                    continue
+            except OSError:
+                pass
+            try:
+                if os.name == "nt":
+                    # Pode estar read-only (fallback copy): tirar attribute antes de apagar
+                    try:
+                        import subprocess as _sp
+                        _sp.run(
+                            ["attrib", "-R", str(dst)],
+                            check=False,
+                            capture_output=True,
+                            creationflags=0x08000000,  # CREATE_NO_WINDOW
+                        )
+                    except Exception:
+                        pass
+                dst.unlink()
+            except OSError:
+                continue
+        # Tenta hardlink
+        used_method: str | None = None
+        try:
+            os.link(str(src_path), str(dst))
+            used_method = "hardlink"
+        except (OSError, NotImplementedError) as exc:
+            # EXDEV (cross-device), EPERM, EACCES, etc. → fallback copy
+            try:
+                _shutil.copy2(str(src_path), str(dst))
+                used_method = "copy"
+                # Marcar read-only em Windows para indicar pasta gerenciada
+                if os.name == "nt":
+                    try:
+                        import subprocess as _sp
+                        _sp.run(
+                            ["attrib", "+R", str(dst)],
+                            check=False,
+                            capture_output=True,
+                            creationflags=0x08000000,
+                        )
+                    except Exception:
+                        pass
+            except OSError:
+                continue
+        if used_method:
+            methods.add(used_method)
+            created += 1
+
+    # LEIA-ME so escreve se nao existe
+    readme_path = results_dir / RESULTADOS_README
+    readme_created = False
+    if not readme_path.exists():
+        try:
+            readme_path.write_text(RESULTADOS_README_TEXT, encoding="utf-8")
+            readme_created = True
+        except OSError:
+            pass
+
+    method = "mixed" if len(methods) > 1 else (next(iter(methods)) if methods else "none")
+    return {"created": created, "method": method, "readme_created": readme_created}
 
 METADATA_COLUMNS = [
     "file_id",

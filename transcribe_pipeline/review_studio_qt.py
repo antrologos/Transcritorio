@@ -2340,8 +2340,8 @@ if QT_IMPORT_ERROR is None:
             self.close_open_file_action.setToolTip("Fechar o arquivo aberto e voltar à lista de entrevistas.")
             self.close_open_file_action.triggered.connect(self.close_open_file)
 
-            self.open_export_folder_action = QAction("Abrir pasta de arquivos gerados", self)
-            self.open_export_folder_action.setToolTip("Abrir no Explorador a pasta onde ficam os arquivos exportados.")
+            self.open_export_folder_action = QAction("Abrir pasta Resultados", self)
+            self.open_export_folder_action.setToolTip("Abrir a pasta Resultados do projeto (DOCX, Markdown, legendas) no Explorador.")
             self.open_export_folder_action.triggered.connect(self.open_export_folder)
 
             self.diarize_action = QAction("Reprocessar falantes", self)
@@ -4650,7 +4650,7 @@ if QT_IMPORT_ERROR is None:
                 result_dialog = ExportResultDialog(
                     exported_paths=exported,
                     skipped_ids=skipped,
-                    results_folder=self.context.paths.review_dir / "final",
+                    results_folder=self._results_folder_for_user(),
                     parent=self,
                 )
                 result_dialog.exec()
@@ -4683,9 +4683,22 @@ if QT_IMPORT_ERROR is None:
         def open_export_folder(self) -> None:
             if not self._require_project("Abrir pasta de exportacao"):
                 return
-            folder = self.context.paths.review_dir / "final"
+            folder = self._results_folder_for_user()
             folder.mkdir(parents=True, exist_ok=True)
             open_folder_in_explorer(folder)
+
+        def _results_folder_for_user(self) -> Path:
+            """Retorna a pasta que o usuario deve abrir para ver os arquivos finais.
+            Prefere {projeto}/Resultados/ (se existe e a feature esta habilitada),
+            senao cai para 05_transcripts_review/final/."""
+            if self.context is None:
+                return Path.cwd()
+            paths = self.context.paths
+            if self.context.config.get("use_resultados_dir", True):
+                resultados = paths.project_root / project_store.RESULTADOS_DIRNAME
+                if resultados.exists():
+                    return resultados
+            return paths.review_dir / "final"
 
         def toggle_playback(self) -> None:
             if self.player.source().isEmpty():
