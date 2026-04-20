@@ -1,0 +1,260 @@
+name: Release
+
+# Builds Linux AppImage and macOS .dmg.
+# - workflow_dispatch: trigger manual para iterar sem publicar.
+# - push tag v*: gera artefatos + cria Release com eles.
+#
+# Bundle cross-plataforma e pesado (~3 GB de deps PyInstaller), entao
+# roda so sob demanda, nao em cada push.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_label:
+        description: 'Label para o artefato (ex: 0.3.0-rc1 ou dev)'
+        required: false
+        default: 'dev'
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # =========================================================================
+  # Linux AppImage (ubuntu-22.04 para compat com glibc 2.35 de distros antigas)
+  # =========================================================================
+  build-linux-appimage:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ffmpeg \
+            libxcb-cursor0 libxcb-shape0 libxcb-xinerama0 \
+            libxkbcommon-x11-0 libegl1 libxkbcommon0 \
+            libfuse2 libglib2.0-0
+
+      - name: Install Python deps (CPU torch)
+        run: |
+          python -m pip install --upgrade pip wheel setuptools
+          python -m pip install torch==2.8.0 torchaudio==2.8.0 \
+            --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install torchcodec==0.7.0
+          python -m pip install -e . "pyinstaller>=6.0"
+
+      - name: Run PyInstaller
+        env:
+          TRANSCRITORIO_REPO_ROOT: ${{ github.workspace }}
+          TRANSCRITORIO_BUNDLE_VARIANT: cpu
+        run: |
+          python -m PyInstaller --distpath dist --workpath build \
+            --clean --noconfirm packaging/transcritorio.spec
+
+      - name: Generate PNG icon from SVG
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python <<'PYEOF'
+          from PySide6.QtCore import QSize
+          from PySide6.QtGui import QImage, QPainter
+          from PySide6.QtSvg import QSvgRenderer
+          from PySide6.QtWidgets import QApplication
+          import sys
+          app = QApplication(sys.argv)
+          r = QSvgRenderer('assets/transcritorio_icon.svg')
+          for size in (16, 32, 48, 64, 128, 256, 512):
+              img = QImage(QSize(size, size), QImage.Format.Format_ARGB32)
+              img.fill(0)
+              p = QPainter(img)
+              r.render(p)
+              p.end()
+              img.save(f'transcritorio_{size}.png')
+          print('PNG icons gerados')
+          PYEOF
+
+      - name: Build AppImage
+        run: |
+          # Download appimagetool
+          wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage -O appimagetool
+          chmod +x appimagetool
+
+          # Estrutura AppDir
+          mkdir -p AppDir/usr/bin \
+                   AppDir/usr/share/applications \
+                   AppDir/usr/share/icons/hicolor/256x256/apps \
+                   AppDir/usr/share/icons/hicolor/512x512/apps
+
+          # Copia bundle PyInstaller
+          cp -r dist/Transcritorio/* AppDir/usr/bin/
+
+          # Icons
+          cp transcritorio_256.png AppDir/usr/share/icons/hicolor/256x256/apps/transcritorio.png
+          cp transcritorio_512.png AppDir/usr/share/icons/hicolor/512x512/apps/transcritorio.png
+          cp transcritorio_256.png AppDir/transcritorio.png
+          cp transcritorio_256.png AppDir/.DirIcon
+
+          # .desktop
+          cat > AppDir/usr/share/applications/transcritorio.desktop <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=Transcritorio
+          Comment=Transcricao local de entrevistas em portugues brasileiro
+          Exec=Transcritorio %F
+          Icon=transcritorio
+          Categories=AudioVideo;Office;Education;
+          Terminal=false
+          StartupWMClass=Transcritorio
+          EOF
+          cp AppDir/usr/share/applications/transcritorio.desktop AppDir/
+
+          # AppRun
+          cat > AppDir/AppRun <<'EOF'
+          #!/bin/sh
+          HERE="$(dirname "$(readlink -f "$0")")"
+          export PATH="$HERE/usr/bin:$PATH"
+          exec "$HERE/usr/bin/Transcritorio" "$@"
+          EOF
+          chmod +x AppDir/AppRun
+
+          # Constroi AppImage
+          export ARCH=x86_64
+          ./appimagetool AppDir "Transcritorio-${ARCH}.AppImage"
+          ls -la Transcritorio-*.AppImage
+
+      - name: Upload AppImage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Transcritorio-linux-AppImage
+          path: Transcritorio-*.AppImage
+          retention-days: 30
+
+  # =========================================================================
+  # macOS .dmg (macos-14 = Apple Silicon arm64)
+  # =========================================================================
+  build-macos-dmg:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install system deps
+        run: |
+          brew install ffmpeg
+          brew install create-dmg
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip wheel setuptools
+          # macOS: wheels oficiais do pytorch sao arm64+CPU/MPS (nao tem CUDA)
+          python -m pip install torch==2.8.0 torchaudio==2.8.0
+          python -m pip install torchcodec==0.7.0
+          python -m pip install -e . "pyinstaller>=6.0"
+
+      - name: Generate .icns from SVG
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python <<'PYEOF'
+          from PySide6.QtCore import QSize
+          from PySide6.QtGui import QImage, QPainter
+          from PySide6.QtSvg import QSvgRenderer
+          from PySide6.QtWidgets import QApplication
+          import sys, os
+          app = QApplication(sys.argv)
+          r = QSvgRenderer('assets/transcritorio_icon.svg')
+          os.makedirs('Transcritorio.iconset', exist_ok=True)
+          # Apple icon sizes esperadas pelo iconutil
+          for (size, name) in [
+              (16, 'icon_16x16.png'), (32, 'icon_16x16@2x.png'),
+              (32, 'icon_32x32.png'), (64, 'icon_32x32@2x.png'),
+              (128, 'icon_128x128.png'), (256, 'icon_128x128@2x.png'),
+              (256, 'icon_256x256.png'), (512, 'icon_256x256@2x.png'),
+              (512, 'icon_512x512.png'), (1024, 'icon_512x512@2x.png'),
+          ]:
+              img = QImage(QSize(size, size), QImage.Format.Format_ARGB32)
+              img.fill(0)
+              p = QPainter(img)
+              r.render(p)
+              p.end()
+              img.save(f'Transcritorio.iconset/{name}')
+          PYEOF
+          iconutil -c icns Transcritorio.iconset -o assets/transcritorio_icon.icns
+          ls -la assets/transcritorio_icon.icns
+
+      - name: Run PyInstaller (produz Transcritorio.app via BUNDLE)
+        env:
+          TRANSCRITORIO_REPO_ROOT: ${{ github.workspace }}
+          TRANSCRITORIO_BUNDLE_VARIANT: cpu
+        run: |
+          python -m PyInstaller --distpath dist --workpath build \
+            --clean --noconfirm packaging/transcritorio.spec
+          ls -la dist/
+
+      - name: Create DMG
+        run: |
+          # create-dmg falha se .dmg ja existe
+          rm -f Transcritorio.dmg
+          create-dmg \
+            --volname "Transcritorio" \
+            --window-pos 200 120 \
+            --window-size 640 400 \
+            --icon-size 100 \
+            --icon "Transcritorio.app" 180 180 \
+            --hide-extension "Transcritorio.app" \
+            --app-drop-link 460 180 \
+            --hdiutil-quiet \
+            "Transcritorio.dmg" \
+            "dist/Transcritorio.app" \
+            || (echo "create-dmg falhou — tentando hdiutil direto" && \
+                hdiutil create -volname "Transcritorio" -srcfolder "dist/Transcritorio.app" -ov -format UDZO "Transcritorio.dmg")
+          ls -la Transcritorio.dmg
+
+      - name: Upload .dmg artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Transcritorio-macos-dmg
+          path: Transcritorio.dmg
+          retention-days: 30
+
+  # =========================================================================
+  # Cria GitHub Release quando gatilho foi tag push (nao workflow_dispatch)
+  # =========================================================================
+  publish-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-linux-appimage, build-macos-dmg]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/**/*.AppImage
+            artifacts/**/*.dmg
+          draft: true
+          generate_release_notes: true
