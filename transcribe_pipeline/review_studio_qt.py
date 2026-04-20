@@ -1486,7 +1486,7 @@ if QT_IMPORT_ERROR is None:
             from . import token_vault
             current = ""
             try:
-                current = token_vault.load() or ""
+                current = token_vault.retrieve() or ""
             except Exception:
                 current = ""
             new_token, ok = QInputDialog.getText(
