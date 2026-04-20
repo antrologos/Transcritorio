@@ -92,6 +92,8 @@ def run_pyannote_diarization(
         print(f"Missing pyannote dependencies: {exc}")
         return len(rows_to_run) or 1
 
+    torch.set_float32_matmul_precision("high")
+
     effective_device, fell_back = runtime.resolve_device(config.get("asr_device"))
     if fell_back:
         print("[Transcritorio] CUDA indisponivel. Usando CPU para diarizacao.")
@@ -108,8 +110,10 @@ def run_pyannote_diarization(
     custom_params: dict = {}
     clustering_threshold = config.get("diarization_clustering_threshold")
     min_duration_off = config.get("diarization_min_duration_off")
+    fa = float(config.get("diarization_fa") or 0.07)
+    fb = float(config.get("diarization_fb") or 0.8)
     if clustering_threshold is not None:
-        custom_params["clustering"] = {"threshold": float(clustering_threshold), "Fa": 0.07, "Fb": 0.8}
+        custom_params["clustering"] = {"threshold": float(clustering_threshold), "Fa": fa, "Fb": fb}
     if min_duration_off is not None:
         custom_params["segmentation"] = {"min_duration_off": float(min_duration_off)}
     if custom_params:
@@ -171,6 +175,9 @@ def run_pyannote_diarization(
             print(f"[{_ts()}] [diarize] Pipeline concluido em {elapsed}s.", flush=True)
             regular = getattr(output, "speaker_diarization", output)
             exclusive = getattr(output, "exclusive_speaker_diarization", None)
+            regular = _postprocess_annotation(regular, config)
+            if exclusive is not None:
+                exclusive = _postprocess_annotation(exclusive, config)
             emit("diarize_progress", file_end_pct - 2, f"Gravando resultados de {interview_id}...")
             write_annotation_outputs(paths, interview_id, "regular", regular, model_name, audio_path)
             if exclusive is not None:
@@ -222,6 +229,26 @@ def write_annotation_outputs(paths: Paths, interview_id: str, kind: str, annotat
     write_json(paths.diarization_dir / "json" / f"{interview_id}.{kind}.json", payload)
     with (paths.diarization_dir / "rttm" / f"{interview_id}.{kind}.rttm").open("w", encoding="utf-8") as handle:
         annotation.write_rttm(handle)
+
+
+def _postprocess_annotation(annotation, config: dict):
+    """Remove micro-segmentos e funde turnos proximos do mesmo falante."""
+    from pyannote.core import Annotation
+
+    min_seg = float(config.get("diarization_min_segment") or 0.0)
+    collar = float(config.get("diarization_collar") or 0.0)
+
+    if min_seg > 0:
+        cleaned = Annotation(uri=annotation.uri)
+        for segment, track, speaker in annotation.itertracks(yield_label=True):
+            if segment.duration >= min_seg:
+                cleaned[segment, track] = speaker
+        annotation = cleaned
+
+    if collar > 0:
+        annotation = annotation.support(collar=collar)
+
+    return annotation
 
 
 def annotation_to_segments(annotation) -> list[dict[str, Any]]:

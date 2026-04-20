@@ -14,6 +14,7 @@ from .qc import run_qc
 from .render import render_outputs, write_empty_speaker_map
 from .review_store import create_review_from_canonical, export_review_outputs, load_review_transcript, save_review_transcript
 from .status import InterviewStatus, collect_status
+from .utils import read_json, write_json
 from .whisperx_runner import run_whisperx
 
 
@@ -372,6 +373,359 @@ def delete_transcription_outputs(context: ProjectContext, ids: list[str]) -> tup
             "estimated_finish_at": "",
         })
     return deleted, context
+
+
+class InterviewBusyError(Exception):
+    """Raised when an operation is attempted on an interview with an active job."""
+
+
+class CollisionError(Exception):
+    """Raised when restore_from_trash would overwrite existing files."""
+    def __init__(self, conflicts: list[dict]) -> None:
+        self.conflicts = conflicts
+        super().__init__(f"{len(conflicts)} conflito(s) ao restaurar")
+
+
+class RedoUnavailableError(Exception):
+    """Raised when redo_trash cannot proceed (mtime drift, missing files)."""
+
+
+def collect_trash_files(context: ProjectContext, ids: list[str]) -> list[dict]:
+    """Enumerate every file on disk belonging to these interview ids.
+
+    Returns list of {original, size, mtime} dicts. Includes:
+    - Original source audio/video (from metadata.source_path)
+    - 01_audio_wav16k_mono/{id}.wav
+    - 00_project/waveforms/{id}.wf
+    - All derived files in 02-06 (rglob by {id}*)
+    """
+    import os
+    from pathlib import Path as _Path
+    paths = context.paths
+    dirs_to_scan = [
+        paths.asr_dir,
+        paths.asr_variants_dir,
+        paths.diarization_dir,
+        paths.canonical_dir,
+        paths.review_dir,
+        paths.qc_dir,
+    ]
+    out: list[dict] = []
+    def add(p: _Path) -> None:
+        if not p.exists():
+            return
+        try:
+            st = p.stat()
+            out.append({
+                "original": str(p.resolve()),
+                "size": int(st.st_size),
+                "mtime": float(st.st_mtime),
+            })
+        except OSError:
+            pass
+    waveform_dir = paths.output_root / "00_project" / "waveforms"
+    for iid in ids:
+        metadata = context.metadata.get(iid, {}) or {}
+        source_path = metadata.get("source_path") or ""
+        if source_path:
+            sp = _Path(source_path)
+            if not sp.is_absolute():
+                sp = paths.project_root / sp
+            add(sp)
+        add(paths.wav_dir / f"{iid}.wav")
+        add(waveform_dir / f"{iid}.wf")
+        for base in dirs_to_scan:
+            if not base.exists():
+                continue
+            for f in base.rglob(f"{iid}*"):
+                if f.is_file():
+                    add(f)
+    # Deduplicate
+    seen: set[str] = set()
+    unique: list[dict] = []
+    for item in out:
+        if item["original"] in seen:
+            continue
+        seen.add(item["original"])
+        unique.append(item)
+    return unique
+
+
+def prepare_trash_move(context: ProjectContext, ids: list[str]) -> dict:
+    """Gather snapshot + files + mtimes BEFORE the worker runs. Main thread only."""
+    busy = _ids_with_active_jobs(context, ids)
+    if busy:
+        raise InterviewBusyError(", ".join(busy))
+    trash_id = project_store.generate_trash_id()
+    trash_dir = project_store.trash_root(context.paths) / trash_id
+    files = collect_trash_files(context, ids)
+    total_bytes = sum(f["size"] for f in files)
+    snapshots = project_store.snapshot_interview_state(context.paths, ids)
+    csv_mtimes = project_store.csv_mtimes_snapshot(context.paths)
+    return {
+        "trash_id": trash_id,
+        "trash_dir": str(trash_dir),
+        "project_root": str(context.paths.project_root),
+        "interview_ids": list(ids),
+        "files_to_move": files,
+        "snapshots": snapshots,
+        "csv_mtimes": csv_mtimes,
+        "total_bytes": total_bytes,
+    }
+
+
+def finalize_trash_move(context: ProjectContext, trash_entry: dict) -> tuple[str, ProjectContext]:
+    """Apos o worker terminar staging+copy+rename: main thread reescreve CSVs e
+    deleta originais com retry-backoff. Retorna (trash_id, new_context)."""
+    import os
+    import time
+    trash_id = trash_entry["trash_id"]
+    ids = trash_entry["interview_ids"]
+    moved_files = trash_entry.get("moved_files") or []
+    # 1. Reescrever CSVs (sem os ids)
+    project_store.remove_ids_from_csvs(context.paths, ids)
+    # 2. Unlink originais com retry-backoff (Dropbox pode ter file handle)
+    pending: list[str] = []
+    for mf in moved_files:
+        original = mf.get("original") or ""
+        if not original:
+            continue
+        p = Path(original)
+        if not p.exists():
+            continue
+        last_err = None
+        for delay_ms in (0, 200, 500, 1500):
+            if delay_ms:
+                time.sleep(delay_ms / 1000.0)
+            try:
+                p.unlink()
+                last_err = None
+                break
+            except (PermissionError, OSError) as exc:
+                last_err = exc
+        if last_err is not None:
+            pending.append(original)
+    # 3. Marcar partial no undo.json se houver pending
+    trash_dir = Path(trash_entry["trash_dir"])
+    if pending:
+        manifest = read_json(trash_dir / project_store.TRASH_MANIFEST) or {}
+        manifest["status"] = "partial"
+        manifest["pending_deletes"] = pending
+        write_json(trash_dir / project_store.TRASH_MANIFEST, manifest)
+    # 4. Reconstruir context a partir do manifesto em disco (ja atualizado)
+    new_rows = read_manifest(context.paths.manifest_dir / "manifest.csv")
+    new_context = build_context(
+        context.config_path, context.config, context.paths, new_rows,
+    )
+    return trash_id, new_context
+
+
+def restore_from_trash(
+    context: ProjectContext,
+    trash_id: str,
+    overwrite: bool = False,
+) -> tuple[list[str], ProjectContext]:
+    """Restaura um trash_id. Retorna (warnings, new_context) onde warnings lista
+    mensagens apresentaveis ao usuario (ex. mtime divergente)."""
+    import shutil
+    trash_dir = project_store.trash_root(context.paths) / trash_id
+    manifest_path = trash_dir / project_store.TRASH_MANIFEST
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"undo.json nao encontrado em {trash_dir}")
+    manifest = read_json(manifest_path) or {}
+    moved_files = manifest.get("moved_files") or []
+    # 1. Precheck colisoes
+    conflicts = project_store._find_collisions(moved_files)
+    if conflicts and not overwrite:
+        raise CollisionError(conflicts)
+    # 2. Precheck CSV mtime (multi-device warning)
+    warnings: list[str] = []
+    snap_mtimes = manifest.get("csv_mtimes") or {}
+    current_mtimes = project_store.csv_mtimes_snapshot(context.paths)
+    for csv_name, snap_mt in snap_mtimes.items():
+        cur = current_mtimes.get(csv_name, 0.0)
+        if cur > snap_mt + 1.0:  # tolerancia 1s
+            warnings.append(f"{csv_name} foi modificado desde a exclusao")
+    # 3. Copy files back (nao mover; preserva .trash para redo)
+    restored: list[Path] = []
+    try:
+        for mf in moved_files:
+            original = mf.get("original") or ""
+            trashed_rel = mf.get("trashed") or ""
+            if not original or not trashed_rel:
+                continue
+            trashed_abs = trash_dir / trashed_rel
+            if not trashed_abs.exists():
+                continue
+            target = Path(original)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(trashed_abs), str(target))
+            restored.append(target)
+    except Exception:
+        # Rollback: apagar o que ja foi restaurado
+        for p in restored:
+            try:
+                p.unlink()
+            except OSError:
+                pass
+        raise
+    # 4. Reinjetar CSV rows (reset jobs para Pendente)
+    snapshots = manifest.get("snapshots") or {}
+    project_store.restore_ids_to_csvs(context.paths, snapshots)
+    # 5. Rebuild context a partir do manifesto em disco (ja restaurado)
+    new_rows = read_manifest(context.paths.manifest_dir / "manifest.csv")
+    new_context = build_context(
+        context.config_path, context.config, context.paths, new_rows,
+    )
+    return warnings, new_context
+
+
+def redo_trash(context: ProjectContext, trash_id: str) -> tuple[str, ProjectContext]:
+    """Re-aplica um move_to_trash previamente desfeito. Valida que os arquivos
+    ainda estao no estado esperado (mtime dentro da tolerancia) antes de mover.
+    NAO refaz copy — os arquivos ja estao em .trash/<trash_id>/files/, apenas
+    remove das CSVs e dos originais."""
+    import time
+    trash_dir = project_store.trash_root(context.paths) / trash_id
+    manifest_path = trash_dir / project_store.TRASH_MANIFEST
+    if not manifest_path.exists():
+        raise RedoUnavailableError(f"undo.json nao encontrado em {trash_dir}")
+    manifest = read_json(manifest_path) or {}
+    if manifest.get("status") == "partial":
+        raise RedoUnavailableError("exclusao original foi parcial")
+    moved_files = manifest.get("moved_files") or []
+    ids = manifest.get("interview_ids") or []
+    # Validar: todos os originais existem (foi feito undo antes)
+    for mf in moved_files:
+        original = mf.get("original") or ""
+        if not original:
+            continue
+        p = Path(original)
+        if not p.exists():
+            raise RedoUnavailableError(f"arquivo ausente: {original}")
+    # Reaplicar: unlink originais + remove CSV rows
+    pending: list[str] = []
+    for mf in moved_files:
+        original = mf.get("original") or ""
+        if not original:
+            continue
+        p = Path(original)
+        if not p.exists():
+            continue
+        last_err = None
+        for delay_ms in (0, 200, 500, 1500):
+            if delay_ms:
+                time.sleep(delay_ms / 1000.0)
+            try:
+                p.unlink()
+                last_err = None
+                break
+            except (PermissionError, OSError) as exc:
+                last_err = exc
+        if last_err is not None:
+            pending.append(original)
+    project_store.remove_ids_from_csvs(context.paths, ids)
+    if pending:
+        manifest["status"] = "partial"
+        manifest["pending_deletes"] = pending
+        write_json(manifest_path, manifest)
+    new_rows = read_manifest(context.paths.manifest_dir / "manifest.csv")
+    new_context = build_context(
+        context.config_path, context.config, context.paths, new_rows,
+    )
+    return trash_id, new_context
+
+
+def purge_trash_entries(context: ProjectContext, trash_ids: list[str]) -> int:
+    """Apagar permanentemente pastas .trash/<id>/ listadas. Retorna count removed."""
+    import shutil
+    root = project_store.trash_root(context.paths)
+    removed = 0
+    for tid in trash_ids:
+        d = root / tid
+        if d.exists():
+            shutil.rmtree(d, ignore_errors=True)
+            removed += 1
+    return removed
+
+
+def _ids_with_active_jobs(context: ProjectContext, ids: list[str]) -> list[str]:
+    busy = []
+    for iid in ids:
+        status = (context.jobs.get(iid) or {}).get("status") or ""
+        if status in ("Executando", "Na fila"):
+            busy.append(iid)
+    return busy
+
+
+def rename_interview(context: ProjectContext, interview_id: str, new_title: str) -> ProjectContext:
+    """Update the display label for a single interview. Empty title resets to default."""
+    busy = _ids_with_active_jobs(context, [interview_id])
+    if busy:
+        raise InterviewBusyError(interview_id)
+    metadata = project_store.update_metadata_for_ids(context.paths, [interview_id], {"title": new_title})
+    return ProjectContext(
+        config_path=context.config_path,
+        config=context.config,
+        paths=context.paths,
+        rows=context.rows,
+        project=context.project,
+        metadata=metadata,
+        jobs=context.jobs,
+    )
+
+
+def set_interview_order(
+    context: ProjectContext,
+    ordered_ids: list[str],
+    manual_active: bool = True,
+) -> ProjectContext:
+    """Persist a new interview_order in project.json with the given flag."""
+    project = dict(context.project)
+    project["interview_order"] = list(ordered_ids)
+    project["manual_order_active"] = bool(manual_active)
+    saved = project_store.save_project(context.paths, project)
+    return ProjectContext(
+        config_path=context.config_path,
+        config=context.config,
+        paths=context.paths,
+        rows=context.rows,
+        project=saved,
+        metadata=context.metadata,
+        jobs=context.jobs,
+    )
+
+
+def move_interviews(
+    context: ProjectContext,
+    ids: list[str],
+    direction: int,
+    hidden_ids: list[str] | None = None,
+) -> ProjectContext:
+    """Move a single interview up (-1) or down (+1). Multi-item reorder is rejected."""
+    if len(ids) != 1:
+        raise ValueError("move_interviews expects exactly one interview id")
+    moving_id = ids[0]
+    busy = _ids_with_active_jobs(context, [moving_id])
+    if busy:
+        raise InterviewBusyError(moving_id)
+    current_ids = [row.get("interview_id", "") for row in context.rows if row.get("interview_id")]
+    existing_order = list(context.project.get("interview_order") or [])
+    base_order = project_store._merge_interview_order(existing_order, current_ids)
+    new_order = project_store._reorder_move(base_order, moving_id, direction, set(hidden_ids or []))
+    return set_interview_order(context, new_order, manual_active=True)
+
+
+def ensure_interview_order_up_to_date(context: ProjectContext) -> ProjectContext:
+    """When manual_order_active, append new ids and drop removed ones. No-op otherwise."""
+    if not context.project.get("manual_order_active"):
+        return context
+    current_ids = [row.get("interview_id", "") for row in context.rows if row.get("interview_id")]
+    existing_order = list(context.project.get("interview_order") or [])
+    merged = project_store._merge_interview_order(existing_order, current_ids)
+    if merged == existing_order:
+        return context
+    return set_interview_order(context, merged, manual_active=True)
 
 
 def save_project_metadata(context: ProjectContext) -> ProjectContext:

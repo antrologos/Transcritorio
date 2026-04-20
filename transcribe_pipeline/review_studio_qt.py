@@ -6,11 +6,50 @@ from array import array
 from copy import deepcopy
 from datetime import datetime, timedelta
 import json
+import logging
 import os
 import subprocess
 import sys
 import time
 import wave
+
+_logger = logging.getLogger("transcritorio.gui")
+
+
+def _setup_logger() -> None:
+    """Configura o logger do GUI.
+
+    Modo dev (rodando do venv/scripts): stderr visible -> StreamHandler.
+    Modo frozen (PyInstaller --windowed): sem console -> arquivo rotativo em
+    app_data_dir()/logs/gui.log para nao spammar o usuario final.
+    """
+    if _logger.handlers:
+        return
+    _logger.setLevel(logging.INFO)
+    _logger.propagate = False
+    fmt = logging.Formatter("%(asctime)s [%(name)s %(levelname)s] %(message)s", datefmt="%H:%M:%S")
+    is_frozen = bool(getattr(sys, "frozen", False))
+    if is_frozen:
+        try:
+            from . import runtime as _runtime
+            logs_dir = _runtime.app_data_dir() / "logs"
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            from logging.handlers import RotatingFileHandler
+            _h = RotatingFileHandler(
+                str(logs_dir / "gui.log"), maxBytes=1_000_000, backupCount=3, encoding="utf-8"
+            )
+            _h.setFormatter(fmt)
+            _logger.addHandler(_h)
+        except Exception:
+            # Ultimo recurso: NullHandler (silencia)
+            _logger.addHandler(logging.NullHandler())
+    else:
+        _h = logging.StreamHandler()
+        _h.setFormatter(fmt)
+        _logger.addHandler(_h)
+
+
+_setup_logger()
 
 from . import app_service, project_store, review_store
 from .runtime import resolve_executable
@@ -42,6 +81,7 @@ try:
         QMessageBox,
         QPushButton,
         QProgressBar,
+        QProgressDialog,
         QSlider,
         QSpinBox,
         QSplitter,
@@ -79,6 +119,67 @@ COL_FALANTES = 6
 COL_ROTULOS = 7
 COL_CONTEXTO = 8
 COL_AVISOS = 9
+
+
+MAX_TITLE_CHARS = 200
+
+
+def _sanitize_rename_title(raw: str) -> tuple[str, bool]:
+    """Sanitize a user-entered display label.
+
+    Returns (title, truncated). An empty return means "reset to default".
+    """
+    if raw is None:
+        return "", False
+    cleaned = "".join(c for c in raw if c.isprintable() or c == " ")
+    cleaned = cleaned.strip()
+    truncated = len(cleaned) > MAX_TITLE_CHARS
+    if truncated:
+        cleaned = cleaned[:MAX_TITLE_CHARS]
+    return cleaned, truncated
+
+
+from .project_store import _reorder_move, _merge_interview_order  # re-export for tests
+
+
+# Helpers de cor para tema escuro (Fusion dark bg #2d2d2d).
+# Cores escolhidas com contrast ratio WCAG AA (>=4.5:1) contra #2d2d2d.
+def _style_ok() -> str:
+    return "color: #81c784; font-weight: 700;"
+
+
+def _style_warn() -> str:
+    return "color: #ffb74d;"
+
+
+def _style_err() -> str:
+    return "color: #ff6b6b; font-weight: 700;"
+
+
+def _style_muted() -> str:
+    return "color: #9e9e9e;"
+
+
+def _compute_effective_target_ids(
+    all_ids_in_order: list[str],
+    checked: set[str],
+    visually_selected: set[str],
+    cursor_row_id: str | None = None,
+) -> list[str]:
+    """Windows Explorer precedence for target selection.
+
+    1. Cursor outside both checked and visually_selected -> return only cursor.
+    2. Cursor inside visually_selected -> return visually_selected (visual order).
+    3. Else if checked non-empty -> return checked (visual order).
+    4. Else -> return visually_selected (visual order).
+    """
+    if cursor_row_id is not None and cursor_row_id not in checked and cursor_row_id not in visually_selected:
+        return [cursor_row_id]
+    if cursor_row_id is not None and cursor_row_id in visually_selected:
+        return [iid for iid in all_ids_in_order if iid in visually_selected]
+    if checked:
+        return [iid for iid in all_ids_in_order if iid in checked]
+    return [iid for iid in all_ids_in_order if iid in visually_selected]
 
 
 def open_folder_in_explorer(path: Path) -> None:
@@ -742,6 +843,119 @@ if QT_IMPORT_ERROR is None:
             return callback
 
 
+    class TrashMoveWorker(QThread):
+        """Copia arquivos para 00_project/.trash/<id>/staging/, renomeia para
+        files/, e escreve undo.json. NAO reescreve CSVs nem deleta originais
+        — isso fica para a main thread apos finished_result."""
+        progress = Signal(int, int, str)       # current, total, current_name
+        stage_changed = Signal(str)            # "Movendo: ..." | "Baixando do Dropbox: ..."
+        finished_result = Signal(object, str)  # (entry_dict_or_None, error_str)
+
+        CLOUD_REPARSE_MASK = 0x9000001A
+
+        def __init__(self, trash_entry: dict) -> None:
+            super().__init__()
+            self.entry = dict(trash_entry)
+            self._cancel_requested = False
+
+        def request_cancel(self) -> None:
+            self._cancel_requested = True
+
+        def is_cancel_requested(self) -> bool:
+            return self._cancel_requested
+
+        def _is_cloud_only(self, path: Path) -> bool:
+            try:
+                st = path.stat()
+                tag = getattr(st, "st_reparse_tag", 0)
+                return bool(tag) and (tag & 0x9000FFFF) == self.CLOUD_REPARSE_MASK
+            except OSError:
+                return False
+
+        def run(self) -> None:
+            import shutil
+            from datetime import datetime
+            from pathlib import Path as _Path
+            trash_dir = _Path(self.entry["trash_dir"])
+            staging = trash_dir / "staging"
+            files_to_move = list(self.entry.get("files_to_move") or [])
+            project_root = _Path(self.entry["project_root"])
+            total = len(files_to_move)
+            try:
+                staging.mkdir(parents=True, exist_ok=True)
+                moved_files: list[dict] = []
+                for idx, mf in enumerate(files_to_move, start=1):
+                    if self._cancel_requested:
+                        shutil.rmtree(trash_dir, ignore_errors=True)
+                        self.finished_result.emit(None, "cancelado")
+                        return
+                    src = _Path(mf["original"])
+                    if not src.exists():
+                        continue
+                    name = src.name
+                    if self._is_cloud_only(src):
+                        self.stage_changed.emit(f"Baixando do Dropbox: {name}")
+                    else:
+                        self.stage_changed.emit(f"Movendo: {name} ({idx}/{total})")
+                    self.progress.emit(idx, total, name)
+                    # Preserve a relative layout under staging to avoid name collisions
+                    try:
+                        rel = src.resolve().relative_to(project_root.resolve())
+                        dest = staging / rel
+                    except ValueError:
+                        # File is outside project_root — use filename only
+                        dest = staging / name
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    # If dest exists (duplicate filename across sources), suffix it
+                    if dest.exists():
+                        stem = dest.stem
+                        suffix = dest.suffix
+                        counter = 1
+                        while (dest.parent / f"{stem}__{counter}{suffix}").exists():
+                            counter += 1
+                        dest = dest.parent / f"{stem}__{counter}{suffix}"
+                    shutil.copy2(str(src), str(dest))
+                    # Validate size
+                    src_size = src.stat().st_size
+                    dest_size = dest.stat().st_size
+                    if src_size != dest_size:
+                        raise RuntimeError(f"tamanho divergente apos copy: {name}")
+                    trashed_rel = str(dest.relative_to(trash_dir)).replace("\\", "/")
+                    moved_files.append({
+                        "original": str(src.resolve()),
+                        "trashed": trashed_rel,
+                        "size": int(src_size),
+                        "mtime": float(src.stat().st_mtime),
+                    })
+                if self._cancel_requested:
+                    shutil.rmtree(trash_dir, ignore_errors=True)
+                    self.finished_result.emit(None, "cancelado")
+                    return
+                # Rename staging -> files (atomico, mesmo dir)
+                files_dir = trash_dir / "files"
+                staging.rename(files_dir)
+                # Ajustar trashed paths: "staging/..." -> "files/..."
+                for mf in moved_files:
+                    mf["trashed"] = mf["trashed"].replace("staging/", "files/", 1)
+                # Escrever undo.json (apos rename OK)
+                entry_dict = project_store._build_undo_entry(
+                    trash_id=self.entry["trash_id"],
+                    interview_ids=self.entry["interview_ids"],
+                    csv_mtimes=self.entry.get("csv_mtimes") or {},
+                    snapshots=self.entry.get("snapshots") or {},
+                    moved_files=moved_files,
+                    status="complete",
+                )
+                entry_dict["project_root"] = str(project_root)
+                from .utils import write_json as _write_json
+                _write_json(trash_dir / project_store.TRASH_MANIFEST, entry_dict)
+                entry_dict["trash_dir"] = str(trash_dir)
+                self.finished_result.emit(entry_dict, "")
+            except Exception as exc:  # GUI boundary
+                shutil.rmtree(trash_dir, ignore_errors=True)
+                self.finished_result.emit(None, str(exc)[:500])
+
+
     class ReviewSnapshotCommand(QUndoCommand):
         def __init__(
             self,
@@ -803,7 +1017,7 @@ if QT_IMPORT_ERROR is None:
                 layout.addWidget(checkbox)
             hint = QLabel("DOCX e Markdown sao os padroes de leitura. Legendas e planilhas ficam desmarcadas para evitar arquivos que voce nao pediu.")
             hint.setWordWrap(True)
-            hint.setStyleSheet("color: #555;")
+            hint.setStyleSheet(_style_muted())
             layout.addWidget(hint)
             buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
             buttons.accepted.connect(self.accept)
@@ -878,7 +1092,7 @@ if QT_IMPORT_ERROR is None:
 
             layout.addLayout(grid)
             hint = QLabel("Campos não marcados não serão alterados. O contexto é opcional e pode ficar vazio.")
-            hint.setStyleSheet("color: #555;")
+            hint.setStyleSheet(_style_muted())
             layout.addWidget(hint)
             buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
             buttons.accepted.connect(self.accept)
@@ -1013,10 +1227,21 @@ if QT_IMPORT_ERROR is None:
             advanced_layout.addWidget(QLabel("Pausa minima entre falantes:"), 1, 0)
             advanced_layout.addWidget(self.min_pause_spin, 1, 1)
 
+            self.min_segment_spin = QDoubleSpinBox()
+            self.min_segment_spin.setRange(0.0, 2.0)
+            self.min_segment_spin.setSingleStep(0.1)
+            self.min_segment_spin.setDecimals(2)
+            self.min_segment_spin.setSuffix(" s")
+            val = config.get("diarization_min_segment")
+            self.min_segment_spin.setValue(float(val) if val is not None else 0.3)
+            self.min_segment_spin.setToolTip("Segmentos de fala menores que este valor sao removidos. Reduz micro-segmentos espurios.")
+            advanced_layout.addWidget(QLabel("Segmento minimo:"), 2, 0)
+            advanced_layout.addWidget(self.min_segment_spin, 2, 1)
+
             layout.addWidget(advanced_group)
 
             hint = QLabel("Batch controla quantos trechos o Whisper processa por vez. Aumentar pode acelerar em GPU com memoria sobrando; reduzir evita falta de memoria. Para computador sem GPU NVIDIA, use CPU com int8 ou float32.")
-            hint.setStyleSheet("color: #555;")
+            hint.setStyleSheet(_style_muted())
             hint.setWordWrap(True)
             layout.addWidget(hint)
             buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -1041,6 +1266,7 @@ if QT_IMPORT_ERROR is None:
                 max_spk = min_spk
             language = str(self.language_combo.currentData())
             min_pause = float(self.min_pause_spin.value())
+            min_segment = float(self.min_segment_spin.value())
             return {
                 "asr_model": str(self.model_combo.currentData() or self.model_combo.currentText() or "large-v3-turbo"),
                 "asr_device": device,
@@ -1051,6 +1277,7 @@ if QT_IMPORT_ERROR is None:
                 "min_speakers": min_spk,
                 "max_speakers": max_spk,
                 "diarization_min_duration_off": min_pause if min_pause > 0 else None,
+                "diarization_min_segment": min_segment if min_segment > 0 else None,
             }
 
 
@@ -1186,7 +1413,7 @@ if QT_IMPORT_ERROR is None:
             account_intro.setWordWrap(True)
             layout.addWidget(account_intro)
             btn = QPushButton("Abrir site para criar minha conta →")
-            btn.setStyleSheet("font-weight: 700; padding: 8px; color: #2e7d32;")
+            btn.setStyleSheet(f"{_style_ok()} padding: 8px;")
             btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://huggingface.co/join")))
             layout.addWidget(btn)
             account_next = QLabel(
@@ -1224,7 +1451,7 @@ if QT_IMPORT_ERROR is None:
             terms_intro.setWordWrap(True)
             layout.addWidget(terms_intro)
             btn = QPushButton("Abrir página do modelo para aceitar os termos →")
-            btn.setStyleSheet("font-weight: 700; padding: 8px; color: #2e7d32;")
+            btn.setStyleSheet(f"{_style_ok()} padding: 8px;")
             btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://huggingface.co/pyannote/speaker-diarization-community-1")))
             layout.addWidget(btn)
             faq = QGroupBox("O que estou aceitando?")
@@ -1320,7 +1547,7 @@ if QT_IMPORT_ERROR is None:
 
             layout.addStretch()
             self.total_label = QLabel("")
-            self.total_label.setStyleSheet("color: #555; font-size: 11px;")
+            self.total_label.setStyleSheet(f"{_style_muted()} font-size: 11px;")
             self.total_label.setWordWrap(True)
             layout.addWidget(self.total_label)
             self._update_total()
@@ -1381,7 +1608,7 @@ if QT_IMPORT_ERROR is None:
             token_intro.setWordWrap(True)
             layout.addWidget(token_intro)
             btn = QPushButton("Abrir página de chaves no Hugging Face →")
-            btn.setStyleSheet("font-weight: 700; padding: 8px; color: #2e7d32;")
+            btn.setStyleSheet(f"{_style_ok()} padding: 8px;")
             btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://huggingface.co/settings/tokens")))
             layout.addWidget(btn)
             layout.addSpacing(12)
@@ -1403,7 +1630,7 @@ if QT_IMPORT_ERROR is None:
                 "A chave é usada apenas para baixar os componentes e depois é descartada.\n"
                 "Ela nunca é enviada para nenhum outro servidor."
             )
-            privacy.setStyleSheet("color: #555; font-size: 11px;")
+            privacy.setStyleSheet(f"{_style_muted()} font-size: 11px;")
             privacy.setWordWrap(True)
             layout.addWidget(privacy)
 
@@ -1421,10 +1648,10 @@ if QT_IMPORT_ERROR is None:
             token = self.token_edit.text().strip()
             if not token:
                 self.status_label.setText("Cole a chave de acesso no campo acima.")
-                self.status_label.setStyleSheet("color: #c00;")
+                self.status_label.setStyleSheet(_style_err())
                 return False
             self.status_label.setText("Verificando sua chave...")
-            self.status_label.setStyleSheet("color: #555;")
+            self.status_label.setStyleSheet(_style_muted())
             # Force UI repaint before blocking call
             from PySide6.QtCore import QCoreApplication
             QCoreApplication.processEvents()
@@ -1432,21 +1659,21 @@ if QT_IMPORT_ERROR is None:
             result = model_manager.validate_token(token)
             if not result["valid"]:
                 self.status_label.setText(result["message"])
-                self.status_label.setStyleSheet("color: #c00;")
+                self.status_label.setStyleSheet(_style_err())
                 return False
             # Check gated model access
             gated = model_manager.check_gated_access(token)
             if not gated["access"]:
                 self.status_label.setText(gated["message"])
-                self.status_label.setStyleSheet("color: #e65100;")
+                self.status_label.setStyleSheet(_style_warn())
                 return False
             self.status_label.setText(f"✓ {result['message']} {gated['message']}")
-            self.status_label.setStyleSheet("color: #2e7d32; font-weight: 700;")
+            self.status_label.setStyleSheet(_style_ok())
             # Persist validated token in secure vault
             try:
                 token_vault.store(token)
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.warning("token_vault.store falhou: %s", exc)
             return True
 
         def token(self) -> str:
@@ -1486,7 +1713,7 @@ if QT_IMPORT_ERROR is None:
             disk = model_manager.check_disk_space()
             if not disk["ok"]:
                 self.progress_label.setText(disk["message"])
-                self.progress_label.setStyleSheet("color: #c00;")
+                self.progress_label.setStyleSheet(_style_err())
                 return
             self._download_started = True
             token_page = self._wizard.page(FirstRunWizard.PAGE_TOKEN)
@@ -1512,12 +1739,12 @@ if QT_IMPORT_ERROR is None:
             self._wizard.download_completed = True
             self.progress_bar.setValue(100)
             self.progress_label.setText("Componentes baixados e verificados com sucesso!")
-            self.progress_label.setStyleSheet("color: #2e7d32; font-weight: 700;")
+            self.progress_label.setStyleSheet(_style_ok())
             self.completeChanged.emit()
 
         def _on_failed(self, message: str) -> None:
             self.progress_label.setText(f"Erro: {message}\n\nVerifique sua conexão e tente novamente.")
-            self.progress_label.setStyleSheet("color: #c00;")
+            self.progress_label.setStyleSheet(_style_err())
             self._download_started = False  # allow retry via Back + Next
 
     class _SetupDownloadThread(QThread):
@@ -1569,7 +1796,7 @@ if QT_IMPORT_ERROR is None:
             if context is not None:
                 project_name = str(context.project.get("project_name") or context.paths.project_root.name)
                 current_label = QLabel(f"Projeto atual: {project_name}")
-                current_label.setStyleSheet("color: #555;")
+                current_label.setStyleSheet(_style_muted())
                 layout.addWidget(current_label)
                 btn_continue = QPushButton("Continuar projeto atual")
                 btn_continue.setToolTip("Abrir a lista de arquivos deste projeto.")
@@ -1599,7 +1826,7 @@ if QT_IMPORT_ERROR is None:
 
             layout.addStretch()
             status_label = QLabel("✓ Componentes de IA instalados")
-            status_label.setStyleSheet("color: #2e7d32; font-size: 11px;")
+            status_label.setStyleSheet(f"{_style_ok()} font-size: 11px;")
             status_label.setAlignment(Qt.AlignmentFlag.AlignRight)
             layout.addWidget(status_label)
 
@@ -1721,6 +1948,11 @@ if QT_IMPORT_ERROR is None:
             self.statuses = []
             self._status_map: dict[str, Any] = {}
             self._checked_ids: set[str] = set()
+            self._trash_undo: list[str] = []  # trash_ids da sessao atual, LIFO
+            self._trash_redo: list[str] = []
+            self._trash_worker: TrashMoveWorker | None = None
+            self._trash_session_ids: list[str] = []  # trash_ids criados nesta sessao (para purge no close)
+            self._trash_busy: bool = False
             self.review: dict[str, Any] | None = None
             self.current_interview_id: str | None = None
             self.turns: list[dict[str, Any]] = []
@@ -1850,6 +2082,47 @@ if QT_IMPORT_ERROR is None:
             self.delete_transcription_action.setToolTip("Apagar todos os arquivos derivados dos selecionados, permitindo retranscrever. Originais nao sao alterados.")
             self.delete_transcription_action.triggered.connect(self.delete_selected_transcriptions)
 
+            self.rename_interview_action = QAction("Renomear rotulo...", self)
+            self.rename_interview_action.setShortcut(QKeySequence(Qt.Key.Key_F2))
+            self.rename_interview_action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            self.rename_interview_action.triggered.connect(self.rename_selected_interview)
+
+            self.move_up_action = QAction("Mover arquivo para cima", self)
+            self.move_up_action.setShortcut(QKeySequence("Ctrl+Alt+Up"))
+            self.move_up_action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            self.move_up_action.triggered.connect(self.move_selected_up)
+
+            self.move_down_action = QAction("Mover arquivo para baixo", self)
+            self.move_down_action.setShortcut(QKeySequence("Ctrl+Alt+Down"))
+            self.move_down_action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            self.move_down_action.triggered.connect(self.move_selected_down)
+
+            for _reorder_action in (self.rename_interview_action, self.move_up_action, self.move_down_action):
+                _reorder_action.setShortcutVisibleInContextMenu(True)
+
+            self.trash_selected_action = QAction("Mover para lixeira...", self)
+            self.trash_selected_action.setShortcut(QKeySequence(Qt.Key.Key_Delete))
+            # ApplicationShortcut: Del dispara de qualquer lugar; effective_target_ids trata selecao.
+            self.trash_selected_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+            self.trash_selected_action.setToolTip("Mover os arquivos selecionados para 00_project/.trash/ (Del). Reversivel com Ctrl+Z nesta sessao.")
+            self.trash_selected_action.triggered.connect(self.trash_selected_interviews)
+
+            self.trash_undo_action = QAction("Desfazer exclusao", self)
+            self.trash_undo_action.setShortcut(QKeySequence("Ctrl+Z"))
+            # ApplicationShortcut + guard em undo_last_trash delega ao editor quando foco e QTextEdit
+            self.trash_undo_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+            self.trash_undo_action.setToolTip("Desfaz a ultima exclusao desta sessao (Ctrl+Z).")
+            self.trash_undo_action.triggered.connect(self.undo_last_trash)
+
+            self.trash_redo_action = QAction("Refazer exclusao", self)
+            self.trash_redo_action.setShortcut(QKeySequence("Ctrl+Shift+Z"))
+            self.trash_redo_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+            self.trash_redo_action.setToolTip("Refaz a ultima exclusao desfeita (Ctrl+Shift+Z).")
+            self.trash_redo_action.triggered.connect(self.redo_last_trash)
+
+            for _trash_action in (self.trash_selected_action, self.trash_undo_action, self.trash_redo_action):
+                _trash_action.setShortcutVisibleInContextMenu(True)
+
             self.export_current_action = QAction("Exportar este arquivo...", self)
             self.export_current_action.setToolTip("Exportar apenas a transcricao aberta.")
             self.export_current_action.triggered.connect(self.export_current_review)
@@ -1896,8 +2169,12 @@ if QT_IMPORT_ERROR is None:
 
             self.undo_action = self.undo_stack.createUndoAction(self, "Desfazer")
             self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
+            # WidgetWithChildrenShortcut + addAction no text_edit (feito apos criacao do editor)
+            # evita conflito com trash_undo_action (ApplicationShortcut): Qt prefere o contexto mais especifico.
+            self.undo_action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             self.redo_action = self.undo_stack.createRedoAction(self, "Refazer")
             self.redo_action.setShortcut(QKeySequence.StandardKey.Redo)
+            self.redo_action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
 
             # Playback keyboard shortcuts
             self.play_action = QAction("Reproduzir/Pausar", self)
@@ -1972,6 +2249,14 @@ if QT_IMPORT_ERROR is None:
             files_menu.addAction(self.export_selected_action)
             files_menu.addSeparator()
             files_menu.addAction(self.delete_transcription_action)
+            files_menu.addSeparator()
+            files_menu.addAction(self.rename_interview_action)
+            files_menu.addAction(self.move_up_action)
+            files_menu.addAction(self.move_down_action)
+            files_menu.addSeparator()
+            files_menu.addAction(self.trash_selected_action)
+            files_menu.addAction(self.trash_undo_action)
+            files_menu.addAction(self.trash_redo_action)
 
             open_file_menu = self.menuBar().addMenu("Arquivo aberto")
             open_file_menu.addAction(self.open_transcript_action)
@@ -2052,8 +2337,8 @@ if QT_IMPORT_ERROR is None:
                 return
             try:
                 self.context = app_service.update_engine_config(self.context, {"diarize": checked})
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.warning("update_engine_config(diarize) falhou: %s", exc)
 
         def _sync_diarize_checkbox(self) -> None:
             if not hasattr(self, "diarize_checkbox"):
@@ -2077,7 +2362,7 @@ if QT_IMPORT_ERROR is None:
                             "⚠ Componentes de IA não instalados. "
                             "Use Configurações > Configurar modelos."
                         )
-                        self.progress_label.setStyleSheet("color: #c00; font-weight: 700;")
+                        self.progress_label.setStyleSheet(_style_err())
                         self.refresh_interviews()
                         return
                 # Fall through to project chooser if models are now ready
@@ -2160,7 +2445,7 @@ if QT_IMPORT_ERROR is None:
             header.addWidget(title)
             header.addStretch()
             self.project_label = QLabel(self.project_header_text())
-            self.project_label.setStyleSheet("color: #555;")
+            self.project_label.setStyleSheet(_style_muted())
             self.project_label.setTextFormat(Qt.TextFormat.RichText)
             self.project_label.linkActivated.connect(lambda _link: self.configure_engine())
             header.addWidget(self.project_label)
@@ -2185,7 +2470,7 @@ if QT_IMPORT_ERROR is None:
             progress_row = QHBoxLayout()
             self.progress_label = QLabel("Pronto.")
             self.save_status_label = QLabel("Sem transcrição aberta.")
-            self.save_status_label.setStyleSheet("color: #555;")
+            self.save_status_label.setStyleSheet(_style_muted())
             self.progress_bar = QProgressBar()
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setVisible(False)
@@ -2238,15 +2523,26 @@ if QT_IMPORT_ERROR is None:
             for col in range(COL_ARQUIVO, COL_AVISOS):
                 self.interview_table.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
             self.interview_table.horizontalHeader().setSectionResizeMode(COL_AVISOS, QHeaderView.ResizeMode.Stretch)
-            self.interview_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+            self.interview_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+            self.interview_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
             self.interview_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
             self.interview_table.setSortingEnabled(True)
             self.interview_table.cellClicked.connect(self._on_interview_cell_clicked)
+            self.interview_table.itemSelectionChanged.connect(self.update_action_states)
             self.interview_table.horizontalHeader().sectionClicked.connect(self._on_header_section_clicked)
+            self.interview_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            self.interview_table.customContextMenuRequested.connect(self._show_library_context_menu)
+            # Ancorar actions com shortcut WidgetWithChildrenShortcut na tabela
+            self.interview_table.addAction(self.rename_interview_action)
+            self.interview_table.addAction(self.move_up_action)
+            self.interview_table.addAction(self.move_down_action)
+            self.interview_table.addAction(self.trash_selected_action)
+            self.interview_table.addAction(self.trash_undo_action)
+            self.interview_table.addAction(self.trash_redo_action)
             layout.addWidget(self.interview_table, stretch=1)
             self._empty_table_label = QLabel("Nenhuma entrevista.\nUse Arquivos \u203a Adicionar m\u00eddia.")
             self._empty_table_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self._empty_table_label.setStyleSheet("color: #888; font-size: 13px; padding: 24px;")
+            self._empty_table_label.setStyleSheet(f"{_style_muted()} font-size: 13px; padding: 24px;")
             self._empty_table_label.setVisible(False)
             layout.addWidget(self._empty_table_label)
             metadata_button = self.action_button(self.apply_metadata_action)
@@ -2481,6 +2777,10 @@ if QT_IMPORT_ERROR is None:
             self.text_edit.setMinimumHeight(120)
             self.text_edit.setAccessibleName("Texto do bloco selecionado")
             self.text_edit.textChanged.connect(self.editor_changed)
+            # Ancorar undo/redo do editor no text_edit (WidgetWithChildrenShortcut).
+            # Com foco no editor, Ctrl+Z aciona QUndoStack; fora dele, trash_undo_action (ApplicationShortcut).
+            self.text_edit.addAction(self.undo_action)
+            self.text_edit.addAction(self.redo_action)
             grid.addWidget(self.text_edit, 2, 0, 1, 4)
 
             button_row = QHBoxLayout()
@@ -2503,7 +2803,7 @@ if QT_IMPORT_ERROR is None:
             line.setFrameShape(QFrame.Shape.HLine)
             grid.addWidget(line, 4, 0, 1, 4)
             hint = QLabel("Dica: clique no texto para editar; clique no tempo ou de duplo clique na linha para ir ao audio.")
-            hint.setStyleSheet("color: #555;")
+            hint.setStyleSheet(_style_muted())
             grid.addWidget(hint, 5, 0, 1, 4)
             return group
 
@@ -2525,22 +2825,32 @@ if QT_IMPORT_ERROR is None:
             self.interview_table.setSortingEnabled(False)
             self.interview_table.blockSignals(True)
             self.interview_table.setRowCount(0)
+            # Ordenar self.statuses por interview_order quando ordem manual ativa
+            manual_order_active = bool(self.context.project.get("manual_order_active"))
+            if manual_order_active:
+                order = list(self.context.project.get("interview_order") or [])
+                order_index = {iid: i for i, iid in enumerate(order)}
+                self.statuses = sorted(
+                    self.statuses,
+                    key=lambda s: (order_index.get(s.interview_id, len(order_index)), s.interview_id),
+                )
             for status in self.statuses:
                 row = self.interview_table.rowCount()
                 self.interview_table.insertRow(row)
                 metadata = self.context.metadata.get(status.interview_id, {})
                 metadata_display = project_store.metadata_display(metadata)
                 job = self.context.jobs.get(status.interview_id, {})
+                display_title = str(metadata.get("title") or "").strip() or status.interview_id
                 # Column 0: checkbox
                 check_item = QTableWidgetItem()
-                check_item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+                check_item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
                 check_item.setCheckState(
                     Qt.CheckState.Checked if status.interview_id in self._checked_ids else Qt.CheckState.Unchecked
                 )
                 self.interview_table.setItem(row, COL_CHECK, check_item)
                 # Columns 1-9: data
                 values = [
-                    status.interview_id,
+                    display_title,
                     media_format_label(status),
                     self.friendly_state(status, job),
                     format_clock(float(status.duration_sec) if status.duration_sec else 0),
@@ -2552,12 +2862,16 @@ if QT_IMPORT_ERROR is None:
                 ]
                 for column, value in enumerate(values, start=COL_ARQUIVO):
                     item = QTableWidgetItem(str(value))
-                    item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                    item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
                     if column == COL_ARQUIVO:
                         item.setData(Qt.ItemDataRole.UserRole, status.interview_id)
+                        if display_title != status.interview_id:
+                            item.setToolTip(status.interview_id)
                     self.interview_table.setItem(row, column, item)
             self.interview_table.blockSignals(False)
-            self.interview_table.setSortingEnabled(True)
+            self.interview_table.setSortingEnabled(not manual_order_active)
+            if manual_order_active:
+                self.interview_table.horizontalHeader().setSortIndicator(-1, Qt.SortOrder.AscendingOrder)
             has_rows = len(self.statuses) > 0
             self.interview_table.setVisible(has_rows)
             if hasattr(self, "_empty_table_label"):
@@ -2577,7 +2891,8 @@ if QT_IMPORT_ERROR is None:
                 state_item = self.interview_table.item(row_idx, COL_TRANSCRICAO)
                 if not id_item or not state_item:
                     continue
-                interview_id = id_item.text().lower()
+                real_id = str(id_item.data(Qt.ItemDataRole.UserRole) or "").lower()
+                displayed_text = id_item.text().lower()
                 state_text = state_item.text()
                 show_by_status = True
                 if status_filter == "Transcritas":
@@ -2586,7 +2901,7 @@ if QT_IMPORT_ERROR is None:
                     show_by_status = state_text == "Não transcrita"
                 elif status_filter == "Processando":
                     show_by_status = state_text.startswith("Processando")
-                show_by_text = text_filter in interview_id if text_filter else True
+                show_by_text = (text_filter in real_id or text_filter in displayed_text) if text_filter else True
                 hidden = not (show_by_status and show_by_text)
                 self.interview_table.setRowHidden(row_idx, hidden)
                 if not hidden:
@@ -2624,6 +2939,66 @@ if QT_IMPORT_ERROR is None:
                 if iid in self._checked_ids:
                     ids.append(iid)
             return ids
+
+        def _visible_interview_ids_in_order(self) -> list[str]:
+            ids: list[str] = []
+            for row in range(self.interview_table.rowCount()):
+                if self.interview_table.isRowHidden(row):
+                    continue
+                item = self.interview_table.item(row, COL_ARQUIVO)
+                if not item:
+                    continue
+                ids.append(str(item.data(Qt.ItemDataRole.UserRole) or item.text()))
+            return ids
+
+        def _visually_selected_interview_ids(self) -> set[str]:
+            """Ids das linhas com selecao visual. Ignora linhas ocultas por filtro."""
+            ids: set[str] = set()
+            for index in self.interview_table.selectionModel().selectedRows(COL_ARQUIVO):
+                row = index.row()
+                if self.interview_table.isRowHidden(row):
+                    continue
+                item = self.interview_table.item(row, COL_ARQUIVO)
+                if item:
+                    iid = item.data(Qt.ItemDataRole.UserRole) or item.text()
+                    if iid:
+                        ids.add(str(iid))
+            return ids
+
+        def effective_target_ids(self, cursor_row: int | None = None) -> list[str]:
+            """Targets for actions, following Windows Explorer precedence.
+
+            See _compute_effective_target_ids for the rules.
+            Fallback: se nada selecionado mas editor aberto, usa current_interview_id.
+            Fallback: se nada selecionado mas ha currentItem na tabela, usa esse.
+            """
+            cursor_row_id: str | None = None
+            if cursor_row is not None and cursor_row >= 0:
+                item = self.interview_table.item(cursor_row, COL_ARQUIVO)
+                if item:
+                    cursor_row_id = str(item.data(Qt.ItemDataRole.UserRole) or item.text())
+            result = _compute_effective_target_ids(
+                self._visible_interview_ids_in_order(),
+                set(self._checked_ids),
+                self._visually_selected_interview_ids(),
+                cursor_row_id,
+            )
+            if result:
+                return result
+            # Fallback 1: arquivo aberto no editor
+            if self.current_interview_id:
+                return [self.current_interview_id]
+            # Fallback 2: currentItem (cursor de teclado, mesmo sem linha "selecionada")
+            current = self.interview_table.currentItem()
+            if current is not None:
+                row = current.row()
+                if not self.interview_table.isRowHidden(row):
+                    arq_item = self.interview_table.item(row, COL_ARQUIVO)
+                    if arq_item:
+                        iid = arq_item.data(Qt.ItemDataRole.UserRole) or arq_item.text()
+                        if iid:
+                            return [str(iid)]
+            return []
 
         def pending_transcription_ids(self) -> list[str]:
             return [
@@ -2788,6 +3163,15 @@ if QT_IMPORT_ERROR is None:
 
         def _on_header_section_clicked(self, section: int) -> None:
             if section != COL_CHECK:
+                # Click em cabecalho de coluna de dados: desativar ordem manual se estava ativa
+                if self.context and self.context.project.get("manual_order_active"):
+                    self.context = app_service.set_interview_order(
+                        self.context,
+                        list(self.context.project.get("interview_order") or []),
+                        manual_active=False,
+                    )
+                    self.interview_table.setSortingEnabled(True)
+                    self.progress_label.setText("Ordem manual desativada. Ordenando por coluna.")
                 return
             visible_ids: list[str] = []
             for row in range(self.interview_table.rowCount()):
@@ -3129,7 +3513,7 @@ if QT_IMPORT_ERROR is None:
             if not hasattr(self, "save_status_label"):
                 return
             self.save_status_label.setText(message)
-            self.save_status_label.setStyleSheet("color: #b00020;" if error else "color: #555;")
+            self.save_status_label.setStyleSheet(_style_err() if error else _style_muted())
 
         def save_current_turn(self, force: bool = False) -> bool:
             if not self.review or not self.current_interview_id or not self.current_turn_id:
@@ -3194,7 +3578,7 @@ if QT_IMPORT_ERROR is None:
             busy = bool(self.worker and self.worker.isRunning())
             has_project = self._has_project()
             has_selected = bool(self.selected_interview_id() or self.current_interview_id)
-            has_table_selection = bool(self.selected_interview_ids())
+            has_table_selection = bool(self.effective_target_ids())
             has_review = bool(self.current_interview_id and self.review)
             has_open_file = bool(self.current_interview_id)
             has_untranscribed_open_file = bool(self.current_interview_id and not self.review)
@@ -3227,6 +3611,37 @@ if QT_IMPORT_ERROR is None:
             self._set_action(self.generate_files_action, not busy and (has_review or has_table_selection or any(status.review_exists or status.canonical_exists for status in self.statuses)), reason_busy if busy else "Nenhuma transcrição disponível.")
             self._set_action(self.export_selected_action, not busy and has_table_selection, reason_busy if busy else reason_select)
             self._set_action(self.delete_transcription_action, not busy and has_table_selection, reason_busy if busy else reason_select)
+            # Rename e reorder exigem UM unico alvo
+            single_target = bool(has_project and len(self.effective_target_ids()) == 1)
+            single_target_busy = False
+            if single_target and self.context:
+                only = self.effective_target_ids()[0]
+                single_target_busy = (self.context.jobs.get(only) or {}).get("status") in ("Executando", "Na fila")
+            rename_reason = "Selecione um unico arquivo para renomear." if not single_target else "Aguarde a transcricao terminar."
+            reorder_reason = "Selecione um unico arquivo para reordenar." if not single_target else "Aguarde a transcricao terminar."
+            self._set_action(self.rename_interview_action, not busy and single_target and not single_target_busy, reason_busy if busy else rename_reason)
+            self._set_action(self.move_up_action, not busy and single_target and not single_target_busy, reason_busy if busy else reorder_reason)
+            self._set_action(self.move_down_action, not busy and single_target and not single_target_busy, reason_busy if busy else reorder_reason)
+            # Trash actions
+            trash_busy = bool(getattr(self, "_trash_busy", False))
+            any_busy = busy or trash_busy
+            self._set_action(
+                self.trash_selected_action,
+                not any_busy and has_project and has_table_selection,
+                reason_busy if any_busy else reason_select,
+            )
+            can_undo = bool(getattr(self, "_trash_undo", []))
+            can_redo = bool(getattr(self, "_trash_redo", []))
+            self._set_action(
+                self.trash_undo_action,
+                not any_busy and can_undo,
+                reason_busy if any_busy else "Nada a desfazer nesta sessao.",
+            )
+            self._set_action(
+                self.trash_redo_action,
+                not any_busy and can_redo,
+                reason_busy if any_busy else "Nada a refazer nesta sessao.",
+            )
             self._set_action(self.export_current_action, not busy and has_review, reason_busy if busy else reason_open)
             self._set_action(self.close_open_file_action, not busy and has_open_file, reason_busy if busy else "Nenhum arquivo aberto.")
             self._set_action(self.open_export_folder_action, not busy, reason_busy)
@@ -3420,9 +3835,14 @@ if QT_IMPORT_ERROR is None:
             self.export_reviews(default_scope="selected")
 
         def delete_selected_transcriptions(self, *_args: Any) -> None:
+            _logger.info("delete_selected_transcriptions triggered: context=%s", self.context is not None)
             if self.context is None:
                 return
-            ids = self.selected_interview_ids()
+            ids = self.effective_target_ids()
+            _logger.info("  effective_target_ids: %s | checked=%s visual=%s current_iid=%s",
+                         ids, sorted(self._checked_ids),
+                         sorted(self._visually_selected_interview_ids()),
+                         self.current_interview_id)
             if not ids:
                 QMessageBox.information(self, "Selecione arquivos", "Selecione ao menos um arquivo para apagar a transcricao.")
                 return
@@ -3431,13 +3851,17 @@ if QT_IMPORT_ERROR is None:
                    "Isso inclui ASR, diarizacao, transcricao editavel e metricas.\n"
                    "Os arquivos originais de audio/video NAO serao alterados.\n\n"
                    "Esta acao nao pode ser desfeita.")
-            reply = QMessageBox.question(self, "Confirmar exclusao", msg,
-                                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                                         QMessageBox.StandardButton.No)
-            if reply != QMessageBox.StandardButton.Yes:
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Question)
+            box.setWindowTitle("Confirmar exclusao")
+            box.setText(msg)
+            box.setDetailedText("Arquivos afetados:\n\n" + "\n".join(ids))
+            box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            box.setDefaultButton(QMessageBox.StandardButton.No)
+            if box.exec() != QMessageBox.StandardButton.Yes:
                 return
             if self.current_interview_id and self.current_interview_id in ids:
-                self.close_current_review()
+                self.close_open_file()
             try:
                 deleted, self.context = app_service.delete_transcription_outputs(self.context, ids)
             except Exception as exc:
@@ -3445,6 +3869,500 @@ if QT_IMPORT_ERROR is None:
                 return
             self.refresh_interviews()
             self.progress_label.setText(f"{deleted} arquivo(s) apagado(s) de {n} entrevista(s).")
+
+        def rename_selected_interview(self, *_args: Any, cursor_row: int | None = None) -> None:
+            if self.context is None:
+                return
+            ids = self.effective_target_ids(cursor_row)
+            if len(ids) != 1:
+                QMessageBox.information(self, "Selecione um arquivo", "Selecione um unico arquivo para renomear.")
+                return
+            interview_id = ids[0]
+            busy = [iid for iid in ids if (self.context.jobs.get(iid) or {}).get("status") in ("Executando", "Na fila")]
+            if busy:
+                QMessageBox.information(self, "Acao bloqueada", "Aguarde a transcricao terminar ou cancele o job na fila de processamento.")
+                return
+            metadata = self.context.metadata.get(interview_id, {})
+            current_title = str(metadata.get("title") or "").strip() or interview_id
+            raw, ok = QInputDialog.getText(
+                self,
+                "Renomear rotulo",
+                "Novo rotulo para exibicao (deixe vazio para usar o nome do arquivo):",
+                text=current_title,
+            )
+            if not ok:
+                return
+            new_title, truncated = _sanitize_rename_title(raw)
+            title_to_store = new_title if new_title and new_title != interview_id else ""
+            try:
+                self.context = app_service.rename_interview(self.context, interview_id, title_to_store)
+            except app_service.InterviewBusyError:
+                QMessageBox.information(self, "Acao bloqueada", "Aguarde a transcricao terminar ou cancele o job na fila de processamento.")
+                return
+            except Exception as exc:
+                QMessageBox.critical(self, "Erro ao renomear", str(exc)[:2000])
+                return
+            self._trash_redo.clear()
+            self.refresh_interviews()
+            self._select_row_by_interview_id(interview_id)
+            if not title_to_store:
+                self.progress_label.setText("Rotulo removido. Exibindo o nome do arquivo.")
+            elif truncated:
+                self.progress_label.setText(f'Rotulo atualizado para "{title_to_store}" (limitado a 200 caracteres).')
+            else:
+                self.progress_label.setText(f'Rotulo atualizado para "{title_to_store}".')
+
+        def move_selected_up(self, *_args: Any, cursor_row: int | None = None) -> None:
+            self._move_selected(cursor_row=cursor_row, direction=-1)
+
+        def move_selected_down(self, *_args: Any, cursor_row: int | None = None) -> None:
+            self._move_selected(cursor_row=cursor_row, direction=+1)
+
+        def _move_selected(self, cursor_row: int | None, direction: int) -> None:
+            if self.context is None:
+                return
+            ids = self.effective_target_ids(cursor_row)
+            if len(ids) != 1:
+                QMessageBox.information(self, "Selecione um arquivo", "Selecione um unico arquivo para reordenar.")
+                return
+            moving_id = ids[0]
+            if (self.context.jobs.get(moving_id) or {}).get("status") in ("Executando", "Na fila"):
+                QMessageBox.information(self, "Acao bloqueada", "Aguarde a transcricao terminar ou cancele o job na fila de processamento.")
+                return
+            # Primeira ativacao de ordem manual: captura ordem VISUAL atual
+            was_manual = bool(self.context.project.get("manual_order_active"))
+            if not was_manual:
+                existing_order = list(self.context.project.get("interview_order") or [])
+                if existing_order:
+                    reply = QMessageBox.question(
+                        self,
+                        "Substituir ordem manual",
+                        "Ja existe uma ordem manual salva neste projeto. Substituir pela ordem atual da lista?",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                        QMessageBox.StandardButton.No,
+                    )
+                    if reply != QMessageBox.StandardButton.Yes:
+                        return
+                visual_order = self._visible_interview_ids_in_order()
+                hidden_ids = [
+                    row.get("interview_id", "")
+                    for row in self.context.rows
+                    if row.get("interview_id") and row.get("interview_id") not in visual_order
+                ]
+                base_order = visual_order + hidden_ids
+                self.context = app_service.set_interview_order(self.context, base_order, manual_active=True)
+                first_activation_msg = (
+                    "Ordem manual ativada (ordem anterior substituida). Clique em um cabecalho de coluna para ordenar por coluna."
+                    if existing_order
+                    else "Ordem manual ativada. Clique em um cabecalho de coluna para ordenar por coluna."
+                )
+            else:
+                first_activation_msg = None
+            hidden_set = {
+                row.get("interview_id", "")
+                for row in self.context.rows
+                if row.get("interview_id") and self._is_interview_hidden(row.get("interview_id", ""))
+            }
+            try:
+                self.context = app_service.move_interviews(
+                    self.context, [moving_id], direction, hidden_ids=list(hidden_set)
+                )
+            except app_service.InterviewBusyError:
+                QMessageBox.information(self, "Acao bloqueada", "Aguarde a transcricao terminar ou cancele o job na fila de processamento.")
+                return
+            except ValueError as exc:
+                QMessageBox.critical(self, "Erro ao reordenar", str(exc)[:2000])
+                return
+            self._trash_redo.clear()
+            self.refresh_interviews()
+            self._select_row_by_interview_id(moving_id)
+            if first_activation_msg:
+                self.progress_label.setText(first_activation_msg)
+            else:
+                direction_txt = "para cima" if direction < 0 else "para baixo"
+                self.progress_label.setText(f"Arquivo movido {direction_txt}.")
+
+        def _is_interview_hidden(self, interview_id: str) -> bool:
+            for row_idx in range(self.interview_table.rowCount()):
+                item = self.interview_table.item(row_idx, COL_ARQUIVO)
+                if item and str(item.data(Qt.ItemDataRole.UserRole) or "") == interview_id:
+                    return self.interview_table.isRowHidden(row_idx)
+            return False
+
+        TRASH_ASYNC_THRESHOLD_BYTES = 50 * 1024 * 1024  # 50 MB
+
+        def trash_selected_interviews(self, *_args: Any, cursor_row: int | None = None) -> None:
+            _logger.info("trash_selected_interviews triggered: context=%s busy=%s cursor_row=%s",
+                         self.context is not None, self._trash_busy, cursor_row)
+            if self.context is None or self._trash_busy:
+                _logger.info("  return: context None or busy")
+                return
+            ids = self.effective_target_ids(cursor_row)
+            _logger.info("  effective_target_ids: %s | checked=%s visual=%s",
+                         ids, sorted(self._checked_ids), sorted(self._visually_selected_interview_ids()))
+            if not ids:
+                QMessageBox.information(self, "Selecione arquivos", "Selecione ao menos um arquivo para mover para a lixeira.")
+                return
+            busy_ids = [iid for iid in ids if (self.context.jobs.get(iid) or {}).get("status") in ("Executando", "Na fila")]
+            if busy_ids:
+                QMessageBox.information(self, "Acao bloqueada", "Nao e possivel mover arquivos com transcricao em andamento. Aguarde ou cancele o job na fila de processamento.")
+                return
+            n = len(ids)
+            if n == 1:
+                text = "Mover este arquivo para a lixeira do projeto?"
+            else:
+                text = f"Mover {n} arquivos para a lixeira do projeto?"
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("Confirmar exclusao")
+            box.setText(text)
+            box.setInformativeText("O arquivo original, a transcricao e os metadados serao movidos para 00_project/.trash/. Voce pode desfazer com Ctrl+Z nesta sessao.")
+            box.setDetailedText("Arquivos afetados:\n\n" + "\n".join(ids))
+            box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            box.setDefaultButton(QMessageBox.StandardButton.No)
+            if box.exec() != QMessageBox.StandardButton.Yes:
+                return
+            if self.current_interview_id and self.current_interview_id in ids:
+                self.close_open_file()
+            try:
+                trash_entry = app_service.prepare_trash_move(self.context, ids)
+            except app_service.InterviewBusyError:
+                QMessageBox.information(self, "Acao bloqueada", "Nao e possivel mover arquivos com transcricao em andamento. Aguarde ou cancele o job na fila de processamento.")
+                return
+            except Exception as exc:
+                QMessageBox.critical(self, "Erro ao preparar exclusao", str(exc)[:2000])
+                return
+            total_bytes = trash_entry.get("total_bytes", 0)
+            self._trash_busy = True
+            self.trash_selected_action.setEnabled(False)
+            self.trash_undo_action.setEnabled(False)
+            self.trash_redo_action.setEnabled(False)
+            if total_bytes > self.TRASH_ASYNC_THRESHOLD_BYTES:
+                self._run_trash_worker(trash_entry, n)
+            else:
+                self._run_trash_sync(trash_entry, n)
+
+        def _run_trash_sync(self, trash_entry: dict, n: int) -> None:
+            """Trash para < 50 MB: roda sem worker, rapido."""
+            import shutil
+            from pathlib import Path as _Path
+            from .utils import write_json as _write_json
+            try:
+                trash_dir = _Path(trash_entry["trash_dir"])
+                staging = trash_dir / "staging"
+                staging.mkdir(parents=True, exist_ok=True)
+                project_root = _Path(trash_entry["project_root"])
+                moved_files: list[dict] = []
+                for mf in trash_entry.get("files_to_move") or []:
+                    src = _Path(mf["original"])
+                    if not src.exists():
+                        continue
+                    try:
+                        rel = src.resolve().relative_to(project_root.resolve())
+                        dest = staging / rel
+                    except ValueError:
+                        dest = staging / src.name
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    if dest.exists():
+                        stem = dest.stem
+                        suffix = dest.suffix
+                        counter = 1
+                        while (dest.parent / f"{stem}__{counter}{suffix}").exists():
+                            counter += 1
+                        dest = dest.parent / f"{stem}__{counter}{suffix}"
+                    shutil.copy2(str(src), str(dest))
+                    if src.stat().st_size != dest.stat().st_size:
+                        raise RuntimeError(f"tamanho divergente: {src.name}")
+                    trashed_rel = str(dest.relative_to(trash_dir)).replace("\\", "/")
+                    moved_files.append({
+                        "original": str(src.resolve()),
+                        "trashed": trashed_rel,
+                        "size": int(src.stat().st_size),
+                        "mtime": float(src.stat().st_mtime),
+                    })
+                files_dir = trash_dir / "files"
+                staging.rename(files_dir)
+                for mf in moved_files:
+                    mf["trashed"] = mf["trashed"].replace("staging/", "files/", 1)
+                entry_dict = project_store._build_undo_entry(
+                    trash_id=trash_entry["trash_id"],
+                    interview_ids=trash_entry["interview_ids"],
+                    csv_mtimes=trash_entry.get("csv_mtimes") or {},
+                    snapshots=trash_entry.get("snapshots") or {},
+                    moved_files=moved_files,
+                    status="complete",
+                )
+                entry_dict["project_root"] = str(project_root)
+                _write_json(trash_dir / project_store.TRASH_MANIFEST, entry_dict)
+                entry_dict["trash_dir"] = str(trash_dir)
+                self._on_trash_worker_finished(entry_dict, "", n, async_mode=False)
+            except Exception as exc:
+                shutil.rmtree(_Path(trash_entry["trash_dir"]), ignore_errors=True)
+                self._trash_busy = False
+                self.update_action_states()
+                QMessageBox.critical(self, "Erro ao mover para lixeira", str(exc)[:2000])
+
+        def _run_trash_worker(self, trash_entry: dict, n: int) -> None:
+            """Trash para >= 50 MB: worker + QProgressDialog."""
+            self._trash_progress_dialog = QProgressDialog(
+                f"Preparando {n} arquivo(s)...",
+                "Cancelar",
+                0,
+                max(1, len(trash_entry.get("files_to_move") or [])),
+                self,
+            )
+            self._trash_progress_dialog.setWindowTitle("Movendo para a lixeira")
+            self._trash_progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+            self._trash_progress_dialog.setMinimumDuration(500)
+            self._trash_progress_dialog.setAutoClose(False)
+            self._trash_progress_dialog.setAutoReset(False)
+            worker = TrashMoveWorker(trash_entry)
+            self._trash_worker = worker
+            self._trash_progress_dialog.canceled.connect(worker.request_cancel)
+            worker.progress.connect(self._on_trash_progress)
+            worker.stage_changed.connect(self._on_trash_stage_changed)
+            worker.finished_result.connect(
+                lambda entry, err: self._on_trash_worker_finished(entry, err, n, async_mode=True)
+            )
+            worker.finished.connect(worker.deleteLater)
+            worker.start()
+
+        def _on_trash_progress(self, current: int, total: int, name: str) -> None:
+            if self._trash_progress_dialog is not None:
+                self._trash_progress_dialog.setMaximum(total)
+                self._trash_progress_dialog.setValue(current)
+                if name:
+                    self._trash_progress_dialog.setLabelText(f"Movendo ({current}/{total}): {name}")
+
+        def _on_trash_stage_changed(self, label: str) -> None:
+            if self._trash_progress_dialog is not None:
+                self._trash_progress_dialog.setLabelText(label)
+
+        def _on_trash_worker_finished(self, entry: dict | None, err: str, n: int, async_mode: bool) -> None:
+            _logger.info("_on_trash_worker_finished: async=%s entry=%s err=%r", async_mode, entry is not None, err)
+            if async_mode and self._trash_progress_dialog is not None:
+                self._trash_progress_dialog.close()
+                self._trash_progress_dialog = None
+            self._trash_worker = None
+            if entry is None:
+                self._trash_busy = False
+                self.update_action_states()
+                if err == "cancelado":
+                    self.progress_label.setText("Exclusao cancelada.")
+                else:
+                    QMessageBox.critical(self, "Erro ao mover para lixeira", err[:2000] if err else "Erro desconhecido")
+                return
+            try:
+                trashed_ids = list(entry.get("interview_ids") or [])
+                _logger.info("finalize_trash_move chamado para ids=%s", trashed_ids)
+                trash_id, self.context = app_service.finalize_trash_move(self.context, entry)
+                _logger.info("finalize OK, trash_id=%s, context.rows=%d", trash_id, len(self.context.rows))
+            except Exception as exc:
+                _logger.exception("finalize_trash_move FALHOU: %s", exc)
+                self._trash_busy = False
+                self.update_action_states()
+                QMessageBox.critical(self, "Erro ao finalizar exclusao", str(exc)[:2000])
+                return
+            self._trash_undo.append(trash_id)
+            self._trash_redo.clear()
+            self._trash_session_ids.append(trash_id)
+            # Limpar _checked_ids dos ids trashados para evitar estado stale
+            for _tid in trashed_ids:
+                self._checked_ids.discard(_tid)
+            self._trash_busy = False
+            self.refresh_interviews()
+            _logger.info("apos refresh_interviews: tabela=%d linhas, statuses=%d",
+                         self.interview_table.rowCount(), len(self.statuses))
+            self.interview_table.setFocus()
+            self.update_action_states()
+            if n == 1:
+                self.progress_label.setText("1 arquivo movido para a lixeira. Ctrl+Z para desfazer.")
+            else:
+                self.progress_label.setText(f"{n} arquivos movidos para a lixeira. Ctrl+Z para desfazer.")
+
+        def undo_last_trash(self, *_args: Any) -> None:
+            if self._trash_busy or self.context is None or not self._trash_undo:
+                return
+            # Guard: se foco esta em QTextEdit editavel, delegar para o undo_action do editor
+            focus = QApplication.focusWidget()
+            if isinstance(focus, QTextEdit) and not focus.isReadOnly():
+                # Delegar ao undo nativo do editor (ou QUndoStack via undo_action)
+                if hasattr(self, "undo_action") and self.undo_action.isEnabled():
+                    self.undo_action.trigger()
+                return
+            trash_id = self._trash_undo[-1]
+            try:
+                warnings, self.context = app_service.restore_from_trash(self.context, trash_id, overwrite=False)
+            except app_service.CollisionError as exc:
+                conflict_paths = "\n".join(c["original"] for c in exc.conflicts[:20])
+                if len(exc.conflicts) > 20:
+                    conflict_paths += f"\n...e mais {len(exc.conflicts) - 20} arquivos."
+                box = QMessageBox(self)
+                box.setIcon(QMessageBox.Icon.Warning)
+                box.setWindowTitle("Conflito ao restaurar")
+                box.setText(f"{len(exc.conflicts)} arquivo(s) ja existem no destino original.")
+                box.setInformativeText("Restaurar vai sobrescrever os arquivos atuais. Essa acao nao pode ser desfeita.")
+                box.setDetailedText(conflict_paths)
+                box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
+                box.button(QMessageBox.StandardButton.Yes).setText("Sobrescrever")
+                box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+                if box.exec() != QMessageBox.StandardButton.Yes:
+                    return
+                try:
+                    warnings, self.context = app_service.restore_from_trash(self.context, trash_id, overwrite=True)
+                except Exception as exc2:
+                    QMessageBox.critical(self, "Erro ao restaurar", str(exc2)[:2000])
+                    return
+            except Exception as exc:
+                QMessageBox.critical(self, "Erro ao restaurar", str(exc)[:2000])
+                return
+            self._trash_undo.pop()
+            self._trash_redo.append(trash_id)
+            n = len(self._trash_entry_interview_ids(trash_id))
+            self.refresh_interviews()
+            self.interview_table.setFocus()
+            self.update_action_states()
+            self.progress_label.setText(f"{n} arquivo(s) restaurado(s) da lixeira. Ctrl+Shift+Z para refazer.")
+            if warnings:
+                self.progress_label.setText(self.progress_label.text() + " Aviso: " + "; ".join(warnings))
+
+        def redo_last_trash(self, *_args: Any) -> None:
+            if self._trash_busy or self.context is None or not self._trash_redo:
+                return
+            focus = QApplication.focusWidget()
+            if isinstance(focus, QTextEdit) and not focus.isReadOnly():
+                if hasattr(self, "redo_action") and self.redo_action.isEnabled():
+                    self.redo_action.trigger()
+                return
+            trash_id = self._trash_redo[-1]
+            try:
+                _, self.context = app_service.redo_trash(self.context, trash_id)
+            except app_service.RedoUnavailableError as exc:
+                self._trash_redo.clear()
+                self.update_action_states()
+                QMessageBox.warning(
+                    self,
+                    "Nao e possivel refazer",
+                    f"O projeto foi alterado desde a ultima acao. Refazer foi cancelado para preservar suas mudancas.\n\nDetalhe: {exc}",
+                )
+                return
+            except Exception as exc:
+                QMessageBox.critical(self, "Erro ao refazer", str(exc)[:2000])
+                return
+            self._trash_redo.pop()
+            self._trash_undo.append(trash_id)
+            n = len(self._trash_entry_interview_ids(trash_id))
+            self.refresh_interviews()
+            self.interview_table.setFocus()
+            self.update_action_states()
+            self.progress_label.setText(f"{n} arquivo(s) movido(s) para a lixeira novamente.")
+
+        def _trash_entry_interview_ids(self, trash_id: str) -> list[str]:
+            if self.context is None:
+                return []
+            from .utils import read_json as _read_json
+            try:
+                manifest = _read_json(project_store.trash_root(self.context.paths) / trash_id / project_store.TRASH_MANIFEST)
+            except Exception:
+                return []
+            return list((manifest or {}).get("interview_ids") or [])
+
+        def _maybe_purge_session_trash(self) -> None:
+            """Chamado ao fechar projeto/app. Pergunta se deve apagar permanentemente
+            itens da lixeira criados nesta sessao."""
+            if self.context is None or not self._trash_session_ids:
+                return
+            total_bytes = 0
+            existing_ids: list[str] = []
+            root = project_store.trash_root(self.context.paths)
+            for tid in self._trash_session_ids:
+                entry_dir = root / tid
+                if not entry_dir.exists():
+                    continue
+                existing_ids.append(tid)
+                for f in entry_dir.rglob("*"):
+                    if f.is_file():
+                        try:
+                            total_bytes += f.stat().st_size
+                        except OSError:
+                            pass
+            if not existing_ids:
+                return
+            size_mb = total_bytes / (1024 * 1024)
+            n = len(existing_ids)
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Question)
+            box.setWindowTitle("Lixeira do projeto")
+            box.setText(f"Ha {n} item(ns) na lixeira desta sessao ({size_mb:.1f} MB). Manter em .trash/ ou apagar definitivamente?")
+            keep = box.addButton("Manter", QMessageBox.ButtonRole.AcceptRole)
+            purge = box.addButton("Apagar definitivamente", QMessageBox.ButtonRole.DestructiveRole)
+            box.setDefaultButton(keep)
+            box.exec()
+            if box.clickedButton() is purge:
+                try:
+                    app_service.purge_trash_entries(self.context, existing_ids)
+                except Exception as exc:
+                    _logger.warning("purge_trash_entries falhou: %s", exc)
+            self._trash_session_ids = []
+            self._trash_undo = []
+            self._trash_redo = []
+
+        def _select_row_by_interview_id(self, interview_id: str) -> None:
+            """Restaura selecao visual apos refresh_interviews. Critico: usar
+            selectionModel().setCurrentIndex(idx, flags) ao inves do metodo do
+            widget, que aplica SelectionFlag dependente dos modificadores teclados
+            (e apaga a selecao quando a chamada acontece dentro de um handler de
+            shortcut com Ctrl/Alt pressionados)."""
+            from PySide6.QtCore import QItemSelectionModel
+            flags = (
+                QItemSelectionModel.SelectionFlag.ClearAndSelect
+                | QItemSelectionModel.SelectionFlag.Rows
+            )
+            for row_idx in range(self.interview_table.rowCount()):
+                if self.interview_table.isRowHidden(row_idx):
+                    continue
+                item = self.interview_table.item(row_idx, COL_ARQUIVO)
+                if item and str(item.data(Qt.ItemDataRole.UserRole) or "") == interview_id:
+                    sel_model = self.interview_table.selectionModel()
+                    idx = self.interview_table.model().index(row_idx, COL_ARQUIVO)
+                    sel_model.setCurrentIndex(idx, flags)
+                    self.interview_table.scrollToItem(item)
+                    self.interview_table.setFocus()
+                    self.update_action_states()
+                    return
+
+        def _show_library_context_menu(self, pos) -> None:
+            if self.context is None:
+                return
+            viewport = self.interview_table.viewport()
+            # Shift+F10 / menu key: pos pode vir invalido; usar centro do item atual
+            if pos.x() < 0 or pos.y() < 0:
+                current = self.interview_table.currentItem()
+                if current is None:
+                    return
+                rect = self.interview_table.visualItemRect(current)
+                pos = rect.center()
+                cursor_row = current.row()
+            else:
+                cursor_row = self.interview_table.rowAt(pos.y())
+            if cursor_row < 0:
+                return  # area vazia: sem menu
+            target_ids = self.effective_target_ids(cursor_row)
+            single = len(target_ids) == 1
+            job_status = (self.context.jobs.get(target_ids[0]) or {}).get("status") if single else ""
+            busy_single = job_status in ("Executando", "Na fila")
+            menu = QMenu(self)
+            self.rename_interview_action.setEnabled(single and not busy_single)
+            self.move_up_action.setEnabled(single and not busy_single)
+            self.move_down_action.setEnabled(single and not busy_single)
+            menu.addAction(self.rename_interview_action)
+            menu.addSeparator()
+            menu.addAction(self.move_up_action)
+            menu.addAction(self.move_down_action)
+            menu.addSeparator()
+            menu.addAction(self.delete_transcription_action)
+            menu.addAction(self.trash_selected_action)
+            menu.exec(viewport.mapToGlobal(pos))
 
         def export_reviews(self, default_scope: str = "current") -> None:
             if not self.save_current_turn(force=bool(self.review and self.current_turn_id)):
@@ -3959,8 +4877,8 @@ if QT_IMPORT_ERROR is None:
                         self.load_turn_table()
                         if self.turns:
                             self.select_turn_by_index(0, seek=False)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _logger.warning("Falha ao recarregar review de %s: %s", current_id, exc)
             self.update_action_states()
             if self._close_after_worker:
                 self._close_after_worker = False
@@ -3997,13 +4915,61 @@ if QT_IMPORT_ERROR is None:
                 if msg.clickedButton() == wait_btn:
                     event.ignore()
                     return
-                # Force close: terminate the worker thread
+                # Force close: sinaliza cancel e aguarda graciosamente.
+                # NAO chamar terminate() — corrompe copy/CUDA/tokenizer in-flight (bug 3).
                 self.worker.cancel_after_step = True
-                self.worker.terminate()
-                self.worker.wait(3000)
+                if not self.worker.wait(5000):
+                    _logger.warning(
+                        "Transcription worker did not stop gracefully within 5s; abandoning thread."
+                    )
+            # Trash worker: NUNCA terminate() (pode corromper copy in-flight)
+            if getattr(self, "_trash_worker", None) is not None and self._trash_worker.isRunning():
+                self._trash_worker.request_cancel()
+                self._trash_worker.wait()  # bloqueante — sem timeout
+            # Purga interativa da lixeira da sessao
+            try:
+                self._maybe_purge_session_trash()
+            except Exception as exc:
+                _logger.warning("_maybe_purge_session_trash falhou: %s", exc)
             self.save_current_turn()
             self.player.stop()
             event.accept()
+
+
+def _apply_dark_theme(app) -> None:
+    """Aplica tema escuro global (Fusion + QPalette dark).
+
+    Fusion ignora o tema do SO (evita variacao claro/escuro conforme o Windows);
+    QPalette forca cores escuras consistentes. Desabilitados com cor apagada."""
+    from PySide6.QtGui import QPalette, QColor
+    from PySide6.QtWidgets import QStyleFactory
+    fusion = QStyleFactory.create("Fusion")
+    if fusion is not None:
+        app.setStyle(fusion)
+    pal = QPalette()
+    pal.setColor(QPalette.ColorRole.Window, QColor(45, 45, 45))
+    pal.setColor(QPalette.ColorRole.WindowText, QColor(220, 220, 220))
+    pal.setColor(QPalette.ColorRole.Base, QColor(30, 30, 30))
+    pal.setColor(QPalette.ColorRole.AlternateBase, QColor(45, 45, 45))
+    pal.setColor(QPalette.ColorRole.ToolTipBase, QColor(45, 45, 45))
+    pal.setColor(QPalette.ColorRole.ToolTipText, QColor(220, 220, 220))
+    pal.setColor(QPalette.ColorRole.Text, QColor(220, 220, 220))
+    pal.setColor(QPalette.ColorRole.PlaceholderText, QColor(140, 140, 140))
+    pal.setColor(QPalette.ColorRole.Button, QColor(45, 45, 45))
+    pal.setColor(QPalette.ColorRole.ButtonText, QColor(220, 220, 220))
+    pal.setColor(QPalette.ColorRole.BrightText, QColor(255, 80, 80))
+    pal.setColor(QPalette.ColorRole.Link, QColor(64, 160, 232))
+    pal.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
+    pal.setColor(QPalette.ColorRole.HighlightedText, QColor(0, 0, 0))
+    for role in (QPalette.ColorRole.WindowText, QPalette.ColorRole.Text, QPalette.ColorRole.ButtonText):
+        pal.setColor(QPalette.ColorGroup.Disabled, role, QColor(127, 127, 127))
+    pal.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Highlight, QColor(80, 80, 80))
+    pal.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.HighlightedText, QColor(200, 200, 200))
+    app.setPalette(pal)
+    # Tooltip explicito (em alguns estilos o ToolTipBase do palette nao cobre tudo)
+    app.setStyleSheet(
+        "QToolTip { color: #dcdcdc; background-color: #2d2d2d; border: 1px solid #555; }"
+    )
 
 
 def main() -> int:
@@ -4030,6 +4996,7 @@ def main() -> int:
         else:
             project_root = pf
     app = QApplication(sys.argv)
+    _apply_dark_theme(app)
     window = ReviewStudioWindow(project_root=project_root)
     window.show()
     if os.environ.get("QT_QPA_PLATFORM", "").lower() != "offscreen":

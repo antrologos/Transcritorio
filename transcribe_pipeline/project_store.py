@@ -15,6 +15,8 @@ LEGACY_PROJECT_FILENAME = "projeto.transcricao.json"
 METADATA_FILENAME = "metadados.csv"
 INTERNAL_PROJECT_DIR = "00_project"
 JOBS_FILENAME = "jobs.json"
+TRASH_DIRNAME = ".trash"
+TRASH_MANIFEST = "undo.json"
 
 METADATA_COLUMNS = [
     "file_id",
@@ -150,6 +152,244 @@ def default_project(paths: Paths, config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _find_collisions(moved_files: list[dict]) -> list[dict]:
+    """Check which `original` paths already exist on disk. Returns rich info."""
+    import os
+    conflicts: list[dict] = []
+    for mf in moved_files:
+        original = mf.get("original") or ""
+        if not original:
+            continue
+        p = Path(original)
+        if p.exists():
+            try:
+                st = p.stat()
+                conflicts.append({
+                    "original": original,
+                    "size_now": int(st.st_size),
+                    "size_was": int(mf.get("size") or 0),
+                    "mtime_now": float(st.st_mtime),
+                    "mtime_was": float(mf.get("mtime") or 0.0),
+                })
+            except OSError:
+                conflicts.append({
+                    "original": original,
+                    "size_now": -1,
+                    "size_was": int(mf.get("size") or 0),
+                    "mtime_now": 0.0,
+                    "mtime_was": float(mf.get("mtime") or 0.0),
+                })
+    return conflicts
+
+
+def _build_undo_entry(
+    trash_id: str,
+    interview_ids: list[str],
+    csv_mtimes: dict[str, float],
+    snapshots: dict[str, Any],
+    moved_files: list[dict],
+    status: str = "complete",
+    pending_deletes: list[str] | None = None,
+) -> dict[str, Any]:
+    """Canonical structure for .trash/<trash_id>/undo.json."""
+    entry: dict[str, Any] = {
+        "trash_id": trash_id,
+        "created_at": now_utc(),
+        "interview_ids": list(interview_ids),
+        "csv_mtimes": dict(csv_mtimes),
+        "snapshots": dict(snapshots),
+        "moved_files": list(moved_files),
+        "status": status,
+    }
+    if pending_deletes is not None:
+        entry["pending_deletes"] = list(pending_deletes)
+    return entry
+
+
+def trash_root(paths: Paths) -> Path:
+    return paths.output_root / INTERNAL_PROJECT_DIR / TRASH_DIRNAME
+
+
+def generate_trash_id() -> str:
+    import secrets
+    from datetime import datetime
+    stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+    return f"{stamp}_{secrets.token_hex(2)}"
+
+
+def _read_csv_rows(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    with path.open("r", newline="", encoding="utf-8-sig") as handle:
+        return [dict(row) for row in csv.DictReader(handle)]
+
+
+def _write_csv_rows(path: Path, rows: list[dict[str, str]], fieldnames: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8-sig") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({k: row.get(k, "") for k in fieldnames})
+
+
+def manifest_csv_path(paths: Paths) -> Path:
+    return paths.manifest_dir / "manifest.csv"
+
+
+def speakers_map_csv_path(paths: Paths) -> Path:
+    return paths.manifest_dir / "speakers_map.csv"
+
+
+def snapshot_interview_state(paths: Paths, interview_ids: list[str]) -> dict[str, Any]:
+    """Return CSV/JSON rows belonging to these ids, for trash undo.json."""
+    ids_set = set(interview_ids)
+    manifest_rows = [r for r in _read_csv_rows(manifest_csv_path(paths)) if r.get("interview_id") in ids_set]
+    meta_path = metadata_path(paths)
+    metadata_rows = [r for r in _read_csv_rows(meta_path) if r.get("file_id") in ids_set]
+    speakers_rows = [r for r in _read_csv_rows(speakers_map_csv_path(paths)) if r.get("interview_id") in ids_set]
+    jobs_entries: dict[str, Any] = {}
+    jpath = jobs_path(paths)
+    if jpath.exists():
+        current = read_json(jpath) or {}
+        for iid in interview_ids:
+            if iid in current:
+                jobs_entries[iid] = current[iid]
+    return {
+        "manifest_rows": manifest_rows,
+        "metadata_rows": metadata_rows,
+        "speakers_rows": speakers_rows,
+        "jobs_entries": jobs_entries,
+    }
+
+
+def csv_mtimes_snapshot(paths: Paths) -> dict[str, float]:
+    """Capture mtimes of the 3 CSVs for conflict detection at restore time."""
+    result: dict[str, float] = {}
+    for label, p in [
+        ("manifest.csv", manifest_csv_path(paths)),
+        ("metadados.csv", metadata_path(paths)),
+        ("speakers_map.csv", speakers_map_csv_path(paths)),
+    ]:
+        try:
+            result[label] = p.stat().st_mtime if p.exists() else 0.0
+        except OSError:
+            result[label] = 0.0
+    return result
+
+
+def remove_ids_from_csvs(paths: Paths, interview_ids: list[str]) -> None:
+    """Rewrite all project CSVs and jobs.json without the given ids."""
+    ids_set = set(interview_ids)
+    mpath = manifest_csv_path(paths)
+    mrows = _read_csv_rows(mpath)
+    if mrows:
+        fieldnames = list(mrows[0].keys())
+        _write_csv_rows(mpath, [r for r in mrows if r.get("interview_id") not in ids_set], fieldnames)
+    metapath = metadata_path(paths)
+    mdata = read_file_metadata(metapath)
+    for iid in interview_ids:
+        mdata.pop(iid, None)
+    write_file_metadata(metapath, mdata)
+    spath = speakers_map_csv_path(paths)
+    srows = _read_csv_rows(spath)
+    if srows:
+        fieldnames = list(srows[0].keys())
+        _write_csv_rows(spath, [r for r in srows if r.get("interview_id") not in ids_set], fieldnames)
+    jpath = jobs_path(paths)
+    if jpath.exists():
+        current = read_json(jpath) or {}
+        for iid in interview_ids:
+            current.pop(iid, None)
+        jpath.parent.mkdir(parents=True, exist_ok=True)
+        write_json(jpath, current)
+
+
+def restore_ids_to_csvs(paths: Paths, snapshots: dict[str, Any]) -> None:
+    """Reinject snapshotted rows. If csv doesn't exist yet, create it."""
+    manifest_rows = snapshots.get("manifest_rows") or []
+    if manifest_rows:
+        mpath = manifest_csv_path(paths)
+        current = _read_csv_rows(mpath)
+        fieldnames = list(current[0].keys()) if current else list(manifest_rows[0].keys())
+        existing_ids = {r.get("interview_id") for r in current}
+        merged = current + [r for r in manifest_rows if r.get("interview_id") not in existing_ids]
+        _write_csv_rows(mpath, merged, fieldnames)
+    metadata_rows = snapshots.get("metadata_rows") or []
+    if metadata_rows:
+        metapath = metadata_path(paths)
+        mdata = read_file_metadata(metapath)
+        for row in metadata_rows:
+            fid = row.get("file_id")
+            if fid and fid not in mdata:
+                mdata[fid] = {k: row.get(k, "") for k in METADATA_COLUMNS}
+        write_file_metadata(metapath, mdata)
+    speakers_rows = snapshots.get("speakers_rows") or []
+    if speakers_rows:
+        spath = speakers_map_csv_path(paths)
+        current = _read_csv_rows(spath)
+        fieldnames = list(current[0].keys()) if current else list(speakers_rows[0].keys())
+        key = "interview_id"
+        existing_keys = {(r.get(key), r.get("speaker_id"), r.get("role")) for r in current}
+        merged = current + [r for r in speakers_rows if (r.get(key), r.get("speaker_id"), r.get("role")) not in existing_keys]
+        _write_csv_rows(spath, merged, fieldnames)
+    jobs_entries = snapshots.get("jobs_entries") or {}
+    if jobs_entries:
+        jpath = jobs_path(paths)
+        jpath.parent.mkdir(parents=True, exist_ok=True)
+        current = read_json(jpath) if jpath.exists() else {}
+        for iid, entry in jobs_entries.items():
+            if iid not in current:
+                # Reset status to Pendente (nao ressuscitar jobs Executando)
+                clean = dict(entry)
+                clean["status"] = "Pendente"
+                clean["stage"] = ""
+                clean["progress"] = 0
+                clean["started_at"] = ""
+                clean["finished_at"] = ""
+                current[iid] = clean
+        write_json(jpath, current)
+
+
+def _reorder_move(
+    ordered_ids: list[str],
+    moving_id: str,
+    direction: int,
+    hidden_ids: set[str] | None = None,
+) -> list[str]:
+    """Move moving_id up (-1) or down (+1) by one position among visible ids."""
+    if direction not in (-1, 1):
+        raise ValueError(f"direction must be -1 or +1, got {direction}")
+    hidden = hidden_ids or set()
+    if moving_id not in ordered_ids or moving_id in hidden:
+        return list(ordered_ids)
+    visible = [iid for iid in ordered_ids if iid not in hidden]
+    if moving_id not in visible:
+        return list(ordered_ids)
+    v_idx = visible.index(moving_id)
+    target_v_idx = v_idx + direction
+    if target_v_idx < 0 or target_v_idx >= len(visible):
+        return list(ordered_ids)
+    target_neighbor = visible[target_v_idx]
+    new = list(ordered_ids)
+    i_move = new.index(moving_id)
+    i_target = new.index(target_neighbor)
+    new[i_move], new[i_target] = new[i_target], new[i_move]
+    return new
+
+
+def _merge_interview_order(
+    existing_order: list[str],
+    current_ids: list[str],
+) -> list[str]:
+    """Keep ordering for ids still present; append new ids in their original order."""
+    current_set = set(current_ids)
+    kept = [iid for iid in existing_order if iid in current_set]
+    kept_set = set(kept)
+    appended = [iid for iid in current_ids if iid not in kept_set]
+    return kept + appended
+
+
 def normalize_project(project: dict[str, Any], paths: Paths, config: dict[str, Any]) -> dict[str, Any]:
     result = dict(project)
     result["schema_version"] = PROJECT_SCHEMA_VERSION
@@ -170,6 +410,8 @@ def normalize_project(project: dict[str, Any], paths: Paths, config: dict[str, A
     defaults = default_transcription_settings(config)
     defaults.update(dict(result.get("defaults") or {}))
     result["defaults"] = defaults
+    result.setdefault("interview_order", [])
+    result.setdefault("manual_order_active", False)
     return result
 
 
