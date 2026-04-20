@@ -383,6 +383,38 @@ jobs:
           if (-not $TorchCuda) { throw "torch_cuda.dll faltando em variant=full" }
           Write-Host "  torch_cuda.dll: $($TorchCuda.FullName) ($([math]::Round($TorchCuda.Length/1MB, 0)) MB)"
 
+      - name: Split bundle — extrai CUDA libs para cuda_pack/
+        shell: pwsh
+        run: |
+          # split_bundle.py move arquivos CUDA de dist/Transcritorio/ para
+          # cuda_pack/, preservando estrutura de diretorios. O bundle
+          # base resultante roda em CPU; os arquivos em cuda_pack/ podem
+          # ser redundantemente copiados para restaurar a aceleracao.
+          python packaging/split_bundle.py dist/Transcritorio cuda_pack
+          # Validacao rapida
+          if (-not (Test-Path "cuda_pack/FILES.manifest")) { throw "split: manifest nao gerado" }
+          if (Test-Path "dist/Transcritorio/_internal/torch/lib/torch_cuda.dll") {
+            throw "split: torch_cuda.dll ainda no dist/ (deveria ter movido)"
+          }
+          if (-not (Test-Path "cuda_pack/_internal/torch/lib/torch_cuda.dll")) {
+            throw "split: torch_cuda.dll NAO apareceu em cuda_pack/"
+          }
+          $ManifestLines = (Get-Content "cuda_pack/FILES.manifest" | Measure-Object -Line).Lines
+          Write-Host "  split: $ManifestLines arquivos movidos"
+          $DistSize = [math]::Round(((Get-ChildItem dist/Transcritorio -Recurse -File | Measure-Object Length -Sum).Sum / 1GB), 2)
+          $PackSize = [math]::Round(((Get-ChildItem cuda_pack -Recurse -File | Measure-Object Length -Sum).Sum / 1GB), 2)
+          Write-Host "  Base bundle (CPU): $DistSize GB"
+          Write-Host "  CUDA pack:         $PackSize GB"
+
+      - name: Zip cuda_pack
+        shell: pwsh
+        run: |
+          $Version = (Select-String 'version = "([^"]+)"' pyproject.toml).Matches.Groups[1].Value
+          $ZipName = "transcritorio-cuda-pack-$Version-win64.zip"
+          Compress-Archive -Path cuda_pack\* -DestinationPath $ZipName -CompressionLevel Optimal
+          $ZipSize = [math]::Round((Get-Item $ZipName).Length / 1MB, 0)
+          Write-Host "  $ZipName ($ZipSize MB)"
+
       - name: Install Inno Setup
         shell: pwsh
         run: |
@@ -410,6 +442,13 @@ jobs:
           path: installer-out/*.exe
           retention-days: 30
 
+      - name: Upload CUDA pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: Transcritorio-windows-cuda-pack
+          path: transcritorio-cuda-pack-*-win64.zip
+          retention-days: 30
+
   # =========================================================================
   # Cria GitHub Release quando gatilho foi tag push (nao workflow_dispatch)
   # =========================================================================
@@ -432,5 +471,6 @@ jobs:
             artifacts/**/*.AppImage
             artifacts/**/*.dmg
             artifacts/**/*-Setup.exe
+            artifacts/**/*-cuda-pack-*.zip
           draft: false
           generate_release_notes: true

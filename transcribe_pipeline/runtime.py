@@ -144,6 +144,30 @@ def redacted_token_env(env: Mapping[str, str], token_env: str = "TRANSCRITORIO_M
 
 _detected_device: str | None = None
 _cuda_libs_detected: bool | None = None
+_nvidia_gpu_detected: bool | None = None
+
+
+def has_nvidia_gpu() -> bool:
+    """Return True when nvidia-smi reports at least one NVIDIA GPU.
+
+    Used by the first-run GUI dialog to offer the CUDA pack install on
+    Windows when the base installer was chosen. Cached. Windows-only in
+    practice (Mac doesn't have NVIDIA; Linux bundles are CPU by default).
+    """
+    global _nvidia_gpu_detected
+    if _nvidia_gpu_detected is not None:
+        return _nvidia_gpu_detected
+    try:
+        import subprocess
+        # No-window flag for Windows so nvidia-smi doesn't flash a console
+        kwargs: dict = {"capture_output": True, "timeout": 5}
+        if sys.platform == "win32":
+            kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        result = subprocess.run(["nvidia-smi"], **kwargs)
+        _nvidia_gpu_detected = result.returncode == 0
+    except Exception:
+        _nvidia_gpu_detected = False
+    return _nvidia_gpu_detected
 
 
 def cuda_libs_present() -> bool:

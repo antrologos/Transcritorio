@@ -2858,6 +2858,61 @@ if QT_IMPORT_ERROR is None:
             self.diarize_checkbox.setChecked(bool(self.context.config.get("diarize", True)) if self.context else True)
             self.diarize_checkbox.blockSignals(False)
 
+        def _maybe_offer_cuda_install(self) -> None:
+            """Se Windows + NVIDIA detectada + bundle sem torch_cuda + flag
+            nao setada, oferece instalar CUDA pack. Chamado uma vez no
+            startup, nao-bloqueante."""
+            if sys.platform != "win32":
+                return
+            from . import runtime as _runtime
+            flag = _runtime.app_data_dir() / "cuda_prompt_dismissed.flag"
+            if flag.exists():
+                return
+            # Ja tem CUDA no bundle? Entao nada a oferecer.
+            if _runtime.cuda_libs_present():
+                return
+            # Sem placa NVIDIA? Nada a oferecer.
+            if not _runtime.has_nvidia_gpu():
+                return
+            # Todas as condicoes atendidas: oferece install
+            msg = (
+                "Detectamos uma placa grafica NVIDIA no seu computador.\n\n"
+                "O Transcritorio foi instalado sem a aceleracao por placa "
+                "grafica. Ativando a aceleracao, a transcricao fica de 3 a 9 "
+                "vezes mais rapida, mas exige um download adicional de cerca "
+                "de 1 GB.\n\n"
+                "Para ativar agora:\n"
+                "1. Baixe o pacote de aceleracao no link abaixo\n"
+                "2. Extraia o zip sobre a pasta onde o Transcritorio esta "
+                "instalado (normalmente em C:\\Program Files\\Transcritorio)\n"
+                "3. Reinicie o Transcritorio\n\n"
+                "Ou reinstale o Transcritorio marcando 'Aceleracao para placas "
+                "graficas NVIDIA' no instalador."
+            )
+            box = QMessageBox(self)
+            box.setWindowTitle("Aceleracao disponivel (NVIDIA detectada)")
+            box.setIcon(QMessageBox.Icon.Information)
+            box.setText(msg)
+            box.setTextFormat(Qt.TextFormat.PlainText)
+            btn_download = box.addButton("Abrir pagina de download", QMessageBox.ButtonRole.AcceptRole)
+            box.addButton("Agora nao", QMessageBox.ButtonRole.RejectRole)
+            btn_never = box.addButton("Nunca perguntar", QMessageBox.ButtonRole.DestructiveRole)
+            box.exec()
+            clicked = box.clickedButton()
+            if clicked is btn_download:
+                from . import __version__
+                url = QUrl(f"https://github.com/antrologos/Transcritorio/releases/download/v{__version__}/transcritorio-cuda-pack-{__version__}-win64.zip")
+                QDesktopServices.openUrl(url)
+                # Nao seta flag — deixa aparecer de novo caso usuario
+                # nao complete o download.
+            elif clicked is btn_never:
+                try:
+                    flag.parent.mkdir(parents=True, exist_ok=True)
+                    flag.write_text("dismissed\n", encoding="utf-8")
+                except Exception as exc:
+                    _logger.warning("nao foi possivel persistir flag CUDA dismiss: %s", exc)
+            # Caso "Agora nao": nao seta flag; pergunta de novo no proximo start
+
         def show_startup_dialog(self) -> None:
             # Tela A: Setup wizard when AI components are missing
             if not app_service.required_models_ready():
@@ -2880,6 +2935,11 @@ if QT_IMPORT_ERROR is None:
                 if not app_service.required_models_ready():
                     self.refresh_interviews()
                     return
+
+            # Offer CUDA install dialog if NVIDIA detectada e bundle nao tem
+            # (chamado antes do project chooser; o dialogo e nao-bloqueante
+            # no sentido de que o usuario so tem 3 opcoes e a resposta fecha).
+            self._maybe_offer_cuda_install()
 
             # Tela B: Project chooser when everything is ready
             dialog = ProjectChooserDialog(self.context, self)
