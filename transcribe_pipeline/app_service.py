@@ -49,7 +49,7 @@ def resolve_config_path(project_root: Path | None = None) -> Path | None:
         return Path(project_root).resolve() / CONFIG_REL_PATH
     # Fallback: check CWD for a project
     cwd = Path.cwd().resolve()
-    if (cwd / project_store.PROJECT_FILENAME).exists() or (cwd / CONFIG_REL_PATH).exists():
+    if project_store.find_project_file(cwd) is not None or (cwd / CONFIG_REL_PATH).exists():
         return cwd / CONFIG_REL_PATH
     return None
 
@@ -104,7 +104,7 @@ def create_project(project_root: Path, project_name: str | None = None) -> Proje
 def open_project(project_reference: Path) -> ProjectContext:
     reference = project_reference.resolve()
     if reference.is_file():
-        if reference.name == project_store.PROJECT_FILENAME:
+        if reference.suffix == project_store.PROJECT_EXTENSION:
             return load_project(config_path_for_project_root(reference.parent))
         return load_project(reference)
     config_path = config_path_for_project_root(reference)
@@ -226,11 +226,20 @@ def transcribe_interviews(
     return JobResult("transcribe", failures)
 
 
-def diarize_interviews(context: ProjectContext, ids: list[str] | None = None, overrides: dict[str, Any] | None = None) -> JobResult:
+def diarize_interviews(
+    context: ProjectContext,
+    ids: list[str] | None = None,
+    overrides: dict[str, Any] | None = None,
+    progress_callback: ProgressCallback | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+) -> JobResult:
     failures = 0
     for interview_id in selected_ids(context, ids):
         config = project_store.config_with_file_metadata(merged_config(context.config, overrides), context.metadata.get(interview_id))
-        failures += run_pyannote_diarization(context.rows, config, context.paths, ids=[interview_id], dry_run=False)
+        failures += run_pyannote_diarization(
+            context.rows, config, context.paths, ids=[interview_id], dry_run=False,
+            progress_callback=progress_callback, should_cancel=should_cancel,
+        )
     return JobResult("diarize", failures)
 
 
@@ -259,8 +268,9 @@ def download_models(
     token: str | None = None,
     progress_callback: ProgressCallback | None = None,
     should_cancel: Callable[[], bool] | None = None,
+    asr_variants: list[str] | None = None,
 ) -> JobResult:
-    failures = model_manager.download_required_models(token=token, progress_callback=progress_callback, should_cancel=should_cancel)
+    failures = model_manager.download_required_models(token=token, progress_callback=progress_callback, should_cancel=should_cancel, asr_variants=asr_variants)
     if failures:
         return JobResult("models", failures, "Falha ao baixar um ou mais modelos.")
     verify_failures = model_manager.verify_required_models(progress_callback=progress_callback)
@@ -325,6 +335,43 @@ def update_engine_config(context: ProjectContext, updates: dict[str, Any]) -> Pr
     new_context = build_context(context.config_path, config, paths, context.rows)
     write_config(context.config_path, config, header=["# Local transcription pipeline configuration."])
     return new_context
+
+
+def delete_transcription_outputs(context: ProjectContext, ids: list[str]) -> tuple[int, ProjectContext]:
+    """Delete all derived transcription files for given interview IDs.
+
+    Removes outputs in 02_asr_raw through 06_qc. Never touches original
+    source files or 00_config/00_manifest/00_project/01_audio directories.
+    Resets job status to 'Pendente'.
+    """
+    deleted = 0
+    paths = context.paths
+    dirs_to_clean = [
+        paths.asr_dir,
+        paths.asr_variants_dir,
+        paths.diarization_dir,
+        paths.canonical_dir,
+        paths.review_dir,
+        paths.qc_dir,
+    ]
+    for interview_id in ids:
+        for base_dir in dirs_to_clean:
+            if not base_dir.exists():
+                continue
+            for f in base_dir.rglob(f"{interview_id}*"):
+                if f.is_file():
+                    f.unlink()
+                    deleted += 1
+        context = update_job(context, interview_id, {
+            "status": "Pendente",
+            "stage": "",
+            "progress": 0,
+            "started_at": "",
+            "finished_at": "",
+            "last_error": "",
+            "estimated_finish_at": "",
+        })
+    return deleted, context
 
 
 def save_project_metadata(context: ProjectContext) -> ProjectContext:

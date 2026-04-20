@@ -105,24 +105,30 @@ def run_command_stream(
     def read_output() -> None:
         if process.stdout is None:
             return
+        buf = ""
         while True:
-            chunk = process.stdout.read(1)
-            if not chunk:
+            ch = process.stdout.read(1)
+            if not ch:
+                if buf:
+                    output_queue.put(buf)
                 break
-            output_queue.put(chunk)
+            buf += ch
+            if ch == "\n" or ch == "\r":
+                output_queue.put(buf)
+                buf = ""
 
     reader = threading.Thread(target=read_output, daemon=True)
     reader.start()
 
     while process.poll() is None or reader.is_alive() or not output_queue.empty():
         try:
-            chunk = output_queue.get(timeout=0.1)
+            chunk = output_queue.get(timeout=2.0)
         except queue.Empty:
             chunk = ""
         if chunk:
             stdout_parts.append(chunk)
-            if on_output is not None:
-                on_output(chunk)
+        if on_output is not None:
+            on_output(chunk)
         if process.poll() is None and should_cancel is not None and should_cancel():
             cancelled = True
             process.terminate()
@@ -133,7 +139,8 @@ def run_command_stream(
                 process.wait(timeout=5)
         if process.poll() is not None and not reader.is_alive() and output_queue.empty():
             break
-        time.sleep(0.01)
+        if not chunk:
+            time.sleep(0.01)
 
     reader.join(timeout=1)
     return_code = process.wait()

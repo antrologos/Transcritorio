@@ -17,7 +17,7 @@ from .whisperx_runner import run_whisperx
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Local interview transcription pipeline.")
-    parser.add_argument("--project", type=Path, default=None, help="Project root directory (contains projeto.transcricao.json).")
+    parser.add_argument("--project", type=Path, default=None, help="Project root directory or .transcritorio file.")
     parser.add_argument("--config", type=Path, default=None)
     subparsers = parser.add_subparsers(dest="command", required=True)
 

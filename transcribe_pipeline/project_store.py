@@ -10,7 +10,8 @@ from .utils import now_utc, read_json, relative_to, write_json
 
 
 PROJECT_SCHEMA_VERSION = 1
-PROJECT_FILENAME = "projeto.transcricao.json"
+PROJECT_EXTENSION = ".transcritorio"
+LEGACY_PROJECT_FILENAME = "projeto.transcricao.json"
 METADATA_FILENAME = "metadados.csv"
 INTERNAL_PROJECT_DIR = "00_project"
 JOBS_FILENAME = "jobs.json"
@@ -63,8 +64,45 @@ LANGUAGE_LABELS = {
 }
 
 
+def safe_project_filename(project_name: str) -> str:
+    """Generate a safe filename from the project name (e.g. 'Meu Projeto' -> 'Meu Projeto.transcritorio')."""
+    safe = "".join(
+        c if c.isalnum() or c in (" ", "-", "_") else "_"
+        for c in project_name
+    ).strip(" ._")
+    return f"{safe or 'Projeto'}{PROJECT_EXTENSION}"
+
+
+def find_project_file(project_root: Path) -> Path | None:
+    """Find the .transcritorio project file in the project root.
+
+    If no .transcritorio file exists but the legacy projeto.transcricao.json
+    does, migrate it automatically (rename to <project_name>.transcritorio).
+    Returns None if no project file is found.
+    """
+    candidates = list(project_root.glob(f"*{PROJECT_EXTENSION}"))
+    if candidates:
+        return candidates[0]
+    legacy = project_root / LEGACY_PROJECT_FILENAME
+    if legacy.exists():
+        import json as _json
+        try:
+            data = _json.loads(legacy.read_text(encoding="utf-8"))
+            name = data.get("project_name", project_root.name)
+        except (ValueError, OSError):
+            name = project_root.name
+        new_path = project_root / safe_project_filename(name)
+        legacy.rename(new_path)
+        return new_path
+    return None
+
+
 def project_path(paths: Paths) -> Path:
-    return paths.project_root / PROJECT_FILENAME
+    found = find_project_file(paths.project_root)
+    if found is not None:
+        return found
+    # Fallback for new projects: use folder name
+    return paths.project_root / safe_project_filename(paths.project_root.name)
 
 
 def metadata_path(paths: Paths) -> Path:

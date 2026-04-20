@@ -1,13 +1,49 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+import numpy as np
 import os
+import threading
+import time
+import wave as wave_mod
 
 from .config import Paths
 from .manifest import selected_rows
 from . import model_manager, runtime
 from .utils import append_jsonl, now_utc, write_json
+
+ProgressCallback = Callable[[dict[str, Any]], None]
+
+
+def _load_wav_as_tensor(audio_path: Path):
+    """Load a WAV file as a torch tensor dict, bypassing torchcodec.
+
+    Returns {"waveform": (1, T) float32 tensor, "sample_rate": int}.
+    This avoids the torchcodec/FFmpeg DLL dependency that causes
+    NameError: 'AudioDecoder' on systems without FFmpeg DLLs registered.
+    """
+    import torch
+
+    with wave_mod.open(str(audio_path), "r") as wf:
+        sample_rate = wf.getframerate()
+        n_channels = wf.getnchannels()
+        sampwidth = wf.getsampwidth()
+        raw = wf.readframes(wf.getnframes())
+
+    if sampwidth == 2:
+        samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+    elif sampwidth == 4:
+        samples = np.frombuffer(raw, dtype=np.int32).astype(np.float32) / 2147483648.0
+    else:
+        raise ValueError(f"Unsupported WAV sample width: {sampwidth} bytes")
+
+    if n_channels > 1:
+        samples = samples.reshape(-1, n_channels)[:, 0]
+
+    waveform = torch.from_numpy(samples).unsqueeze(0)  # (1, T)
+    return {"waveform": waveform, "sample_rate": sample_rate}
 
 
 def run_pyannote_diarization(
@@ -16,6 +52,8 @@ def run_pyannote_diarization(
     paths: Paths,
     ids: list[str] | None = None,
     dry_run: bool = False,
+    progress_callback: ProgressCallback | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> int:
     failures = 0
     token_env = str(config["model_download_token_env"])
@@ -32,10 +70,21 @@ def run_pyannote_diarization(
             print(f"pyannote {audio_path} --model {model_name} --offline {speaker_config_summary(config)}")
         return 0
 
+    def emit(event: str, progress: int, message: str) -> None:
+        if progress_callback is not None:
+            progress_callback({"event": event, "progress": progress, "message": message})
+
+    def _ts() -> str:
+        return time.strftime("%H:%M:%S")
+
+    emit("diarize_progress", 0, "Carregando modelo de identificacao de falantes...")
+    print(f"[{_ts()}] [diarize] Inicio da diarizacao", flush=True)
+
     runtime.apply_secure_hf_environment(offline=True, token_env=token_env)
     if config.get("pyannote_metrics_enabled") is not None:
         os.environ["PYANNOTE_METRICS_ENABLED"] = str(config["pyannote_metrics_enabled"])
 
+    print(f"[{_ts()}] [diarize] Importando torch/pyannote...", flush=True)
     try:
         import torch
         from pyannote.audio import Pipeline
@@ -47,6 +96,7 @@ def run_pyannote_diarization(
     if fell_back:
         print("[Transcritorio] CUDA indisponivel. Usando CPU para diarizacao.")
     device = torch.device(effective_device)
+    print(f"[{_ts()}] [diarize] Device: {effective_device}. Carregando pipeline...", flush=True)
     try:
         checkpoint = model_name if Path(model_name).exists() else model_manager.local_pyannote_checkpoint()
         pipeline = Pipeline.from_pretrained(checkpoint, token=None, cache_dir=str(runtime.model_cache_dir())).to(device)
@@ -54,7 +104,14 @@ def run_pyannote_diarization(
         print(f"Could not load local pyannote model: {exc}")
         return len(rows_to_run) or 1
 
-    for row in rows_to_run:
+    print(f"[{_ts()}] [diarize] Pipeline carregado.", flush=True)
+    emit("diarize_progress", 20, "Modelo carregado.")
+    total = len(rows_to_run)
+
+    for idx, row in enumerate(rows_to_run):
+        if should_cancel is not None and should_cancel():
+            failures += total - idx
+            break
         interview_id = row["interview_id"]
         audio_path = diarization_audio_path(paths, row)
         if not audio_path.exists():
@@ -62,18 +119,60 @@ def run_pyannote_diarization(
             log_job(paths, interview_id, "error", model_name, audio_path, "audio file missing")
             continue
 
+        file_start_pct = 20 + int(70 * idx / max(1, total))
+        file_end_pct = 20 + int(70 * (idx + 1) / max(1, total))
+        emit("diarize_progress", file_start_pct, f"Processando {interview_id}...")
+
         try:
-            output = pipeline(str(audio_path), **speaker_kwargs(config))
+            print(f"[{_ts()}] [diarize] Carregando audio {interview_id}...", flush=True)
+            audio_tensor = _load_wav_as_tensor(audio_path)
+            print(f"[{_ts()}] [diarize] Audio carregado. Rodando pipeline (pode levar alguns minutos)...", flush=True)
+
+            # Heartbeat: emit progress every 5s so GUI doesn't appear frozen
+            heartbeat_stop = threading.Event()
+            t0 = time.monotonic()
+
+            def _heartbeat() -> None:
+                # Exponential curve calibrated from benchmark data:
+                # GPU diarize ~1.7s per minute of audio (tau=120 covers
+                # 63% at 2min, 86% at 4min, 95% at 6min).
+                tau = 120
+                pct_range = file_end_pct - file_start_pct - 3
+                while not heartbeat_stop.wait(5):
+                    elapsed = int(time.monotonic() - t0)
+                    mins, secs = divmod(elapsed, 60)
+                    time_str = f"{mins}min {secs:02d}s" if mins else f"{secs}s"
+                    frac = 1 - math.exp(-elapsed / tau)
+                    pct = file_start_pct + max(1, int(pct_range * min(0.95, frac)))
+                    emit("diarize_progress", pct, f"Processando {interview_id}... ({time_str})")
+                    print(f"[{_ts()}] [diarize] heartbeat: {time_str} processando...", flush=True)
+
+            heartbeat_thread = threading.Thread(target=_heartbeat, daemon=True)
+            heartbeat_thread.start()
+            try:
+                output = pipeline(audio_tensor, **speaker_kwargs(config))
+            finally:
+                heartbeat_stop.set()
+                heartbeat_thread.join(timeout=2)
+
+            elapsed = int(time.monotonic() - t0)
+            print(f"[{_ts()}] [diarize] Pipeline concluido em {elapsed}s.", flush=True)
             regular = getattr(output, "speaker_diarization", output)
             exclusive = getattr(output, "exclusive_speaker_diarization", None)
+            emit("diarize_progress", file_end_pct - 2, f"Gravando resultados de {interview_id}...")
             write_annotation_outputs(paths, interview_id, "regular", regular, model_name, audio_path)
             if exclusive is not None:
                 write_annotation_outputs(paths, interview_id, "exclusive", exclusive, model_name, audio_path)
             status = "ok" if exclusive is not None else "ok_no_exclusive"
             log_job(paths, interview_id, status, model_name, audio_path, "")
+            print(f"[{_ts()}] [diarize] {interview_id} concluido: {status}", flush=True)
         except Exception as exc:  # noqa: BLE001 - preserve batch progress and log the failed file.
             failures += 1
+            print(f"[{_ts()}] [diarize] ERRO em {interview_id}: {exc}", flush=True)
             log_job(paths, interview_id, "error", model_name, audio_path, str(exc)[-2000:])
+
+    emit("diarize_progress", 100, "Identificacao de falantes concluida.")
+    print(f"[{_ts()}] [diarize] Diarizacao finalizada. Falhas: {failures}", flush=True)
     return failures
 
 

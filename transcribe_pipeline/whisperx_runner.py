@@ -8,6 +8,7 @@ from typing import Any, Callable
 from .config import Paths
 from .manifest import selected_rows
 from . import runtime
+from . import model_manager
 from .model_manager import validate_local_diarization_model
 from .utils import append_jsonl, now_utc, run_command_stream
 
@@ -42,11 +43,12 @@ def run_whisperx(
         device, fell_back = runtime.resolve_device(config.get("asr_device"))
         if fell_back:
             print(f"[Transcritorio] CUDA indisponivel. Usando CPU para transcrever {row['interview_id']}.")
+        effective_model = model_manager.resolve_asr_model(str(config["asr_model"]))
         command = [
             runtime.resolve_executable("whisperx"),
             str(wav),
             "--model",
-            str(config["asr_model"]),
+            effective_model,
             "--model_dir",
             model_cache_dir,
             "--device",
@@ -87,7 +89,7 @@ def run_whisperx(
             os.environ["PYANNOTE_METRICS_ENABLED"] = str(config["pyannote_metrics_enabled"])
 
         tracker = WhisperXProgressTracker(row["interview_id"], progress_callback)
-        tracker.emit({"event": "asr_start", "progress": 0, "message": "WhisperX iniciado."})
+        tracker.emit({"event": "asr_progress", "progress": 1, "message": "Carregando modelo de IA na GPU..."})
         result = run_command_stream(command, cwd=paths.project_root, on_output=tracker.feed, should_cancel=should_cancel)
         cancelled = should_cancel is not None and should_cancel()
         tracker.emit({"event": "asr_done", "progress": 100 if result.returncode == 0 else tracker.last_percent, "message": "WhisperX finalizado."})
@@ -118,23 +120,32 @@ class WhisperXProgressTracker:
         self.interview_id = interview_id
         self.callback = callback
         self.tail = ""
-        self.last_percent = 0
+        self.last_percent = 1
         self.last_message_at = 0.0
+        self._creep_start = time.monotonic()
 
     def feed(self, chunk: str) -> None:
         self.tail = (self.tail + chunk)[-4000:]
         percent = parse_progress_percent(self.tail)
         if percent is not None and percent != self.last_percent:
-            self.last_percent = percent
-            self.emit({"event": "asr_progress", "progress": percent, "message": self.current_message()})
+            self.last_percent = max(percent, self.last_percent)
+            self._creep_start = time.monotonic()
+            self.emit({"event": "asr_progress", "progress": self.last_percent, "message": self.current_message()})
             return
 
         now = time.monotonic()
-        if now - self.last_message_at >= 3.0:
-            message = self.current_message()
-            if message:
-                self.last_message_at = now
-                self.emit({"event": "asr_output", "progress": self.last_percent, "message": message})
+        if now - self.last_message_at >= 2.0:
+            # Creep: advance 1% per 4s when no tqdm progress is detected.
+            # Covers model loading (~30s), VAD (~10s), and alignment (~60s)
+            # where WhisperX emits no percentage. Cap at 90 to leave room
+            # for real tqdm values (which arrive at 90-100%).
+            creep_elapsed = now - self._creep_start
+            if self.last_percent < 90 and creep_elapsed >= 2.0:
+                self.last_percent = min(90, self.last_percent + 1)
+                self._creep_start = now
+            message = self.current_message() or "Carregando modelo de IA na GPU..."
+            self.last_message_at = now
+            self.emit({"event": "asr_progress", "progress": self.last_percent, "message": message})
 
     def current_message(self) -> str:
         text = self.tail.replace("\r", "\n")

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Callable
 import json
 import os
+import threading
 
 import shutil
 
@@ -102,6 +103,7 @@ class ModelAsset:
     repo_id: str
     purpose: str
     gated: bool = False
+    estimated_gb: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -112,11 +114,96 @@ class ModelStatus:
     message: str = ""
 
 
-REQUIRED_MODELS: tuple[ModelAsset, ...] = (
-    ModelAsset("asr", "Whisper large-v3", "Systran/faster-whisper-large-v3", "transcricao"),
-    ModelAsset("alignment_pt", "Alinhamento portugues", "jonatasgrosman/wav2vec2-large-xlsr-53-portuguese", "timestamps por palavra"),
-    ModelAsset("diarization", "Separacao de falantes", LOCAL_PYANNOTE_MODEL, "diarizacao local", gated=True),
+# ---------------------------------------------------------------------------
+# ASR model variants — user can choose which to install
+# ---------------------------------------------------------------------------
+
+ASR_VARIANTS: dict[str, dict[str, Any]] = {
+    "large-v3-turbo": {
+        "label": "Whisper large-v3-turbo",
+        "repo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
+        "estimated_gb": 3.1,
+        "quality": 8,
+        "speed": 8,
+        "desc": "Recomendado. Melhor equilibrio entre qualidade e velocidade.",
+    },
+    "large-v3": {
+        "label": "Whisper large-v3",
+        "repo": "Systran/faster-whisper-large-v3",
+        "estimated_gb": 5.8,
+        "quality": 10,
+        "speed": 4,
+        "desc": "Melhor qualidade, mais lento.",
+    },
+    "medium": {
+        "label": "Whisper medium",
+        "repo": "Systran/faster-whisper-medium",
+        "estimated_gb": 2.8,
+        "quality": 7,
+        "speed": 7,
+        "desc": "Boa qualidade, mais rapido.",
+    },
+    "small": {
+        "label": "Whisper small",
+        "repo": "Systran/faster-whisper-small",
+        "estimated_gb": 0.9,
+        "quality": 5,
+        "speed": 8,
+        "desc": "Qualidade razoavel.",
+    },
+    "base": {
+        "label": "Whisper base",
+        "repo": "Systran/faster-whisper-base",
+        "estimated_gb": 0.3,
+        "quality": 3,
+        "speed": 9,
+        "desc": "Qualidade fraca.",
+    },
+    "tiny": {
+        "label": "Whisper tiny",
+        "repo": "Systran/faster-whisper-tiny",
+        "estimated_gb": 0.15,
+        "quality": 2,
+        "speed": 10,
+        "desc": "Qualidade ruim.",
+    },
+}
+
+DEFAULT_ASR_VARIANT = "large-v3-turbo"
+
+_FIXED_MODELS: tuple[ModelAsset, ...] = (
+    ModelAsset("alignment_pt", "Alinhamento portugues", "jonatasgrosman/wav2vec2-large-xlsr-53-portuguese", "timestamps por palavra", estimated_gb=6.9),
+    ModelAsset("diarization", "Separacao de falantes", LOCAL_PYANNOTE_MODEL, "diarizacao local", gated=True, estimated_gb=0.07),
 )
+
+
+def get_required_models(asr_variants: list[str] | None = None) -> tuple[ModelAsset, ...]:
+    """Build the list of required models based on selected ASR variants.
+
+    Always includes alignment and diarization models.
+    """
+    if asr_variants is None:
+        asr_variants = [DEFAULT_ASR_VARIANT]
+    if not asr_variants:
+        raise ValueError("Selecione ao menos um modelo ASR.")
+    assets: list[ModelAsset] = []
+    for variant in asr_variants:
+        if variant not in ASR_VARIANTS:
+            raise ValueError(f"Variante ASR desconhecida: {variant}")
+        info = ASR_VARIANTS[variant]
+        assets.append(ModelAsset(
+            key=f"asr_{variant}",
+            label=info["label"],
+            repo_id=info["repo"],
+            purpose="transcricao",
+            estimated_gb=info["estimated_gb"],
+        ))
+    assets.extend(_FIXED_MODELS)
+    return tuple(assets)
+
+
+# Legacy constant — used by code that doesn't yet support variant selection
+REQUIRED_MODELS: tuple[ModelAsset, ...] = get_required_models([DEFAULT_ASR_VARIANT])
 
 
 def validate_local_diarization_model(model_name: str | os.PathLike[str] | None) -> str:
@@ -161,17 +248,53 @@ def cached_snapshot_path(repo_id: str, cache_dir: Path | None = None) -> Path | 
     return max(candidates, key=lambda path: path.stat().st_mtime)
 
 
-def status(cache_dir: Path | None = None) -> list[ModelStatus]:
+def installed_asr_variants(cache_dir: Path | None = None) -> list[str]:
+    """Return list of ASR variant keys that are cached locally."""
+    result: list[str] = []
+    for key, info in ASR_VARIANTS.items():
+        path = cached_snapshot_path(info["repo"], cache_dir)
+        if path and any(path.iterdir()):
+            result.append(key)
+    return result
+
+
+def resolve_asr_model(configured: str, cache_dir: Path | None = None) -> str:
+    """Resolve the effective ASR model to use.
+
+    If the configured model is installed, use it.
+    Otherwise, fall back to the first installed model.
+    If nothing is installed, return the configured value (will fail later
+    with a clear error from WhisperX).
+    """
+    # Check if configured model is a known variant with a specific repo
+    if configured in ASR_VARIANTS:
+        repo = ASR_VARIANTS[configured]["repo"]
+        path = cached_snapshot_path(repo, cache_dir)
+        if path and any(path.iterdir()):
+            return configured
+    else:
+        # Unknown variant (e.g. custom model path) — pass through
+        return configured
+
+    # Configured model not installed — find an alternative
+    installed = installed_asr_variants(cache_dir)
+    if installed:
+        return installed[0]
+    return configured
+
+
+def status(cache_dir: Path | None = None, asr_variants: list[str] | None = None) -> list[ModelStatus]:
+    models = get_required_models(asr_variants)
     result: list[ModelStatus] = []
-    for asset in REQUIRED_MODELS:
+    for asset in models:
         path = cached_snapshot_path(asset.repo_id, cache_dir)
         cached = bool(path and any(path.iterdir()))
         result.append(ModelStatus(asset=asset, cached=cached, path=path if cached else None))
     return result
 
 
-def all_required_models_cached(cache_dir: Path | None = None) -> bool:
-    return all(item.cached for item in status(cache_dir))
+def all_required_models_cached(cache_dir: Path | None = None, asr_variants: list[str] | None = None) -> bool:
+    return all(item.cached for item in status(cache_dir, asr_variants=asr_variants))
 
 
 def status_as_dict(cache_dir: Path | None = None) -> dict[str, Any]:
@@ -212,46 +335,59 @@ def _format_size(nbytes: int) -> str:
     return f"{nbytes / 1024:.0f} KB"
 
 
-def _make_tqdm_class(
-    asset_label: str,
-    model_index: int,
-    total_models: int,
-    progress_callback: ProgressCallback | None,
-) -> type | None:
-    """Create a tqdm-compatible class that forwards byte progress to the GUI."""
-    if progress_callback is None:
-        return None
-
+def _dir_size(path: Path) -> int:
+    """Total bytes of all files under *path* (non-recursive would miss blobs)."""
+    total = 0
     try:
-        from tqdm import tqdm as _tqdm_base
-    except ImportError:
-        return None
+        for entry in path.rglob("*"):
+            if entry.is_file():
+                try:
+                    total += entry.stat().st_size
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return total
 
-    class _DownloadProgress(_tqdm_base):  # type: ignore[misc]
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            kwargs.setdefault("unit", "B")
-            kwargs.setdefault("unit_scale", True)
-            super().__init__(*args, **kwargs)
 
-        def update(self, n: int = 1) -> bool | None:  # type: ignore[override]
-            result = super().update(n)
-            total_bytes = self.total or 1
-            done_bytes = self.n
-            file_pct = min(100, int((done_bytes / total_bytes) * 100))
-            model_start = int(((model_index - 1) / total_models) * 100)
-            model_end = int((model_index / total_models) * 100)
-            overall = model_start + int((model_end - model_start) * file_pct / 100)
-            size_info = f"{_format_size(done_bytes)}/{_format_size(total_bytes)}"
-            progress_callback(
-                {
-                    "event": "model_download_bytes",
-                    "progress": overall,
-                    "message": f"Baixando {asset_label}: {size_info} ({file_pct}%)",
-                }
-            )
-            return result
+def _poll_download_progress(
+    cache_dir: Path,
+    estimated_bytes: int,
+    start_pct: int,
+    end_pct: int,
+    label: str,
+    progress_callback: ProgressCallback,
+    stop_event: "threading.Event",
+    interval: float = 1.0,
+) -> None:
+    """Background thread that polls *cache_dir* size and reports progress.
 
-    return _DownloadProgress
+    ``huggingface_hub.snapshot_download`` does **not** forward its
+    ``tqdm_class`` to per-file downloads (confirmed in v0.36).  Polling
+    file sizes on disk is the only reliable way to get granular progress
+    that works across all versions.
+    """
+    peak_pct = 0
+    baseline = _dir_size(cache_dir)
+    while not stop_event.is_set():
+        current = _dir_size(cache_dir) - baseline
+        if estimated_bytes > 0:
+            model_pct = min(100, int((current / estimated_bytes) * 100))
+        else:
+            model_pct = 0
+        overall = start_pct + int((end_pct - start_pct) * model_pct / 100)
+        overall = max(overall, peak_pct)
+        peak_pct = overall
+        size_str = _format_size(current)
+        total_str = _format_size(estimated_bytes)
+        progress_callback(
+            {
+                "event": "model_download_bytes",
+                "progress": overall,
+                "message": f"Baixando {label}: {size_str}/{total_str}",
+            }
+        )
+        stop_event.wait(interval)
 
 
 def download_required_models(
@@ -261,6 +397,7 @@ def download_required_models(
     force: bool = False,
     progress_callback: ProgressCallback | None = None,
     should_cancel: ShouldCancel | None = None,
+    asr_variants: list[str] | None = None,
 ) -> int:
     cache_dir = runtime.model_cache_dir()
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -271,32 +408,53 @@ def download_required_models(
     except ImportError as exc:
         raise RuntimeError(f"Dependencia ausente: huggingface_hub ({exc})") from exc
 
+    models = get_required_models(asr_variants)
     failures = 0
-    total = max(1, len(REQUIRED_MODELS))
-    for index, asset in enumerate(REQUIRED_MODELS, start=1):
+    total = max(1, len(models))
+    # Compute per-model progress ranges weighted by estimated size
+    total_gb = sum(a.estimated_gb for a in models) or 1.0
+    cumulative_gb = 0.0
+    model_ranges: list[tuple[int, int]] = []
+    for asset in models:
+        start_pct = int(cumulative_gb / total_gb * 100)
+        cumulative_gb += asset.estimated_gb
+        end_pct = int(cumulative_gb / total_gb * 100)
+        model_ranges.append((start_pct, end_pct))
+    for index, asset in enumerate(models, start=1):
         if should_cancel is not None and should_cancel():
             failures += 1
             break
+        start_pct, end_pct = model_ranges[index - 1]
         if progress_callback is not None:
             progress_callback(
                 {
                     "event": "model_download_start",
-                    "progress": int(((index - 1) / total) * 100),
+                    "progress": start_pct,
                     "message": f"Baixando {asset.label} ({index}/{total})...",
                 }
             )
-        tqdm_cls = _make_tqdm_class(asset.label, index, total, progress_callback)
+        estimated_bytes = int(asset.estimated_gb * 1_073_741_824)
+        # Start a background poller to track download progress on disk
+        stop_event: threading.Event | None = None
+        poller: threading.Thread | None = None
+        if progress_callback is not None:
+            stop_event = threading.Event()
+            poller = threading.Thread(
+                target=_poll_download_progress,
+                args=(cache_dir, estimated_bytes, start_pct, end_pct,
+                      asset.label, progress_callback, stop_event),
+                daemon=True,
+            )
+            poller.start()
         try:
             kwargs: dict[str, object] = dict(
                 repo_id=asset.repo_id,
                 repo_type="model",
                 cache_dir=str(cache_dir),
-                token=token_value if asset.gated else None,
+                token=token_value,
                 force_download=force,
                 local_files_only=False,
             )
-            if tqdm_cls is not None:
-                kwargs["tqdm_class"] = tqdm_cls
             snapshot_download(**kwargs)
         except Exception as exc:  # noqa: BLE001 - keep batch progress visible.
             failures += 1
@@ -304,16 +462,21 @@ def download_required_models(
                 progress_callback(
                     {
                         "event": "model_download_error",
-                        "progress": int((index / total) * 100),
+                        "progress": end_pct,
                         "message": f"Falha ao baixar {asset.label}: {sanitize_message(str(exc))}",
                     }
                 )
             continue
+        finally:
+            if stop_event is not None:
+                stop_event.set()
+            if poller is not None:
+                poller.join(timeout=2)
         if progress_callback is not None:
             progress_callback(
                 {
                     "event": "model_download_done",
-                    "progress": int((index / total) * 100),
+                    "progress": end_pct,
                     "message": f"{asset.label} baixado ({index}/{total}).",
                 }
             )

@@ -67,6 +67,18 @@ APP_CREDITS = "Rog\u00e9rio Jer\u00f4nimo Barbosa - https://antrologos.github.io
 APP_ICON_FILE = "transcritorio_icon.svg"
 WAVEFORM_CACHE_VERSION = 1
 
+# Interview table column indices (checkbox at col 0, data cols shifted +1)
+COL_CHECK = 0
+COL_ARQUIVO = 1
+COL_FORMATO = 2
+COL_TRANSCRICAO = 3
+COL_DURACAO = 4
+COL_LINGUA = 5
+COL_FALANTES = 6
+COL_ROTULOS = 7
+COL_CONTEXTO = 8
+COL_AVISOS = 9
+
 
 def open_folder_in_explorer(path: Path) -> None:
     """Open a folder in the platform's file manager."""
@@ -183,10 +195,10 @@ def format_eta(seconds: float | None) -> str:
 def eta_from_progress(started_monotonic: float, percent: int) -> str:
     if percent >= 100:
         return "concluindo..."
-    if percent < 3:
+    if percent < 8:
         return "estimando..."
     elapsed = time.monotonic() - started_monotonic
-    if elapsed < 8:
+    if elapsed < 15:
         return "estimando..."
     remaining = elapsed * ((100 - percent) / max(1, percent))
     return format_eta(remaining)
@@ -623,6 +635,31 @@ if QT_IMPORT_ERROR is None:
             event.accept()
 
 
+    def _pipeline_weights(model: str, device: str) -> list[int]:
+        """Return empirical progress weights [prepare, asr, diarize, render, qc].
+
+        Based on exhaustive benchmark (tests/benchmark_exhaustive_2026-04-19.csv).
+        Weights approximate % of total wall-clock time per stage.
+        """
+        _CUDA: dict[str, list[int]] = {
+            "tiny":           [5, 38, 56, 1, 0],
+            "base":           [5, 38, 56, 1, 0],
+            "small":          [4, 45, 50, 1, 0],
+            "medium":         [4, 50, 45, 1, 0],
+            "large-v3-turbo": [4, 48, 47, 1, 0],
+            "large-v3":       [3, 63, 33, 1, 0],
+        }
+        _CPU: dict[str, list[int]] = {
+            "tiny":           [2, 50, 47, 1, 0],
+            "base":           [2, 50, 47, 1, 0],
+            "small":          [1, 55, 43, 1, 0],
+            "medium":         [1, 55, 43, 1, 0],
+            "large-v3-turbo": [2, 59, 39, 0, 0],
+            "large-v3":       [1, 65, 33, 1, 0],
+        }
+        table = _CUDA if device == "cuda" else _CPU
+        return table.get(model, _CUDA.get("large-v3-turbo", [4, 48, 47, 1, 0]))
+
     class PipelineWorker(QThread):
         progress = Signal(str, int)
         finished_ok = Signal(str)
@@ -654,7 +691,7 @@ if QT_IMPORT_ERROR is None:
                     weight = max(1, self.weights[index - 1] if index - 1 < len(self.weights) else 1)
                     start_percent = int((completed_weight / total_weight) * 100)
                     end_percent = int(((completed_weight + weight) / total_weight) * 100)
-                    self.progress.emit(f"Etapa {index} de {len(self.steps)}: {message} - {start_percent}% - {eta_from_progress(self.started_monotonic, start_percent)}", start_percent)
+                    self.progress.emit(f"Etapa {index} de {len(self.steps)}: {message}", start_percent)
                     if accepts_progress:
                         result = func(
                             self.step_progress_callback(index, len(self.steps), message, start_percent, end_percent),
@@ -669,7 +706,7 @@ if QT_IMPORT_ERROR is None:
                             return
                         raise RuntimeError(f"{message}: {failures} falha(s).")
                     completed_weight += weight
-                    self.progress.emit(f"Etapa {index} de {len(self.steps)} concluida: {message} - {end_percent}% - {eta_from_progress(self.started_monotonic, end_percent)}", end_percent)
+                    self.progress.emit(f"Etapa {index} de {len(self.steps)} concluida: {message}", end_percent)
                     if self.cancel_after_step and index < len(self.steps):
                         self.finished_ok.emit(f"{self.label} interrompido apos a etapa atual.")
                         return
@@ -695,12 +732,11 @@ if QT_IMPORT_ERROR is None:
                 detail_message = detail.get("message")
                 if detail_message and event in ("model_download_bytes", "model_download_start", "model_download_done", "model_download_error"):
                     label = str(detail_message)
-                elif event == "asr_progress":
-                    label = f"{message} {inner_percent}%"
+                elif detail_message and event == "diarize_progress":
+                    label = str(detail_message)
                 else:
                     label = message
-                eta = eta_from_progress(self.started_monotonic, percent)
-                self.progress.emit(f"Etapa {index} de {total}: {label} - {percent}% - {eta}", percent)
+                self.progress.emit(f"Etapa {index} de {total}: {label}", percent)
 
             return callback
 
@@ -1023,17 +1059,20 @@ if QT_IMPORT_ERROR is None:
         PAGE_WELCOME = 0
         PAGE_ACCOUNT = 1
         PAGE_TERMS = 2
-        PAGE_TOKEN = 3
-        PAGE_DOWNLOAD = 4
-        PAGE_DONE = 5
+        PAGE_MODEL_SELECT = 3
+        PAGE_TOKEN = 4
+        PAGE_DOWNLOAD = 5
+        PAGE_DONE = 6
 
         def __init__(self, parent: QWidget | None = None) -> None:
             super().__init__(parent)
+            from . import model_manager
             self.download_completed = False
+            self.selected_asr_variants: list[str] = [model_manager.DEFAULT_ASR_VARIANT]
             self.setWindowTitle(f"{APP_NAME} — Configuração inicial")
             self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
             self.setFixedWidth(680)
-            self.setMinimumHeight(520)
+            self.setMinimumHeight(560)
             self.setOption(QWizard.WizardOption.NoCancelButton, False)
             self.setButtonText(QWizard.WizardButton.NextButton, "Próximo →")
             self.setButtonText(QWizard.WizardButton.BackButton, "← Voltar")
@@ -1043,6 +1082,7 @@ if QT_IMPORT_ERROR is None:
             self.setPage(self.PAGE_WELCOME, self._make_welcome_page())
             self.setPage(self.PAGE_ACCOUNT, self._make_account_page())
             self.setPage(self.PAGE_TERMS, self._make_terms_page())
+            self.setPage(self.PAGE_MODEL_SELECT, _ModelSelectWizardPage(self))
             self.setPage(self.PAGE_TOKEN, self._make_token_page())
             self.setPage(self.PAGE_DOWNLOAD, self._make_download_page())
             self.setPage(self.PAGE_DONE, self._make_done_page())
@@ -1070,69 +1110,81 @@ if QT_IMPORT_ERROR is None:
             faq = QGroupBox("O que são \"componentes de IA\"?")
             faq.setCheckable(False)
             faq_layout = QVBoxLayout(faq)
-            faq_layout.addWidget(QLabel(
+            faq_text = QLabel(
                 "São arquivos que ensinam o computador a reconhecer fala em português. "
                 "Funcionam como um dicionário muito sofisticado. "
                 "Depois de baixados, tudo funciona sem internet."
-            ))
+            )
+            faq_text.setWordWrap(True)
+            faq_layout.addWidget(faq_text)
             layout.addWidget(faq)
             layout.addStretch()
             return page
 
         def _make_account_page(self) -> QWizardPage:
             page = QWizardPage()
-            page.setTitle("Passo 1 de 4: Criar uma conta gratuita")
+            page.setTitle("Passo 1 de 5: Criar uma conta gratuita")
             layout = QVBoxLayout(page)
-            layout.addWidget(QLabel(
+            account_intro = QLabel(
                 "Os componentes de transcrição ficam em um site chamado Hugging Face — "
                 "uma biblioteca pública de inteligência artificial. É gratuito e seguro, "
                 "como se fosse um \"Google Acadêmico\" de modelos de IA.\n\n"
                 "Você precisa criar uma conta lá para poder baixar os componentes. "
                 "Use qualquer e-mail (pode ser o institucional)."
-            ))
+            )
+            account_intro.setWordWrap(True)
+            layout.addWidget(account_intro)
             btn = QPushButton("Abrir site para criar minha conta →")
             btn.setStyleSheet("font-weight: 700; padding: 8px; color: #2e7d32;")
             btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://huggingface.co/join")))
             layout.addWidget(btn)
-            layout.addWidget(QLabel(
+            account_next = QLabel(
                 "\nDepois de criar sua conta no site (no navegador), "
                 "volte aqui e clique em \"Próximo\".\n\n"
                 "Já tem conta? Pode pular direto para o próximo passo."
-            ))
+            )
+            account_next.setWordWrap(True)
+            layout.addWidget(account_next)
             faq = QGroupBox("Dúvidas frequentes")
             faq_l = QVBoxLayout(faq)
-            faq_l.addWidget(QLabel(
+            faq_text = QLabel(
                 "\"É seguro criar conta?\" — Sim. Hugging Face é reconhecido pela comunidade científica.\n\n"
                 "\"Vou pagar alguma coisa?\" — Não. A conta gratuita é suficiente.\n\n"
                 "\"Posso usar conta do Google?\" — Sim, o site permite login com Google."
-            ))
+            )
+            faq_text.setWordWrap(True)
+            faq_l.addWidget(faq_text)
             layout.addWidget(faq)
             layout.addStretch()
             return page
 
         def _make_terms_page(self) -> QWizardPage:
             page = QWizardPage()
-            page.setTitle("Passo 2 de 4: Autorizar o modelo de identificação de falantes")
+            page.setTitle("Passo 2 de 5: Autorizar o modelo de identificação de falantes")
             layout = QVBoxLayout(page)
-            layout.addWidget(QLabel(
+            terms_intro = QLabel(
                 "Além do modelo de transcrição (que é livre), usamos um segundo modelo "
                 "que identifica quem está falando em cada trecho — ou seja, separa a fala "
                 "do entrevistador da fala do entrevistado.\n\n"
                 "Esse modelo exige que você aceite os termos de uso no site. "
                 "É só fazer login e clicar em \"Agree and access repository\" (Concordar).\n\n"
                 "Se o site estiver em inglês, procure o botão azul \"Agree\"."
-            ))
+            )
+            terms_intro.setWordWrap(True)
+            layout.addWidget(terms_intro)
             btn = QPushButton("Abrir página do modelo para aceitar os termos →")
             btn.setStyleSheet("font-weight: 700; padding: 8px; color: #2e7d32;")
             btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://huggingface.co/pyannote/speaker-diarization-community-1")))
             layout.addWidget(btn)
             faq = QGroupBox("O que estou aceitando?")
             faq_l = QVBoxLayout(faq)
-            faq_l.addWidget(QLabel(
+            terms_faq = QLabel(
                 "Você está aceitando os termos de uso do modelo \"pyannote\", criado por "
                 "pesquisadores franceses. Os termos dizem basicamente que você usará o modelo "
                 "para fins legítimos. Não há custo e não há coleta de dados."
-            ))
+            )
+            terms_faq.setWordWrap(True)
+            faq_l.addWidget(terms_faq)
             layout.addWidget(faq)
             layout.addStretch()
             return page
@@ -1165,15 +1217,106 @@ if QT_IMPORT_ERROR is None:
             layout.addStretch()
             return page
 
+    class _ModelSelectWizardPage(QWizardPage):
+        """Page 3: choose which ASR model(s) to download."""
+
+        RECOMMENDED = ["large-v3-turbo", "large-v3"]
+        OTHERS = ["medium", "small", "base", "tiny"]
+        FIXED_GB = 6.9 + 0.07  # alignment + diarization (always downloaded)
+
+        def __init__(self, wizard: "FirstRunWizard") -> None:
+            super().__init__()
+            from . import model_manager
+            self._model_manager = model_manager
+            self._wizard = wizard
+            self.setTitle("Passo 3 de 5: Escolha o modelo de transcrição")
+            layout = QVBoxLayout(self)
+            intro = QLabel(
+                "Selecione quais modelos de transcrição deseja baixar. "
+                "Modelos maiores produzem transcrições melhores, mas "
+                "demoram mais e ocupam mais espaço.\n\n"
+                "Você pode instalar modelos adicionais depois nas configurações."
+            )
+            intro.setWordWrap(True)
+            layout.addWidget(intro)
+
+            self._checkboxes: dict[str, QCheckBox] = {}
+
+            # Recommended models (visible by default)
+            for key in self.RECOMMENDED:
+                info = self._model_manager.ASR_VARIANTS[key]
+                suffix = "  ★ Recomendado" if key == self._model_manager.DEFAULT_ASR_VARIANT else ""
+                cb = QCheckBox(f"{info['label']}  ({self._fmt(info['estimated_gb'])}){suffix}")
+                cb.setChecked(key == self._model_manager.DEFAULT_ASR_VARIANT)
+                cb.setToolTip(info["desc"])
+                cb.stateChanged.connect(self._on_changed)
+                layout.addWidget(cb)
+                self._checkboxes[key] = cb
+
+            # Other models (in collapsible group)
+            others_group = QGroupBox("Outros modelos (menores, menor qualidade)")
+            others_group.setCheckable(False)
+            others_layout = QVBoxLayout(others_group)
+            for key in self.OTHERS:
+                info = self._model_manager.ASR_VARIANTS[key]
+                cb = QCheckBox(f"{info['label']}  ({self._fmt(info['estimated_gb'])})")
+                cb.setChecked(False)
+                cb.setToolTip(info["desc"])
+                cb.stateChanged.connect(self._on_changed)
+                others_layout.addWidget(cb)
+                self._checkboxes[key] = cb
+            layout.addWidget(others_group)
+
+            layout.addStretch()
+            self.total_label = QLabel("")
+            self.total_label.setStyleSheet("color: #555; font-size: 11px;")
+            self.total_label.setWordWrap(True)
+            layout.addWidget(self.total_label)
+            self._update_total()
+
+        @staticmethod
+        def _fmt(gb: float) -> str:
+            if gb >= 1.0:
+                return f"{gb:.1f} GB"
+            return f"{int(gb * 1024)} MB"
+
+        def _on_changed(self) -> None:
+            self._update_total()
+            self.completeChanged.emit()
+
+        def _update_total(self) -> None:
+            asr_gb = sum(
+                self._model_manager.ASR_VARIANTS[k]["estimated_gb"]
+                for k, cb in self._checkboxes.items()
+                if cb.isChecked()
+            )
+            total = asr_gb + self.FIXED_GB
+            self.total_label.setText(
+                f"Download total: ~{self._fmt(total)} "
+                f"(inclui componentes obrigatórios de alinhamento e identificação de falantes)"
+            )
+
+        def selected_asr_variants(self) -> list[str]:
+            return [k for k, cb in self._checkboxes.items() if cb.isChecked()]
+
+        def isComplete(self) -> bool:
+            return len(self.selected_asr_variants()) > 0
+
+        def validatePage(self) -> bool:
+            variants = self.selected_asr_variants()
+            if not variants:
+                return False
+            self._wizard.selected_asr_variants = variants
+            return True
+
     class _TokenWizardPage(QWizardPage):
-        """Page 3: token entry with pre-validation."""
+        """Page 4: token entry with pre-validation."""
 
         def __init__(self) -> None:
             super().__init__()
-            self.setTitle("Passo 3 de 4: Criar e colar a chave de acesso")
-            self._validated = False
+            self.setTitle("Passo 4 de 5: Criar e colar a chave de acesso")
             layout = QVBoxLayout(self)
-            layout.addWidget(QLabel(
+            token_intro = QLabel(
                 "Agora você precisa criar uma \"chave de acesso\" no Hugging Face. "
                 "É como uma senha temporária que permite ao Transcritório baixar os componentes.\n\n"
                 "Como criar (3 cliques):\n"
@@ -1183,7 +1326,9 @@ if QT_IMPORT_ERROR is None:
                 "     • Em \"Type\", selecione: Read\n"
                 "     • Clique em \"Create token\"\n"
                 "  3. Copie a chave gerada e cole no campo abaixo."
-            ))
+            )
+            token_intro.setWordWrap(True)
+            layout.addWidget(token_intro)
             btn = QPushButton("Abrir página de chaves no Hugging Face →")
             btn.setStyleSheet("font-weight: 700; padding: 8px; color: #2e7d32;")
             btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://huggingface.co/settings/tokens")))
@@ -1208,13 +1353,13 @@ if QT_IMPORT_ERROR is None:
             layout.addWidget(privacy)
 
         def _on_token_changed(self) -> None:
-            self._validated = False
             self.status_label.setText("")
             self.status_label.setStyleSheet("")
             self.completeChanged.emit()
 
         def isComplete(self) -> bool:
-            return self._validated
+            token = self.token_edit.text().strip()
+            return token.startswith("hf_") and len(token) >= 10
 
         def validatePage(self) -> bool:
             from . import model_manager
@@ -1242,8 +1387,6 @@ if QT_IMPORT_ERROR is None:
                 return False
             self.status_label.setText(f"✓ {result['message']} {gated['message']}")
             self.status_label.setStyleSheet("color: #2e7d32; font-weight: 700;")
-            self._validated = True
-            self.completeChanged.emit()
             return True
 
         def token(self) -> str:
@@ -1257,14 +1400,16 @@ if QT_IMPORT_ERROR is None:
             self._wizard = wizard
             self._download_started = False
             self._download_done = False
-            self.setTitle("Passo 4 de 4: Baixar os componentes")
+            self.setTitle("Passo 5 de 5: Baixar os componentes")
             self.setFinalPage(False)
             layout = QVBoxLayout(self)
-            layout.addWidget(QLabel(
+            download_intro = QLabel(
                 "Tudo pronto! Agora vamos baixar os componentes de inteligência artificial.\n\n"
                 "Isso pode levar de 5 a 30 minutos, dependendo da velocidade da sua internet. "
                 "Você pode continuar usando o computador normalmente."
-            ))
+            )
+            download_intro.setWordWrap(True)
+            layout.addWidget(download_intro)
             self.progress_label = QLabel("")
             self.progress_label.setWordWrap(True)
             layout.addWidget(self.progress_label)
@@ -1286,9 +1431,10 @@ if QT_IMPORT_ERROR is None:
             self._download_started = True
             token_page = self._wizard.page(FirstRunWizard.PAGE_TOKEN)
             token = token_page.token() if hasattr(token_page, "token") else ""
+            asr_variants = getattr(self._wizard, "selected_asr_variants", None)
             self.progress_label.setText("Iniciando download...")
             self.progress_bar.setValue(0)
-            self._worker = _SetupDownloadThread(token)
+            self._worker = _SetupDownloadThread(token, asr_variants=asr_variants)
             self._worker.progress.connect(self._on_progress)
             self._worker.finished_ok.connect(self._on_done)
             self._worker.failed.connect(self._on_failed)
@@ -1319,9 +1465,10 @@ if QT_IMPORT_ERROR is None:
         finished_ok = Signal()
         failed = Signal(str)
 
-        def __init__(self, token: str) -> None:
+        def __init__(self, token: str, asr_variants: list[str] | None = None) -> None:
             super().__init__()
             self.token = token
+            self.asr_variants = asr_variants
 
         def run(self) -> None:
             try:
@@ -1332,6 +1479,7 @@ if QT_IMPORT_ERROR is None:
                 result = app_service.download_models(
                     token=self.token,
                     progress_callback=on_progress,
+                    asr_variants=self.asr_variants,
                 )
                 if getattr(result, "failures", 0):
                     self.failed.emit(str(getattr(result, "message", "Falha ao baixar um ou mais componentes.")))
@@ -1382,7 +1530,7 @@ if QT_IMPORT_ERROR is None:
             layout.addSpacing(12)
             for choice, label, help_text in [
                 ("new", "Novo projeto", "Escolher uma pasta e criar um novo projeto de transcrição."),
-                ("open", "Abrir projeto existente", "Selecionar uma pasta de projeto já existente."),
+                ("open", "Abrir projeto existente", "Selecionar um arquivo .transcritorio de um projeto existente."),
             ]:
                 button = QPushButton(label)
                 button.setToolTip(help_text)
@@ -1501,6 +1649,7 @@ if QT_IMPORT_ERROR is None:
                 print(f"Aviso: não foi possível carregar o projeto: {exc}", file=sys.stderr)
             self.statuses = []
             self._status_map: dict[str, Any] = {}
+            self._checked_ids: set[str] = set()
             self.review: dict[str, Any] | None = None
             self.current_interview_id: str | None = None
             self.turns: list[dict[str, Any]] = []
@@ -1626,6 +1775,10 @@ if QT_IMPORT_ERROR is None:
             self.export_selected_action.setToolTip("Exportar as transcricoes dos arquivos selecionados.")
             self.export_selected_action.triggered.connect(self.export_selected_reviews)
 
+            self.delete_transcription_action = QAction("Apagar transcricao...", self)
+            self.delete_transcription_action.setToolTip("Apagar todos os arquivos derivados dos selecionados, permitindo retranscrever. Originais nao sao alterados.")
+            self.delete_transcription_action.triggered.connect(self.delete_selected_transcriptions)
+
             self.export_current_action = QAction("Exportar este arquivo...", self)
             self.export_current_action.setToolTip("Exportar apenas a transcricao aberta.")
             self.export_current_action.triggered.connect(self.export_current_review)
@@ -1746,6 +1899,8 @@ if QT_IMPORT_ERROR is None:
             files_menu.addAction(self.transcribe_pending_action)
             files_menu.addSeparator()
             files_menu.addAction(self.export_selected_action)
+            files_menu.addSeparator()
+            files_menu.addAction(self.delete_transcription_action)
 
             open_file_menu = self.menuBar().addMenu("Arquivo aberto")
             open_file_menu.addAction(self.open_transcript_action)
@@ -1818,7 +1973,23 @@ if QT_IMPORT_ERROR is None:
                 QMessageBox.critical(self, "Não foi possível salvar a configuração", sanitize_message(str(exc)))
                 return
             self.refresh_interviews()
+            self._sync_diarize_checkbox()
             self.progress_label.setText("Configuracao de transcricao atualizada.")
+
+        def _on_diarize_toggled(self, checked: bool) -> None:
+            if self.context is None:
+                return
+            try:
+                self.context = app_service.update_engine_config(self.context, {"diarize": checked})
+            except Exception:
+                pass
+
+        def _sync_diarize_checkbox(self) -> None:
+            if not hasattr(self, "diarize_checkbox"):
+                return
+            self.diarize_checkbox.blockSignals(True)
+            self.diarize_checkbox.setChecked(bool(self.context.config.get("diarize", True)) if self.context else True)
+            self.diarize_checkbox.blockSignals(False)
 
         def show_startup_dialog(self) -> None:
             # Tela A: Setup wizard when AI components are missing
@@ -1919,12 +2090,22 @@ if QT_IMPORT_ERROR is None:
             header.addStretch()
             self.project_label = QLabel(self.project_header_text())
             self.project_label.setStyleSheet("color: #555;")
+            self.project_label.setTextFormat(Qt.TextFormat.RichText)
+            self.project_label.linkActivated.connect(lambda _link: self.configure_engine())
             header.addWidget(self.project_label)
             root_layout.addLayout(header)
 
             action_bar = QHBoxLayout()
             action_bar.addWidget(self.media_button())
             action_bar.addWidget(self.transcribe_menu_button())
+            self.diarize_checkbox = QCheckBox("Separar falantes")
+            self.diarize_checkbox.setToolTip(
+                "Identifica automaticamente quem esta falando (Entrevistador/Entrevistado).\n"
+                "Desative para audios com um unico falante ou para transcrever mais rapido."
+            )
+            self.diarize_checkbox.setChecked(True)
+            self.diarize_checkbox.toggled.connect(self._on_diarize_toggled)
+            action_bar.addWidget(self.diarize_checkbox)
             action_bar.addWidget(self.action_button(self.save_action))
             action_bar.addWidget(self.action_button(self.generate_files_action))
             action_bar.addStretch()
@@ -1974,22 +2155,23 @@ if QT_IMPORT_ERROR is None:
             self.filter_text_edit.textChanged.connect(self._apply_interview_filter)
             filter_row.addWidget(self.filter_text_edit)
             layout.addLayout(filter_row)
-            # Interview table (9 columns)
-            self.interview_table = QTableWidget(0, 9)
+            # Interview table (10 columns: checkbox + 9 data columns)
+            self.interview_table = QTableWidget(0, 10)
             self.interview_table.setAccessibleName("Arquivos do projeto")
             self.interview_table.setHorizontalHeaderLabels([
-                "Arquivo", "Formato", "Transcrição", "Duração",
+                "", "Arquivo", "Formato", "Transcrição", "Duração",
                 "Língua", "Falantes", "Rótulos", "Contexto", "Avisos",
             ])
-            for col in range(8):
+            self.interview_table.horizontalHeader().setSectionResizeMode(COL_CHECK, QHeaderView.ResizeMode.Fixed)
+            self.interview_table.setColumnWidth(COL_CHECK, 30)
+            for col in range(COL_ARQUIVO, COL_AVISOS):
                 self.interview_table.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
-            self.interview_table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeMode.Stretch)
-            self.interview_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-            self.interview_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+            self.interview_table.horizontalHeader().setSectionResizeMode(COL_AVISOS, QHeaderView.ResizeMode.Stretch)
+            self.interview_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
             self.interview_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
             self.interview_table.setSortingEnabled(True)
-            self.interview_table.cellDoubleClicked.connect(self.open_review_from_row)
-            self.interview_table.itemSelectionChanged.connect(self.update_action_states)
+            self.interview_table.cellClicked.connect(self._on_interview_cell_clicked)
+            self.interview_table.horizontalHeader().sectionClicked.connect(self._on_header_section_clicked)
             layout.addWidget(self.interview_table, stretch=1)
             self._empty_table_label = QLabel("Nenhuma entrevista.\nUse Arquivos \u203a Adicionar m\u00eddia.")
             self._empty_table_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -2026,7 +2208,11 @@ if QT_IMPORT_ERROR is None:
             if self.context is None:
                 return "Nenhum projeto aberto"
             name = str(self.context.project.get("project_name") or self.context.paths.project_root.name)
-            return f"Projeto: {name}  |  {self.context.paths.project_root}"
+            from . import model_manager
+            model = model_manager.resolve_asr_model(str(self.context.config.get("asr_model", "?")))
+            return (f"Projeto: {name}  |  "
+                    f'<a href="engine-settings" style="color:#888;text-decoration:underline;">Modelo: {model}</a>'
+                    f"  |  {self.context.paths.project_root}")
 
         def _build_review_panel(self) -> QWidget:
             panel = QWidget()
@@ -2264,6 +2450,7 @@ if QT_IMPORT_ERROR is None:
             self._status_map = {s.interview_id: s for s in self.statuses}
             if hasattr(self, "project_label"):
                 self.project_label.setText(self.project_header_text())
+            self._sync_diarize_checkbox()
             self.interview_table.setSortingEnabled(False)
             self.interview_table.blockSignals(True)
             self.interview_table.setRowCount(0)
@@ -2273,6 +2460,14 @@ if QT_IMPORT_ERROR is None:
                 metadata = self.context.metadata.get(status.interview_id, {})
                 metadata_display = project_store.metadata_display(metadata)
                 job = self.context.jobs.get(status.interview_id, {})
+                # Column 0: checkbox
+                check_item = QTableWidgetItem()
+                check_item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+                check_item.setCheckState(
+                    Qt.CheckState.Checked if status.interview_id in self._checked_ids else Qt.CheckState.Unchecked
+                )
+                self.interview_table.setItem(row, COL_CHECK, check_item)
+                # Columns 1-9: data
                 values = [
                     status.interview_id,
                     media_format_label(status),
@@ -2284,10 +2479,10 @@ if QT_IMPORT_ERROR is None:
                     metadata_display["context"],
                     status.qc_notes,
                 ]
-                for column, value in enumerate(values):
+                for column, value in enumerate(values, start=COL_ARQUIVO):
                     item = QTableWidgetItem(str(value))
-                    item.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
-                    if column == 0:
+                    item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                    if column == COL_ARQUIVO:
                         item.setData(Qt.ItemDataRole.UserRole, status.interview_id)
                     self.interview_table.setItem(row, column, item)
             self.interview_table.blockSignals(False)
@@ -2307,8 +2502,8 @@ if QT_IMPORT_ERROR is None:
             text_filter = self.filter_text_edit.text().strip().lower()
             visible_count = 0
             for row_idx in range(self.interview_table.rowCount()):
-                id_item = self.interview_table.item(row_idx, 0)
-                state_item = self.interview_table.item(row_idx, 2)  # column 2 = Transcrição
+                id_item = self.interview_table.item(row_idx, COL_ARQUIVO)
+                state_item = self.interview_table.item(row_idx, COL_TRANSCRICAO)
                 if not id_item or not state_item:
                     continue
                 interview_id = id_item.text().lower()
@@ -2344,14 +2539,19 @@ if QT_IMPORT_ERROR is None:
             return ids[0] if ids else None
 
         def selected_interview_ids(self) -> list[str]:
-            rows = self.interview_table.selectionModel().selectedRows()
-            if not rows:
+            """Return IDs of checked (checkbox) interviews, in visual order."""
+            if not self._checked_ids:
                 return []
             ids: list[str] = []
-            for model_index in rows:
-                item = self.interview_table.item(model_index.row(), 0)
-                if item:
-                    ids.append(str(item.data(Qt.ItemDataRole.UserRole) or item.text()))
+            for row in range(self.interview_table.rowCount()):
+                if self.interview_table.isRowHidden(row):
+                    continue
+                item = self.interview_table.item(row, COL_ARQUIVO)
+                if not item:
+                    continue
+                iid = str(item.data(Qt.ItemDataRole.UserRole) or item.text())
+                if iid in self._checked_ids:
+                    ids.append(iid)
             return ids
 
         def pending_transcription_ids(self) -> list[str]:
@@ -2405,11 +2605,17 @@ if QT_IMPORT_ERROR is None:
         def open_project(self) -> None:
             if not self.save_current_turn():
                 return
-            folder = QFileDialog.getExistingDirectory(self, "Escolha a pasta do projeto", self._browse_dir())
-            if not folder:
+            from .project_store import PROJECT_EXTENSION
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Abrir projeto",
+                self._browse_dir(),
+                f"Projetos Transcritorio (*{PROJECT_EXTENSION});;Todos os arquivos (*)",
+            )
+            if not file_path:
                 return
             try:
-                context = app_service.open_project(Path(folder))
+                context = app_service.open_project(Path(file_path))
             except Exception as exc:
                 QMessageBox.critical(self, "Não foi possível abrir o projeto", sanitize_message(str(exc)))
                 return
@@ -2419,6 +2625,8 @@ if QT_IMPORT_ERROR is None:
         def switch_project_context(self, context: app_service.ProjectContext) -> None:
             self.player.stop()
             self.context = context
+            from . import recent_projects
+            recent_projects.save_recent(context.paths.project_root)
             self.review = None
             self.current_interview_id = None
             self.current_turn_id = None
@@ -2483,8 +2691,61 @@ if QT_IMPORT_ERROR is None:
             self.refresh_interviews()
             self.progress_label.setText(f"Propriedades atualizadas em {len(ids)} arquivo(s).")
 
+        def _on_interview_cell_clicked(self, row: int, column: int) -> None:
+            if column == COL_CHECK:
+                self._toggle_row_check(row)
+            else:
+                item = self.interview_table.item(row, COL_ARQUIVO)
+                if item:
+                    self.open_review(str(item.data(Qt.ItemDataRole.UserRole) or item.text()))
+
+        def _toggle_row_check(self, row: int) -> None:
+            item = self.interview_table.item(row, COL_ARQUIVO)
+            if not item:
+                return
+            interview_id = str(item.data(Qt.ItemDataRole.UserRole) or item.text())
+            check_item = self.interview_table.item(row, COL_CHECK)
+            if not check_item:
+                return
+            if interview_id in self._checked_ids:
+                self._checked_ids.discard(interview_id)
+                check_item.setCheckState(Qt.CheckState.Unchecked)
+            else:
+                self._checked_ids.add(interview_id)
+                check_item.setCheckState(Qt.CheckState.Checked)
+            self.update_action_states()
+
+        def _on_header_section_clicked(self, section: int) -> None:
+            if section != COL_CHECK:
+                return
+            visible_ids: list[str] = []
+            for row in range(self.interview_table.rowCount()):
+                if self.interview_table.isRowHidden(row):
+                    continue
+                item = self.interview_table.item(row, COL_ARQUIVO)
+                if item:
+                    visible_ids.append(str(item.data(Qt.ItemDataRole.UserRole) or item.text()))
+            all_checked = all(vid in self._checked_ids for vid in visible_ids) if visible_ids else False
+            self.interview_table.blockSignals(True)
+            for row in range(self.interview_table.rowCount()):
+                if self.interview_table.isRowHidden(row):
+                    continue
+                item = self.interview_table.item(row, COL_ARQUIVO)
+                check_item = self.interview_table.item(row, COL_CHECK)
+                if not item or not check_item:
+                    continue
+                iid = str(item.data(Qt.ItemDataRole.UserRole) or item.text())
+                if all_checked:
+                    self._checked_ids.discard(iid)
+                    check_item.setCheckState(Qt.CheckState.Unchecked)
+                else:
+                    self._checked_ids.add(iid)
+                    check_item.setCheckState(Qt.CheckState.Checked)
+            self.interview_table.blockSignals(False)
+            self.update_action_states()
+
         def open_review_from_row(self, row: int, _column: int) -> None:
-            item = self.interview_table.item(row, 0)
+            item = self.interview_table.item(row, COL_ARQUIVO)
             if item:
                 self.open_review(str(item.data(Qt.ItemDataRole.UserRole) or item.text()))
 
@@ -2637,11 +2898,16 @@ if QT_IMPORT_ERROR is None:
             previous_status = self.progress_label.text() if hasattr(self, "progress_label") else ""
             if hasattr(self, "progress_label"):
                 self.progress_label.setText("Gerando onda sonora da midia original...")
+            peaks: list[float] = []
+            duration: float = 0.0
             QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
             try:
                 peaks, duration = load_media_waveform_peaks(source_path)
                 if peaks:
                     save_waveform_cache(cache_path, source_path, peaks, duration)
+            except Exception as exc:
+                print(f"Aviso: nao foi possivel gerar onda sonora: {exc}", file=sys.stderr)
+                peaks, duration = [], 0.0
             finally:
                 QApplication.restoreOverrideCursor()
             if hasattr(self, "progress_label"):
@@ -2889,6 +3155,7 @@ if QT_IMPORT_ERROR is None:
             self._set_action(self.save_action, not busy and has_turn, reason_busy if busy else reason_turn)
             self._set_action(self.generate_files_action, not busy and (has_review or has_table_selection or any(status.review_exists or status.canonical_exists for status in self.statuses)), reason_busy if busy else "Nenhuma transcrição disponível.")
             self._set_action(self.export_selected_action, not busy and has_table_selection, reason_busy if busy else reason_select)
+            self._set_action(self.delete_transcription_action, not busy and has_table_selection, reason_busy if busy else reason_select)
             self._set_action(self.export_current_action, not busy and has_review, reason_busy if busy else reason_open)
             self._set_action(self.close_open_file_action, not busy and has_open_file, reason_busy if busy else "Nenhum arquivo aberto.")
             self._set_action(self.open_export_folder_action, not busy, reason_busy)
@@ -2901,6 +3168,8 @@ if QT_IMPORT_ERROR is None:
                 self.progress_bar.setVisible(busy)
             if hasattr(self, "cancel_job_button"):
                 self.cancel_job_button.setVisible(busy)
+            if hasattr(self, "diarize_checkbox"):
+                self.diarize_checkbox.setEnabled(not busy and has_project)
             if hasattr(self, "save_block_button"):
                 self.save_block_button.setEnabled(not busy and has_turn)
             if hasattr(self, "merge_button"):
@@ -3078,6 +3347,33 @@ if QT_IMPORT_ERROR is None:
 
         def export_selected_reviews(self, *_args: Any) -> None:
             self.export_reviews(default_scope="selected")
+
+        def delete_selected_transcriptions(self, *_args: Any) -> None:
+            if self.context is None:
+                return
+            ids = self.selected_interview_ids()
+            if not ids:
+                QMessageBox.information(self, "Selecione arquivos", "Selecione ao menos um arquivo para apagar a transcricao.")
+                return
+            n = len(ids)
+            msg = (f"Apagar todos os arquivos de transcricao de {n} entrevista(s)?\n\n"
+                   "Isso inclui ASR, diarizacao, transcricao editavel e metricas.\n"
+                   "Os arquivos originais de audio/video NAO serao alterados.\n\n"
+                   "Esta acao nao pode ser desfeita.")
+            reply = QMessageBox.question(self, "Confirmar exclusao", msg,
+                                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                         QMessageBox.StandardButton.No)
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+            if self.current_interview_id and self.current_interview_id in ids:
+                self.close_current_review()
+            try:
+                deleted, self.context = app_service.delete_transcription_outputs(self.context, ids)
+            except Exception as exc:
+                QMessageBox.critical(self, "Erro ao apagar", str(exc)[:2000])
+                return
+            self.refresh_interviews()
+            self.progress_label.setText(f"{deleted} arquivo(s) apagado(s) de {n} entrevista(s).")
 
         def export_reviews(self, default_scope: str = "current") -> None:
             if not self.save_current_turn(force=bool(self.review and self.current_turn_id)):
@@ -3285,6 +3581,20 @@ if QT_IMPORT_ERROR is None:
                 return
             steps: list[tuple] = []
             weights: list[int] = []
+            # Dynamic weights from benchmark data (tests/benchmark_exhaustive_2026-04-19.csv)
+            asr_model = str(self.context.config.get("asr_model", "large-v3-turbo"))
+            asr_device = str(self.context.config.get("asr_device", "cuda"))
+            do_diarize = bool(self.context.config.get("diarize", True))
+            w = _pipeline_weights(asr_model, asr_device)
+            if not do_diarize:
+                w = [w[0], w[1], 0, w[3], w[4]]  # zero weight for skipped diarize
+            boundaries = [0]
+            for v in w:
+                boundaries.append(boundaries[-1] + v)
+            total_w = boundaries[-1] or 100
+            r = [int(b * 100 / total_w) for b in boundaries]
+            r[-1] = 100
+            render_overrides = {"diarization_source": "pyannote_exclusive"} if do_diarize else {}
             for interview_id in ids:
                 self.context = app_service.update_job(
                     self.context,
@@ -3293,30 +3603,47 @@ if QT_IMPORT_ERROR is None:
                 )
             for index, interview_id in enumerate(ids, start=1):
                 prefix = f"{index}/{len(ids)} {interview_id}"
-                steps.extend(
-                    [
-                        self.job_step(f"{prefix}: preparando audio...", interview_id, "preparar audio", 0, 10, lambda item=interview_id: app_service.prepare_interviews(self.context, ids=[item])),
+                file_steps = [
+                    self.job_step(f"{prefix}: preparando audio...", interview_id, "preparar audio", r[0], r[1], lambda item=interview_id: app_service.prepare_interviews(self.context, ids=[item])),
+                    self.job_step(
+                        f"{prefix}: transcrevendo fala...",
+                        interview_id,
+                        "transcrever",
+                        r[1],
+                        r[2],
+                        lambda progress, should_cancel, item=interview_id: app_service.transcribe_interviews(
+                            self.context,
+                            ids=[item],
+                            overrides={"diarize": False},
+                            progress_callback=progress,
+                            should_cancel=should_cancel,
+                        ),
+                        accepts_progress=True,
+                    ),
+                ]
+                if do_diarize:
+                    file_steps.append(
                         self.job_step(
-                            f"{prefix}: transcrevendo fala...",
+                            f"{prefix}: identificando falantes...",
                             interview_id,
-                            "transcrever",
-                            10,
-                            70,
-                            lambda progress, should_cancel, item=interview_id: app_service.transcribe_interviews(
+                            "identificar falantes",
+                            r[2],
+                            r[3],
+                            lambda progress, should_cancel, item=interview_id: app_service.diarize_interviews(
                                 self.context,
                                 ids=[item],
-                                overrides={"diarize": False},
                                 progress_callback=progress,
                                 should_cancel=should_cancel,
                             ),
                             accepts_progress=True,
                         ),
-                        self.job_step(f"{prefix}: identificando falantes...", interview_id, "identificar falantes", 70, 88, lambda item=interview_id: app_service.diarize_interviews(self.context, ids=[item])),
-                        self.job_step(f"{prefix}: montando transcricao editavel...", interview_id, "montar transcricao", 88, 96, lambda item=interview_id: app_service.render_interviews(self.context, ids=[item], overrides={"diarization_source": "pyannote_exclusive"})),
-                        self.job_step(f"{prefix}: verificando arquivos gerados...", interview_id, "verificar arquivos", 96, 100, lambda item=interview_id: app_service.qc_interviews(self.context, ids=[item])),
-                    ]
-                )
-                weights.extend([10, 60, 18, 8, 4])
+                    )
+                file_steps.extend([
+                    self.job_step(f"{prefix}: montando transcricao editavel...", interview_id, "montar transcricao", r[3], r[4], lambda item=interview_id: app_service.render_interviews(self.context, ids=[item], overrides=render_overrides)),
+                    self.job_step(f"{prefix}: verificando arquivos gerados...", interview_id, "verificar arquivos", r[4], r[5], lambda item=interview_id: app_service.qc_interviews(self.context, ids=[item])),
+                ])
+                steps.extend(file_steps)
+                weights.extend(w)
             self.refresh_interviews()
             self.start_worker(
                 f"Transcrever {len(ids)} arquivo(s)",
@@ -3458,7 +3785,10 @@ if QT_IMPORT_ERROR is None:
                     "identificar falantes",
                     0,
                     70,
-                    lambda item=interview_id: app_service.diarize_interviews(self.context, ids=[item]),
+                    lambda progress, should_cancel, item=interview_id: app_service.diarize_interviews(
+                        self.context, ids=[item], progress_callback=progress, should_cancel=should_cancel,
+                    ),
+                    accepts_progress=True,
                 ),
                 self.job_step(
                     f"{interview_id}: remontando transcricao editavel...",
@@ -3531,6 +3861,8 @@ if QT_IMPORT_ERROR is None:
             self.cancel_job_action.setEnabled(False)
 
         def on_worker_progress(self, message: str, percent: int) -> None:
+            if percent < self.progress_bar.value():
+                return  # Ignore stale signals — never regress text or bar
             self.progress_label.setText(message)
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(max(0, min(100, percent)))
@@ -3613,11 +3945,21 @@ def main() -> int:
         print(f"Erro original: {QT_IMPORT_ERROR}", file=sys.stderr)
         return 2
     import argparse
+    from .project_store import PROJECT_EXTENSION
     parser = argparse.ArgumentParser(description=APP_NAME)
-    parser.add_argument("--project", type=Path, default=None, help="Project root directory.")
+    parser.add_argument("--project", type=Path, default=None, help="Project root directory or .transcritorio file.")
+    parser.add_argument("project_file", nargs="?", type=Path, default=None, help=argparse.SUPPRESS)
     args, _remaining = parser.parse_known_args()
+    # Support: Transcritorio.exe path/to/projeto.transcritorio (double-click)
+    project_root = args.project
+    if project_root is None and args.project_file is not None:
+        pf = args.project_file
+        if pf.suffix == PROJECT_EXTENSION:
+            project_root = pf.parent
+        else:
+            project_root = pf
     app = QApplication(sys.argv)
-    window = ReviewStudioWindow(project_root=args.project)
+    window = ReviewStudioWindow(project_root=project_root)
     window.show()
     if os.environ.get("QT_QPA_PLATFORM", "").lower() != "offscreen":
         QTimer.singleShot(0, window.show_startup_dialog)

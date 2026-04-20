@@ -23,6 +23,7 @@ AppPublisherURL={#AppURL}
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 AllowNoIcons=yes
+ChangesAssociations=yes
 ; Large bundle: enable disk spanning and best compression
 DiskSpanning=yes
 Compression=lzma2/ultra64
@@ -66,6 +67,18 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: deskto
 Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 
 [Registry]
+; Associate .transcritorio files with the application
+Root: HKA; Subkey: "Software\Classes\.transcritorio\OpenWithProgids"; \
+    ValueType: string; ValueName: "Transcritorio.ProjectFile"; ValueData: ""; \
+    Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\Transcritorio.ProjectFile"; \
+    ValueType: string; ValueName: ""; ValueData: "Projeto Transcritorio"; \
+    Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\Transcritorio.ProjectFile\DefaultIcon"; \
+    ValueType: string; ValueName: ""; ValueData: "{app}\{#AppExeName},0"
+Root: HKA; Subkey: "Software\Classes\Transcritorio.ProjectFile\shell\open\command"; \
+    ValueType: string; ValueName: ""; \
+    ValueData: """{app}\{#AppExeName}"" ""%1"""
 ; Add CLI to user PATH if selected
 Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; \
     ValueData: "{olddata};{app}"; Tasks: addtopath; Check: NeedsAddPath('{app}')
