@@ -143,6 +143,41 @@ def redacted_token_env(env: Mapping[str, str], token_env: str = "TRANSCRITORIO_M
 # ---------------------------------------------------------------------------
 
 _detected_device: str | None = None
+_cuda_libs_detected: bool | None = None
+
+
+def cuda_libs_present() -> bool:
+    """Check if the CUDA runtime libraries are bundled alongside torch.
+
+    Returns True when torch/lib/ has torch_cuda.* (the ~1 GB shared lib
+    providing CUDA kernels). In the 'cpu' bundle variant this file is
+    stripped and the app is CPU-only even on NVIDIA machines; callers
+    can use this to decide whether to offer a "download CUDA pack" flow
+    in the first-run dialog.
+
+    Returns False if torch is not importable or torch.__file__ is missing.
+    Result is cached on the first call.
+    """
+    global _cuda_libs_detected
+    if _cuda_libs_detected is not None:
+        return _cuda_libs_detected
+    try:
+        import torch
+        torch_file = getattr(torch, "__file__", None)
+        if not torch_file:
+            _cuda_libs_detected = False
+            return _cuda_libs_detected
+        lib_dir = Path(torch_file).parent / "lib"
+        if sys.platform == "win32":
+            candidates = [lib_dir / "torch_cuda.dll"]
+        elif sys.platform == "darwin":
+            candidates = [lib_dir / "libtorch_cuda.dylib"]
+        else:
+            candidates = [lib_dir / "libtorch_cuda.so"]
+        _cuda_libs_detected = any(c.exists() for c in candidates)
+    except Exception:
+        _cuda_libs_detected = False
+    return _cuda_libs_detected
 
 
 def detect_device() -> str:

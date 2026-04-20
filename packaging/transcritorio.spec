@@ -10,7 +10,6 @@ Run with:
   pyinstaller --distpath dist --workpath build --clean --noconfirm packaging/transcritorio.spec
 """
 
-import fnmatch
 import os
 import sys
 from pathlib import Path
@@ -33,6 +32,19 @@ ASSETS_DIR = REPO_ROOT / "assets"
 PACKAGING_DIR = REPO_ROOT / "packaging"
 HOOKS_DIR = PACKAGING_DIR / "hooks"
 VENDOR_FFMPEG_BIN = PACKAGING_DIR / "vendor" / "ffmpeg" / "bin"
+
+# ---------------------------------------------------------------------------
+# Bundle variant — "full" (default, com CUDA) ou "cpu" (strip CUDA, ~3 GB menor)
+# ---------------------------------------------------------------------------
+BUNDLE_VARIANT = os.environ.get("TRANSCRITORIO_BUNDLE_VARIANT", "full").lower()
+if BUNDLE_VARIANT not in ("full", "cpu"):
+    print(f"WARNING: TRANSCRITORIO_BUNDLE_VARIANT={BUNDLE_VARIANT!r} invalido, usando 'full'")
+    BUNDLE_VARIANT = "full"
+print(f"=== Bundle variant: {BUNDLE_VARIANT} ===")
+
+# Importa filtro testavel (tests/toy_bundle_filter.py valida a logica)
+sys.path.insert(0, str(PACKAGING_DIR))
+from bundle_filter import should_exclude_entry  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Hidden imports  (lazy-imported modules PyInstaller cannot detect)
@@ -243,84 +255,18 @@ gui_a = Analysis(
 )
 
 # ---------------------------------------------------------------------------
-# Post-analysis filtering: remove build artifacts and unnecessary CUDA DLLs
+# Post-analysis filtering: delegado ao packaging/bundle_filter.py
+# (testado por tests/toy_bundle_filter.py). Comportamento varia com
+# BUNDLE_VARIANT ("full" preserva CUDA; "cpu" remove ~3 GB de CUDA DLLs).
 # ---------------------------------------------------------------------------
-# Patterns for files that are build-time artifacts, never needed at runtime
-_FILE_EXCLUDE_PATTERNS = {"*.lib", "*.h", "*.hpp", "*.cuh", "*.cpp", "*.pyi", "*.cmake"}
-
-# CUDA DLLs confirmed safe to remove for inference-only (tested individually):
-# - cusolverMg: multi-GPU solver (single GPU laptop)
-# - cusparse: sparse linear algebra (Whisper/pyannote use dense ops)
-# - cufft/cufftw: FFT (audio FFT done by FFmpeg, not CUDA)
-# - curand: random number gen (not needed for deterministic inference)
-# - nvrtc.alt: alternate runtime compiler (torch.compile not used)
-# - nvJitLink: JIT linker (no custom CUDA kernels)
-_CUDA_DLL_EXCLUDES = [
-    "cusolverMg64",
-    "cusparse64",
-    "cufft64",
-    "cufftw64",
-    "curand64",
-    "nvrtc64_120_0.alt",
-    "nvJitLink",
-]
-
-# PySide6 dev executables (designer, qmlls, qmlformat, etc.)
-_PYSIDE6_DEV_EXES = {
-    "designer.exe", "linguist.exe", "lrelease.exe", "lupdate.exe",
-    "qmlformat.exe", "qmlls.exe", "qmllint.exe", "qmldom.exe",
-    "qmltyperegistrar.exe", "qsb.exe", "balsam.exe", "balsamui.exe",
-    "meshdebug.exe", "qmltc.exe", "qmlimportscanner.exe",
-    "qmlcachegen.exe", "qtdiag.exe", "qtpaths.exe",
-}
-
-# Qt plugins to keep (the rest are unnecessary for Widgets + Multimedia)
-_QT_PLUGINS_KEEP = {"platforms", "styles", "imageformats", "multimedia",
-                     "generic", "iconengines", "platforminputcontexts"}
-
-
-def _should_exclude_entry(name: str) -> bool:
-    """Return True if this TOC entry should be stripped from the bundle."""
-    basename = os.path.basename(name).lower()
-
-    # Build artifacts: .lib, .h, .hpp, .pyi, etc.
-    if any(fnmatch.fnmatch(basename, pat) for pat in _FILE_EXCLUDE_PATTERNS):
-        return True
-
-    # CUDA DLLs not needed for inference
-    if basename.endswith(".dll"):
-        for cuda_prefix in _CUDA_DLL_EXCLUDES:
-            if basename.startswith(cuda_prefix.lower()):
-                return True
-
-    # PySide6 dev executables
-    if basename in _PYSIDE6_DEV_EXES:
-        return True
-
-    # Qt plugins: keep only essential ones
-    name_fwd = name.replace("\\", "/")
-    if "/plugins/" in name_fwd:
-        parts = name_fwd.split("/plugins/")
-        if len(parts) > 1:
-            plugin_dir = parts[1].split("/")[0]
-            if plugin_dir not in _QT_PLUGINS_KEEP:
-                return True
-
-    # PySide6 unnecessary data: opengl32sw, WebEngine resources, etc.
-    if basename == "opengl32sw.dll":
-        return True
-    if "webengine" in basename.lower():
-        return True
-    if basename.startswith("qtwebengine"):
-        return True
-
-    return False
+def _exclude(name: str) -> bool:
+    return should_exclude_entry(name, BUNDLE_VARIANT)
 
 
 # Apply filtering to ALL three Analysis objects
 for analysis in (gui_a,):
-    analysis.datas = [d for d in analysis.datas if not _should_exclude_entry(d[0])]
-    analysis.binaries = [b for b in analysis.binaries if not _should_exclude_entry(b[0])]
+    analysis.datas = [d for d in analysis.datas if not _exclude(d[0])]
+    analysis.binaries = [b for b in analysis.binaries if not _exclude(b[0])]
 
 # ---------------------------------------------------------------------------
 # PYZ + EXE: GUI
@@ -347,8 +293,8 @@ cli_a = Analysis(
     [str(PACKAGING_DIR / "cli_entry.py")],
     **common_kwargs,
 )
-cli_a.datas = [d for d in cli_a.datas if not _should_exclude_entry(d[0])]
-cli_a.binaries = [b for b in cli_a.binaries if not _should_exclude_entry(b[0])]
+cli_a.datas = [d for d in cli_a.datas if not _exclude(d[0])]
+cli_a.binaries = [b for b in cli_a.binaries if not _exclude(b[0])]
 
 cli_pyz = PYZ(cli_a.pure)
 cli_exe = EXE(
@@ -371,8 +317,8 @@ wx_a = Analysis(
     [str(PACKAGING_DIR / "whisperx_entry.py")],
     **common_kwargs,
 )
-wx_a.datas = [d for d in wx_a.datas if not _should_exclude_entry(d[0])]
-wx_a.binaries = [b for b in wx_a.binaries if not _should_exclude_entry(b[0])]
+wx_a.datas = [d for d in wx_a.datas if not _exclude(d[0])]
+wx_a.binaries = [b for b in wx_a.binaries if not _exclude(b[0])]
 
 wx_pyz = PYZ(wx_a.pure)
 wx_exe = EXE(
