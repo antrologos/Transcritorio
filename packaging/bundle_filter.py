@@ -38,28 +38,21 @@ CUDA_DLL_EXCLUDES_MINIMAL = [
     "nvJitLink",        # JIT linker — sem kernels customizados
 ]
 
-# CPU-ONLY (variant='cpu'): remove TODO o stack CUDA — torch_cuda.dll
-# (982 MB), cudnn* (~180 MB agregado), cublas*, c10_cuda, caffe2_nvrtc.
-# Total removido: ~3 GB. O bundle resultante so roda em CPU mesmo em
-# maquina com placa NVIDIA.
+# CPU-ONLY (variant='cpu'): remove TODO o stack CUDA — torch_cuda
+# (~982 MB Windows, ~similar Linux), cudnn* (~180 MB), cublas*,
+# c10_cuda, cudart, nvrtc. Total removido: ~3 GB.
+#
+# Prefixos sao cross-plataforma: _shared_lib_stem() strippa o 'lib'
+# prefix do Linux e o sufixo versionado (.so, .so.N, .dylib, .dll),
+# entao 'cudnn' matches Windows 'cudnn64_9.dll' E Linux 'libcudnn.so.9'.
 CUDA_DLL_EXCLUDES_CPU_EXTRA = [
-    "torch_cuda",        # 982 MB
-    "torch_cuda_linalg",
-    "cudnn64_",
-    "cudnn_adv64",
-    "cudnn_cnn64",
-    "cudnn_ops64",
-    "cudnn_graph64",
-    "cudnn_heuristic64",
-    "cudnn_engines_precompiled64",
-    "cudnn_engines_runtime_compiled64",
-    "cublas64",
-    "cublasLt64",
+    "torch_cuda",        # Win: torch_cuda.dll  Linux: libtorch_cuda.so
+    "cudnn",             # cudnn*, cudnn_adv*, cudnn_ops*, cudnn_graph*, etc.
+    "cublas",            # cublas*, cublasLt*  (cublaslt via lowercase)
     "caffe2_nvrtc",
     "c10_cuda",
-    "cudart64",
-    "nvrtc-builtins64",
-    "nvrtc64_",         # runtime compiler padrao (era mantido em minimal)
+    "cudart",
+    "nvrtc",             # nvrtc*, nvrtc-builtins* (era em MINIMAL tambem)
 ]
 
 # ---------------------------------------------------------------------------
@@ -88,12 +81,53 @@ def _cuda_excludes_for_variant(variant: str) -> list[str]:
     return base
 
 
+_SHARED_LIB_EXTS = (".dll", ".so", ".dylib")
+
+
+def _shared_lib_stem(basename: str) -> str | None:
+    """Se basename e uma shared lib (.dll / .so[.N] / .dylib), retorna
+    o 'stem' normalizado sem prefixo lib* (Linux) e sem sufixo de versao.
+
+    Exemplos:
+        torch_cuda.dll          -> torch_cuda
+        libtorch_cuda.so        -> torch_cuda
+        libtorch_cuda.so.9.3.0  -> torch_cuda
+        libcudnn.dylib          -> cudnn
+        config.dll              -> config
+        torch_cuda.py           -> None  (nao e shared lib)
+
+    Retorna None se nao for shared lib reconhecida.
+    """
+    # .dll e .dylib: sempre no final
+    for ext in (".dll", ".dylib"):
+        if basename.endswith(ext):
+            stem = basename[: -len(ext)]
+            if stem.startswith("lib"):
+                stem = stem[3:]
+            return stem
+    # .so: aparece sozinho ou com sufixo versionado (.so.N, .so.N.M)
+    if ".so" in basename:
+        # corta tudo apos a primeira ocorrencia de ".so"
+        idx = basename.find(".so")
+        # valida que o que segue e '' ou '.N' (digit)
+        tail = basename[idx + 3:]
+        if tail == "" or (tail.startswith(".") and all(c.isdigit() or c == "." for c in tail[1:])):
+            stem = basename[:idx]
+            if stem.startswith("lib"):
+                stem = stem[3:]
+            return stem
+    return None
+
+
 def should_exclude_entry(name: str, variant: str = "full") -> bool:
     """Return True if this TOC entry should be stripped from the bundle.
 
     Args:
         name: path of the entry (forward or back slashes OK).
         variant: "full" (preserve CUDA) or "cpu" (strip CUDA stack).
+
+    Matches CUDA libs across Windows (.dll), Linux (.so[.N]) and Mac
+    (.dylib) via a normalized stem (strip extension + 'lib' prefix).
     """
     basename = os.path.basename(name).lower()
 
@@ -101,10 +135,11 @@ def should_exclude_entry(name: str, variant: str = "full") -> bool:
     if any(fnmatch.fnmatch(basename, pat) for pat in FILE_EXCLUDE_PATTERNS):
         return True
 
-    # CUDA DLLs conforme o variant
-    if basename.endswith(".dll"):
+    # CUDA shared libs conforme o variant (.dll / .so / .dylib cobertos)
+    stem = _shared_lib_stem(basename)
+    if stem is not None:
         for cuda_prefix in _cuda_excludes_for_variant(variant):
-            if basename.startswith(cuda_prefix.lower()):
+            if stem.startswith(cuda_prefix.lower()):
                 return True
 
     # PySide6 dev executables
