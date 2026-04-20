@@ -193,8 +193,15 @@ def test_api_compat_noop_when_nothing_stored() -> None:
 
 if __name__ == "__main__":
     test_store_retrieve_clear_via_keyring()
-    test_dpapi_legacy_migration()
-    test_migration_rollback_on_keyring_failure()
+    # DPAPI migration e feature Windows-only (ctypes.crypt32).
+    # Em Linux/Mac a logica de migracao nao dispara (is_windows=False
+    # bloqueia o branch em retrieve()). Skip silencioso.
+    if sys.platform == "win32":
+        test_dpapi_legacy_migration()
+        test_migration_rollback_on_keyring_failure()
+    else:
+        print("SKIP test_dpapi_legacy_migration: DPAPI e Windows-only")
+        print("SKIP test_migration_rollback_on_keyring_failure: DPAPI e Windows-only")
     test_fallback_fernet_when_keyring_unavailable()
     test_api_compat_noop_when_nothing_stored()
     print()

@@ -197,8 +197,10 @@ assert (res / "A01.reviewed.md").read_text(encoding="utf-8") == final_md.read_te
 check("3.4 Conteudo espelhado binariamente identico")
 
 # _results_folder_for_user agora aponta para Resultados/
+# Windows: normalizar paths (tempfile pode usar short path 8.3 enquanto
+# project_root e resolvido via make_paths).
 folder2 = win._results_folder_for_user()
-assert folder2 == res
+assert folder2.resolve() == res.resolve()
 check("3.5 _results_folder_for_user pos-export aponta para 'Resultados/'")
 
 # Re-export atualiza o mirror

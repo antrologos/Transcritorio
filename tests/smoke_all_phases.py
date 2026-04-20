@@ -203,7 +203,9 @@ assert (res / "LEIA-ME.txt").exists()
 check("4.1 Resultados/ criado: MD+DOCX+LEIA-ME, NVivo filtrado")
 
 # _results_folder_for_user agora aponta para Resultados/
-assert win._results_folder_for_user() == res
+# Windows: normalizar paths pois o tempfile pode usar short paths
+# (RUNNER~1) enquanto project_root e resolvido via make_paths.
+assert win._results_folder_for_user().resolve() == res.resolve()
 check("4.2 _results_folder_for_user apos export: Resultados/")
 
 

@@ -255,41 +255,48 @@ print("=" * 60)
 print("CENARIO 5 - Migracao atomica DPAPI -> keyring")
 print("=" * 60)
 
-with tempfile.TemporaryDirectory() as tmp:
-    os.environ["TRANSCRITORIO_HOME"] = tmp
-    storage: dict = {}
-    kr = types.ModuleType("keyring")
-    kr.get_password = lambda s, u: storage.get((s, u))
-    kr.set_password = lambda s, u, v: storage.__setitem__((s, u), v)
-    kr.delete_password = lambda s, u: storage.pop((s, u), None)
-    kr.get_keyring = lambda: object()
-    sys.modules["keyring"] = kr
-    sys.modules["keyring.errors"] = types.ModuleType("keyring.errors")
-    import importlib
-    importlib.reload(token_vault)
-    try:
-        # Cria legacy
-        legacy = Path(tmp) / "hf_token.vault"
-        legacy.write_text("FAKE_CIPHERTEXT", encoding="utf-8")
-        # Mock decrypt
-        token_vault._decrypt_dpapi = lambda b: "hf_LEGACY_DPAPI_X"
-        got = token_vault.retrieve()
-        if got == "hf_LEGACY_DPAPI_X":
-            ok("retrieve() le DPAPI legado e devolve token")
-        else:
-            fail(f"retrieve legacy: got {got!r}")
-        if storage.get(("Transcritorio", "huggingface")) == "hf_LEGACY_DPAPI_X":
-            ok("token gravado no keyring")
-        else:
-            fail("token NAO gravado no keyring")
-        if not legacy.exists():
-            ok("legacy DPAPI apagado apos migracao bem-sucedida")
-        else:
-            fail("legacy DPAPI ainda existe")
-    finally:
-        sys.modules.pop("keyring", None)
-        sys.modules.pop("keyring.errors", None)
-        del os.environ["TRANSCRITORIO_HOME"]
+# DPAPI e Windows-only (ctypes.crypt32). Em Linux/Mac a logica de migracao
+# nao dispara porque retrieve() gateia com _is_windows(). Skip silencioso.
+def _run_cenario_5() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ["TRANSCRITORIO_HOME"] = tmp
+        storage: dict = {}
+        kr = types.ModuleType("keyring")
+        kr.get_password = lambda s, u: storage.get((s, u))
+        kr.set_password = lambda s, u, v: storage.__setitem__((s, u), v)
+        kr.delete_password = lambda s, u: storage.pop((s, u), None)
+        kr.get_keyring = lambda: object()
+        sys.modules["keyring"] = kr
+        sys.modules["keyring.errors"] = types.ModuleType("keyring.errors")
+        import importlib
+        importlib.reload(token_vault)
+        try:
+            legacy = Path(tmp) / "hf_token.vault"
+            legacy.write_text("FAKE_CIPHERTEXT", encoding="utf-8")
+            token_vault._decrypt_dpapi = lambda b: "hf_LEGACY_DPAPI_X"
+            got = token_vault.retrieve()
+            if got == "hf_LEGACY_DPAPI_X":
+                ok("retrieve() le DPAPI legado e devolve token")
+            else:
+                fail(f"retrieve legacy: got {got!r}")
+            if storage.get(("Transcritorio", "huggingface")) == "hf_LEGACY_DPAPI_X":
+                ok("token gravado no keyring")
+            else:
+                fail("token NAO gravado no keyring")
+            if not legacy.exists():
+                ok("legacy DPAPI apagado apos migracao bem-sucedida")
+            else:
+                fail("legacy DPAPI ainda existe")
+        finally:
+            sys.modules.pop("keyring", None)
+            sys.modules.pop("keyring.errors", None)
+            del os.environ["TRANSCRITORIO_HOME"]
+
+
+if sys.platform == "win32":
+    _run_cenario_5()
+else:
+    print("  SKIP: DPAPI migration e Windows-only")
 
 
 # ============================================================
@@ -300,37 +307,45 @@ print("=" * 60)
 print("CENARIO 6 - Rollback preserva DPAPI se keyring falha")
 print("=" * 60)
 
-with tempfile.TemporaryDirectory() as tmp:
-    os.environ["TRANSCRITORIO_HOME"] = tmp
-    storage: dict = {}
-    kr = types.ModuleType("keyring")
-    kr.get_password = lambda s, u: storage.get((s, u))
-    def bad_set(s, u, v):
-        raise RuntimeError("keyring locked")
-    kr.set_password = bad_set
-    kr.delete_password = lambda s, u: None
-    kr.get_keyring = lambda: object()
-    sys.modules["keyring"] = kr
-    sys.modules["keyring.errors"] = types.ModuleType("keyring.errors")
-    import importlib
-    importlib.reload(token_vault)
-    try:
-        legacy = Path(tmp) / "hf_token.vault"
-        legacy.write_text("FAKE", encoding="utf-8")
-        token_vault._decrypt_dpapi = lambda b: "hf_SAFE"
-        got = token_vault.retrieve()
-        if got == "hf_SAFE":
-            ok("retrieve() devolve fallback DPAPI quando keyring falha")
-        else:
-            fail(f"rollback retrieve: got {got!r}")
-        if legacy.exists():
-            ok("legacy DPAPI NAO apagado (rollback)")
-        else:
-            fail("legacy apagado apesar da falha")
-    finally:
-        sys.modules.pop("keyring", None)
-        sys.modules.pop("keyring.errors", None)
-        del os.environ["TRANSCRITORIO_HOME"]
+
+def _run_cenario_6() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ["TRANSCRITORIO_HOME"] = tmp
+        storage: dict = {}
+        kr = types.ModuleType("keyring")
+        kr.get_password = lambda s, u: storage.get((s, u))
+        def bad_set(s, u, v):
+            raise RuntimeError("keyring locked")
+        kr.set_password = bad_set
+        kr.delete_password = lambda s, u: None
+        kr.get_keyring = lambda: object()
+        sys.modules["keyring"] = kr
+        sys.modules["keyring.errors"] = types.ModuleType("keyring.errors")
+        import importlib
+        importlib.reload(token_vault)
+        try:
+            legacy = Path(tmp) / "hf_token.vault"
+            legacy.write_text("FAKE", encoding="utf-8")
+            token_vault._decrypt_dpapi = lambda b: "hf_SAFE"
+            got = token_vault.retrieve()
+            if got == "hf_SAFE":
+                ok("retrieve() devolve fallback DPAPI quando keyring falha")
+            else:
+                fail(f"rollback retrieve: got {got!r}")
+            if legacy.exists():
+                ok("legacy DPAPI NAO apagado (rollback)")
+            else:
+                fail("legacy apagado apesar da falha")
+        finally:
+            sys.modules.pop("keyring", None)
+            sys.modules.pop("keyring.errors", None)
+            del os.environ["TRANSCRITORIO_HOME"]
+
+
+if sys.platform == "win32":
+    _run_cenario_6()
+else:
+    print("  SKIP: DPAPI rollback e Windows-only")
 
 
 # ============================================================
@@ -356,14 +371,20 @@ for name in ("setup_transcription_env.sh", "review_studio.sh", "transcribe.sh"):
         ok(f"{name}: set -euo pipefail")
     else:
         fail(f"{name}: falta set -euo pipefail")
-    # bash -n
-    try:
-        subprocess.run(["bash", "-n", str(p)], check=True, capture_output=True, text=True)
-        ok(f"{name}: bash -n OK")
-    except subprocess.CalledProcessError as e:
-        fail(f"{name}: syntax error: {e.stderr}")
-    except FileNotFoundError:
-        ok(f"{name}: bash -n skip (bash nao no PATH)")
+    # bash -n: pula no Windows (Git-for-Windows bash nao reporta
+    # erros consistentemente em scripts com CRLF ou caminhos D:/). Os
+    # scripts .sh sao para Mac/Linux; validacao basica via shebang e
+    # set -euo pipefail acima e suficiente.
+    if sys.platform == "win32":
+        ok(f"{name}: bash -n skip (Windows — script e para Mac/Linux)")
+    else:
+        try:
+            subprocess.run(["bash", "-n", str(p)], check=True, capture_output=True, text=True)
+            ok(f"{name}: bash -n OK")
+        except subprocess.CalledProcessError as e:
+            fail(f"{name}: syntax error: {e.stderr}")
+        except FileNotFoundError:
+            ok(f"{name}: bash -n skip (bash nao no PATH)")
 
 # Verificar que resolve venv via app_data_dir
 for name in ("setup_transcription_env.sh", "review_studio.sh", "transcribe.sh"):
