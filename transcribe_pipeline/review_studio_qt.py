@@ -924,9 +924,29 @@ if QT_IMPORT_ERROR is None:
             layout.addWidget(description)
 
             grid = QGridLayout()
-            self.model_edit = QLineEdit(str(config.get("asr_model") or "large-v3"))
+            from . import model_manager
+            self.model_combo = QComboBox()
+            installed = model_manager.installed_asr_variants()
+            current = str(config.get("asr_model") or "large-v3-turbo")
+            current_idx = 0
+            for key in model_manager.ASR_VARIANTS:
+                if key not in installed:
+                    continue
+                info = model_manager.ASR_VARIANTS[key]
+                self.model_combo.addItem(info["label"], key)
+                if key == current:
+                    current_idx = self.model_combo.count() - 1
+            if self.model_combo.count() == 0:
+                self.model_combo.addItem(current, current)
+            self.model_combo.setCurrentIndex(current_idx)
+            model_row = QHBoxLayout()
+            model_row.addWidget(self.model_combo, stretch=1)
+            self.install_models_btn = QPushButton("Instalar modelos...")
+            self.install_models_btn.setToolTip("Baixar modelos adicionais do Hugging Face.")
+            self.install_models_btn.clicked.connect(self._open_model_setup)
+            model_row.addWidget(self.install_models_btn)
             grid.addWidget(QLabel("Modelo Whisper:"), 0, 0)
-            grid.addWidget(self.model_edit, 0, 1)
+            grid.addLayout(model_row, 0, 1)
 
             self.device_combo = QComboBox()
             for value, label in [("cuda", "GPU NVIDIA (CUDA)"), ("cpu", "CPU")]:
@@ -984,6 +1004,12 @@ if QT_IMPORT_ERROR is None:
             buttons.rejected.connect(self.reject)
             layout.addWidget(buttons)
 
+        def _open_model_setup(self) -> None:
+            self.reject()
+            parent = self.parent()
+            if parent and hasattr(parent, "show_model_setup"):
+                parent.show_model_setup()
+
         def updates(self) -> dict[str, Any]:
             device = str(self.device_combo.currentData())
             compute_type = str(self.compute_combo.currentData())
@@ -992,7 +1018,7 @@ if QT_IMPORT_ERROR is None:
             speaker_count = int(self.default_speakers_spin.value())
             language = str(self.language_combo.currentData())
             return {
-                "asr_model": self.model_edit.text().strip() or "large-v3",
+                "asr_model": str(self.model_combo.currentData() or self.model_combo.currentText() or "large-v3-turbo"),
                 "asr_device": device,
                 "asr_compute_type": compute_type,
                 "asr_batch_size": int(self.batch_spin.value()),
@@ -1337,7 +1363,11 @@ if QT_IMPORT_ERROR is None:
             layout.addWidget(QLabel("Cole sua chave aqui:"))
             self.token_edit = QLineEdit()
             self.token_edit.setPlaceholderText("Cole aqui a chave (começa com hf_...)")
-            # Plain text field so user can see what they pasted
+            # Pre-fill from secure vault if available
+            from . import token_vault
+            saved = token_vault.retrieve()
+            if saved:
+                self.token_edit.setText(saved)
             self.token_edit.textChanged.connect(self._on_token_changed)
             layout.addWidget(self.token_edit)
             self.status_label = QLabel("")
@@ -1387,6 +1417,11 @@ if QT_IMPORT_ERROR is None:
                 return False
             self.status_label.setText(f"✓ {result['message']} {gated['message']}")
             self.status_label.setStyleSheet("color: #2e7d32; font-weight: 700;")
+            # Persist validated token in secure vault
+            try:
+                token_vault.store(token)
+            except Exception:
+                pass
             return True
 
         def token(self) -> str:
@@ -1597,11 +1632,16 @@ if QT_IMPORT_ERROR is None:
             self.token_edit = QLineEdit()
             self.token_edit.setEchoMode(QLineEdit.EchoMode.Password)
             self.token_edit.setPlaceholderText("hf_...")
+            # Pre-fill from secure vault if available
+            from . import token_vault
+            saved = token_vault.retrieve()
+            if saved:
+                self.token_edit.setText(saved)
             layout.addWidget(self.token_edit)
 
             self.remember_checkbox = QCheckBox("Lembrar neste computador usando cofre seguro")
-            self.remember_checkbox.setEnabled(False)
-            self.remember_checkbox.setToolTip("Este build usa o token apenas para esta sessao de download; armazenamento seguro multiplataforma sera ligado no instalador.")
+            self.remember_checkbox.setChecked(bool(saved))
+            self.remember_checkbox.setToolTip("Armazena o token criptografado com suas credenciais do Windows (DPAPI). So voce neste computador pode acessar.")
             layout.addWidget(self.remember_checkbox)
 
             status = QTextEdit()
@@ -1627,6 +1667,12 @@ if QT_IMPORT_ERROR is None:
                     "Cole o token de leitura do Hugging Face deste usuario para baixar o modelo de separacao de falantes.",
                 )
                 return
+            # Persist token if "remember" is checked
+            from . import token_vault
+            if self.remember_checkbox.isChecked():
+                token_vault.store(self.token())
+            else:
+                token_vault.clear()
             super().accept()
 
 
