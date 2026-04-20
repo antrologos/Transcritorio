@@ -146,21 +146,39 @@ _detected_device: str | None = None
 
 
 def detect_device() -> str:
-    """Return 'cuda' if a CUDA GPU is available, 'cpu' otherwise."""
+    """Return 'cuda' | 'mps' | 'cpu' based on available accelerator.
+
+    MPS (Apple Silicon) is detected but not accepted by CTranslate2/faster-whisper
+    for ASR — resolve_device() will fall back mps -> cpu for the ASR path.
+    pyannote supports MPS partially.
+    """
     global _detected_device
     if _detected_device is not None:
         return _detected_device
     try:
         import torch
-        available = torch.cuda.is_available()
+        if torch.cuda.is_available():
+            _detected_device = "cuda"
+            return _detected_device
     except Exception:
-        available = False
-    _detected_device = "cuda" if available else "cpu"
+        pass
+    try:
+        import torch
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            _detected_device = "mps"
+            return _detected_device
+    except Exception:
+        pass
+    _detected_device = "cpu"
     return _detected_device
 
 
 def resolve_device(configured: str | None) -> tuple[str, bool]:
-    """Resolve effective device. Returns (device, fell_back)."""
+    """Resolve effective device for the ASR path. Returns (device, fell_back).
+
+    CT2/faster-whisper does not support MPS, so mps is coerced to cpu here.
+    Callers that want the raw detection should use detect_device() instead.
+    """
     wanted = (configured or "cuda").lower()
     if wanted == "cpu":
         return "cpu", False

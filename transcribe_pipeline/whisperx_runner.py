@@ -42,7 +42,11 @@ def run_whisperx(
             validate_local_diarization_model(config.get("diarize_model"))
         device, fell_back = runtime.resolve_device(config.get("asr_device"))
         if fell_back:
-            print(f"[Transcritorio] CUDA indisponivel. Usando CPU para transcrever {row['interview_id']}.")
+            detected = runtime.detect_device()
+            if detected == "mps":
+                print(f"[Transcritorio] Apple Silicon (MPS) detectado, mas faster-whisper usa CPU para ASR. Transcrevendo {row['interview_id']} em CPU (~3x tempo real).")
+            else:
+                print(f"[Transcritorio] CUDA indisponivel. Usando CPU para transcrever {row['interview_id']}.")
         effective_model = model_manager.resolve_asr_model(str(config["asr_model"]))
         command = [
             runtime.resolve_executable("whisperx"),

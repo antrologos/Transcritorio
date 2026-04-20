@@ -16,6 +16,8 @@ dependencies = [
     "huggingface_hub>=0.28.1",
     "python-docx>=1.2.0",
     "jiwer>=3.0.0",
+    "keyring>=24",
+    "cryptography>=42",
 ]
 
 [project.scripts]

@@ -61,6 +61,20 @@ Antes de transcrever em ambiente de desenvolvimento:
 - Aceite o modelo `pyannote/speaker-diarization-community-1` no Hugging Face.
 - Use `models download` com o token do proprio usuario para baixar os modelos. Os wrappers nao carregam tokens persistidos automaticamente.
 
+## macOS e Linux (MVP 0.2)
+
+A versao 0.2 roda nativamente em macOS e Linux via scripts `.sh`.
+Instaladores (`.dmg` / AppImage) ficam para 0.3+.
+
+**macOS**: `brew install ffmpeg python@3.11` + `./scripts/setup_transcription_env.sh`.
+ASR roda em CPU (faster-whisper nao suporta MPS); ~3-5x tempos do CUDA.
+
+**Linux (Ubuntu/Debian)**: `sudo apt install ffmpeg python3.11 python3.11-venv libxcb-cursor0 libxcb-shape0` + `./scripts/setup_transcription_env.sh`. CUDA opcional (ver `docs/MAC_LINUX.md`).
+
+**Armazenamento de tokens**: `keyring` usa Keychain (Mac), SecretService (Linux) ou Credential Manager (Windows, com migracao automatica do DPAPI legado). Linux headless cai em Fernet+machine-id.
+
+Detalhes e troubleshooting em [`docs/MAC_LINUX.md`](docs/MAC_LINUX.md).
+
 Saidas principais:
 
 - `Transcricoes/00_manifest/manifest.csv`
