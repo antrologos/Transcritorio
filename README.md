@@ -4,6 +4,24 @@ App desktop para transcricao automatica local de entrevistas com separacao de fa
 
 Autor: Rogerio Jeronimo Barbosa - https://antrologos.github.io/
 
+## Downloads (usuario final)
+
+Baixe a versao para sua plataforma em
+[Releases](https://github.com/antrologos/Transcritorio/releases/latest):
+
+| Plataforma | Arquivo | Instrucoes |
+|------------|---------|------------|
+| **Windows 10/11** | `Transcritorio-0.1.1-Setup.exe` | Clique duas vezes. O instalador detecta placa NVIDIA e oferece aceleracao opcional (+1 GB download). |
+| **macOS** (Apple Silicon) | `Transcritorio.dmg` | Veja [`docs/MAC_INSTALL.md`](docs/MAC_INSTALL.md) — primeira execucao pede "botao direito > Abrir" por causa do Gatekeeper. |
+| **Linux** (Ubuntu, Fedora, etc.) | `Transcritorio-x86_64.AppImage` | Veja [`docs/LINUX_INSTALL.md`](docs/LINUX_INSTALL.md) — precisa instalar `ffmpeg` + libs xcb do sistema. |
+
+**Status por plataforma (v0.1.1):**
+- **Windows**: suportado. Aceleracao NVIDIA opcional no instalador.
+- **Linux**: suportado. Testado em Ubuntu 22.04+; CUDA opcional no primeiro uso.
+- **macOS**: experimental. Compila e passa testes automatizados no CI; teste manual de campo pendente. Aceleracao por GPU Apple (MPS) nao esta habilitada ainda.
+
+## Desenvolvimento
+
 O software vive nesta pasta e abre projetos de transcricao de qualquer lugar. Use `--project` para apontar para a pasta do projeto, ou rode de dentro da pasta do projeto (fallback CWD).
 
 Para segredos locais, leia `docs/SEGURANCA_SEGREDOS.md`.
