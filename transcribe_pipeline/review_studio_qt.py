@@ -1240,6 +1240,287 @@ if QT_IMPORT_ERROR is None:
             QApplication.clipboard().setText(str(target))
 
 
+    class ModelManagerDialog(QDialog):
+        """Gerenciador de modelos: ver tamanho real, remover, baixar, trocar token.
+
+        Substitui o ModelStatusDialog read-only antigo.
+        """
+
+        COL_NAME = 0
+        COL_SIZE = 1
+        COL_STATUS = 2
+        COL_DATE = 3
+        COL_ACTION = 4
+
+        def __init__(self, context_provider, parent: QWidget | None = None) -> None:
+            super().__init__(parent)
+            self._context_provider = context_provider  # callable -> ProjectContext | None
+            self.setWindowTitle("Gerenciar modelos")
+            self.resize(780, 520)
+            layout = QVBoxLayout(self)
+
+            header = QLabel("Modelos locais de transcricao e separacao de falantes")
+            header.setStyleSheet("font-size: 14px; font-weight: 700;")
+            layout.addWidget(header)
+
+            subtitle = QLabel(
+                "Os modelos ficam em cache local e sao reutilizados entre projetos. "
+                "Remocao libera espaco em disco; voce podera baixar novamente a qualquer momento."
+            )
+            subtitle.setStyleSheet(_style_muted())
+            subtitle.setWordWrap(True)
+            layout.addWidget(subtitle)
+
+            self.table = QTableWidget(0, 5)
+            self.table.setHorizontalHeaderLabels(["Modelo", "Tamanho", "Status", "Baixado em", ""])
+            self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+            for c in (1, 2, 3, 4):
+                self.table.horizontalHeader().setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
+            self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+            self.table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+            self.table.verticalHeader().setVisible(False)
+            layout.addWidget(self.table, stretch=1)
+
+            self.summary_label = QLabel("")
+            self.summary_label.setStyleSheet(_style_muted())
+            layout.addWidget(self.summary_label)
+
+            btn_row = QHBoxLayout()
+            self.open_folder_btn = QPushButton("Abrir pasta de modelos")
+            self.open_folder_btn.clicked.connect(self._open_models_folder)
+            btn_row.addWidget(self.open_folder_btn)
+            self.remove_orphans_btn = QPushButton("Remover orfaos")
+            self.remove_orphans_btn.setToolTip("Apagar modelos em cache que nao estao mais catalogados pelo Transcritorio.")
+            self.remove_orphans_btn.clicked.connect(self._remove_orphans)
+            btn_row.addWidget(self.remove_orphans_btn)
+            self.download_btn = QPushButton("Baixar outros modelos...")
+            self.download_btn.clicked.connect(self._open_download_wizard)
+            btn_row.addWidget(self.download_btn)
+            self.token_btn = QPushButton("Trocar token HF...")
+            self.token_btn.clicked.connect(self._change_token)
+            btn_row.addWidget(self.token_btn)
+            btn_row.addStretch(1)
+            close_btn = QPushButton("Fechar")
+            close_btn.setDefault(True)
+            close_btn.clicked.connect(self.accept)
+            btn_row.addWidget(close_btn)
+            layout.addLayout(btn_row)
+
+            self._populate()
+
+        # -- populate ------------------------------------------------------------
+        def _populate(self) -> None:
+            from . import model_manager
+            from . import runtime
+            from datetime import datetime
+            self.table.setRowCount(0)
+            cache_root = runtime.model_cache_dir()
+            scan = model_manager.scan_cache(cache_root)
+            scan_by_repo = {e["repo_id"]: e for e in scan}
+
+            # Configured variant, for the "em uso" badge
+            ctx = None
+            try:
+                ctx = self._context_provider()
+            except Exception:
+                ctx = None
+            configured = (ctx.config.get("asr_model") if ctx else "large-v3-turbo") or "large-v3-turbo"
+
+            rows: list[tuple[str, str, int, str, str, bool]] = []
+            # (label, repo_id, size, status, date_str, can_remove)
+            for key, info in model_manager.ASR_VARIANTS.items():
+                repo = str(info.get("repo"))
+                label = model_manager.friendly_name(key)
+                entry = scan_by_repo.get(repo)
+                if entry is not None:
+                    size = int(entry.get("size_on_disk", 0))
+                    status = "Em uso" if key == configured else "Instalado"
+                    dt = model_manager.model_install_date(repo, cache_root)
+                    date_str = datetime.fromtimestamp(dt).strftime("%d/%m/%Y") if dt else "-"
+                    rows.append((label, repo, size, status, date_str, True))
+                else:
+                    rows.append((label, repo, 0, "Disponivel", "-", False))
+            # Fixos (obrigatorios)
+            for asset in model_manager._FIXED_MODELS:
+                repo = asset.repo_id
+                label = model_manager.friendly_name(asset.key)
+                entry = scan_by_repo.get(repo)
+                if entry is not None:
+                    size = int(entry.get("size_on_disk", 0))
+                    dt = model_manager.model_install_date(repo, cache_root)
+                    date_str = datetime.fromtimestamp(dt).strftime("%d/%m/%Y") if dt else "-"
+                    rows.append((label, repo, size, "Obrigatorio", date_str, False))
+                else:
+                    rows.append((label, repo, 0, "Pendente", "-", False))
+            # Orfaos
+            for repo in model_manager.orphan_repos(cache_root):
+                entry = scan_by_repo.get(repo)
+                size = int(entry["size_on_disk"]) if entry else 0
+                dt = model_manager.model_install_date(repo, cache_root)
+                date_str = datetime.fromtimestamp(dt).strftime("%d/%m/%Y") if dt else "-"
+                rows.append((f"{repo} (orfao)", repo, size, "Orfao", date_str, True))
+
+            # Popular tabela
+            for r_idx, (label, repo, size, status, date_str, can_remove) in enumerate(rows):
+                self.table.insertRow(r_idx)
+                name_item = QTableWidgetItem(label)
+                name_item.setToolTip(repo)
+                self.table.setItem(r_idx, self.COL_NAME, name_item)
+                size_str = model_manager._format_size(size) if size else "-"
+                self.table.setItem(r_idx, self.COL_SIZE, QTableWidgetItem(size_str))
+                status_item = QTableWidgetItem(status)
+                if status == "Em uso":
+                    status_item.setToolTip("Modelo atualmente selecionado na configuracao de transcricao.")
+                self.table.setItem(r_idx, self.COL_STATUS, status_item)
+                self.table.setItem(r_idx, self.COL_DATE, QTableWidgetItem(date_str))
+                if can_remove:
+                    btn = QPushButton("Remover")
+                    btn.setToolTip(f"Remover {repo} do cache local. Voce podera baixar de novo depois.")
+                    btn.clicked.connect(lambda _chk, rid=repo, st=status: self._remove_model(rid, st))
+                    self.table.setCellWidget(r_idx, self.COL_ACTION, btn)
+
+            total_bytes = sum(int(e.get("size_on_disk", 0)) for e in scan)
+            self.summary_label.setText(
+                f"Espaco total em cache: {model_manager._format_size(total_bytes)}  |  Pasta: {cache_root}"
+            )
+
+        # -- actions ------------------------------------------------------------
+        def _open_models_folder(self) -> None:
+            from . import runtime
+            folder = runtime.model_cache_dir()
+            folder.mkdir(parents=True, exist_ok=True)
+            open_folder_in_explorer(folder)
+
+        def _jobs_using_model_repo(self, repo_id: str) -> int:
+            """Retorna numero de jobs Executando/Na fila que estao usando este modelo.
+
+            Heuristica simples: se o repo corresponde ao asr_model configurado e
+            existem jobs ativos, conta. Diarizacao/alignment sao sempre usados
+            em qualquer job."""
+            try:
+                ctx = self._context_provider()
+            except Exception:
+                return 0
+            if ctx is None:
+                return 0
+            active = [iid for iid, j in (ctx.jobs or {}).items() if (j or {}).get("status") in ("Executando", "Na fila")]
+            if not active:
+                return 0
+            from . import model_manager
+            configured = ctx.config.get("asr_model") or "large-v3-turbo"
+            configured_repo = model_manager.ASR_VARIANTS.get(configured, {}).get("repo")
+            # Bloquear remocao do asr atual OU de modelos obrigatorios enquanto ha job
+            known_required = {asset.repo_id for asset in model_manager._FIXED_MODELS}
+            if repo_id == configured_repo or repo_id in known_required:
+                return len(active)
+            return 0
+
+        def _remove_model(self, repo_id: str, status: str) -> None:
+            from . import model_manager
+            busy_n = self._jobs_using_model_repo(repo_id)
+            if busy_n:
+                QMessageBox.information(
+                    self,
+                    "Acao bloqueada",
+                    f"Ha {busy_n} tarefas na fila usando este modelo. Cancele ou aguarde antes de remover.",
+                )
+                return
+            # Aviso especial se e o modelo configurado
+            warn = ""
+            if status == "Em uso":
+                warn = "\n\nEste modelo esta selecionado em Configurar transcricao. Apos remover, voce precisara baixa-lo de novo ou trocar o modelo antes da proxima transcricao."
+            reply = QMessageBox.question(
+                self,
+                "Remover modelo",
+                f"Remover {repo_id} do cache local?{warn}",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+            result = model_manager.delete_model(repo_id)
+            if result["success"]:
+                freed = model_manager._format_size(int(result["bytes_freed"]))
+                QMessageBox.information(self, "Modelo removido", f"{freed} liberados.")
+            else:
+                QMessageBox.warning(self, "Nao foi possivel remover", str(result["error"]))
+            self._populate()
+
+        def _remove_orphans(self) -> None:
+            from . import model_manager
+            from . import runtime
+            orphans = model_manager.orphan_repos(runtime.model_cache_dir())
+            if not orphans:
+                QMessageBox.information(self, "Sem orfaos", "Nao ha modelos orfaos no cache.")
+                return
+            reply = QMessageBox.question(
+                self,
+                "Remover orfaos",
+                f"Remover {len(orphans)} modelo(s) orfao(s)?\n\n" + "\n".join(orphans),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+            freed_total = 0
+            errors: list[str] = []
+            for repo in orphans:
+                r = model_manager.delete_model(repo)
+                if r["success"]:
+                    freed_total += int(r["bytes_freed"])
+                else:
+                    errors.append(f"{repo}: {r['error']}")
+            msg = f"{model_manager._format_size(freed_total)} liberados."
+            if errors:
+                msg += "\n\nFalhas:\n" + "\n".join(errors)
+            QMessageBox.information(self, "Orfaos removidos", msg)
+            self._populate()
+
+        def _open_download_wizard(self) -> None:
+            parent = self.parent()
+            if parent and hasattr(parent, "show_model_setup"):
+                parent.show_model_setup()
+                self._populate()
+
+        def _change_token(self) -> None:
+            from . import token_vault
+            current = ""
+            try:
+                current = token_vault.load() or ""
+            except Exception:
+                current = ""
+            new_token, ok = QInputDialog.getText(
+                self,
+                "Token do Hugging Face",
+                "Token (fica salvo apenas neste computador):",
+                text=current,
+            )
+            if not ok:
+                return
+            new_token = new_token.strip()
+            if not new_token:
+                # Limpar token
+                reply = QMessageBox.question(
+                    self,
+                    "Esquecer token",
+                    "Apagar o token salvo neste computador?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    try:
+                        token_vault.clear()
+                        QMessageBox.information(self, "Token apagado", "Token removido do cofre local.")
+                    except Exception as exc:
+                        QMessageBox.warning(self, "Falha ao apagar", str(exc))
+                return
+            try:
+                token_vault.store(new_token)
+                QMessageBox.information(self, "Token salvo", "Token salvo no cofre seguro local.")
+            except Exception as exc:
+                QMessageBox.warning(self, "Falha ao salvar", str(exc))
+
+
     class MetadataDialog(QDialog):
         def __init__(self, selected_count: int, parent: QWidget | None = None) -> None:
             super().__init__(parent)
@@ -2249,6 +2530,10 @@ if QT_IMPORT_ERROR is None:
             self.model_status_action.setToolTip("Mostrar quais modelos locais ja foram baixados.")
             self.model_status_action.triggered.connect(self.show_model_status)
 
+            self.model_manager_action = QAction("Gerenciar modelos...", self)
+            self.model_manager_action.setToolTip("Ver tamanho em disco, remover modelos, trocar token HF, baixar outros.")
+            self.model_manager_action.triggered.connect(self.show_model_manager)
+
             self.refresh_library_action = QAction("Atualizar biblioteca", self)
             self.refresh_library_action.setToolTip("Procurar gravacoes nas pastas cadastradas.")
             self.refresh_library_action.triggered.connect(self.run_manifest_job)
@@ -2496,8 +2781,7 @@ if QT_IMPORT_ERROR is None:
             transcrever_menu.addAction(self.refresh_library_action)
             transcrever_menu.addSeparator()
             transcrever_menu.addAction(self.engine_settings_action)
-            transcrever_menu.addAction(self.model_setup_action)
-            transcrever_menu.addAction(self.model_status_action)
+            transcrever_menu.addAction(self.model_manager_action)
             transcrever_menu.addSeparator()
             transcrever_menu.addAction(self.cancel_job_action)
 
@@ -2615,6 +2899,10 @@ if QT_IMPORT_ERROR is None:
 
         def show_model_status(self) -> None:
             QMessageBox.information(self, "Status dos modelos", app_service.models_status_text())
+
+        def show_model_manager(self) -> None:
+            dialog = ModelManagerDialog(lambda: self.context, self)
+            dialog.exec()
 
         def show_model_setup(self) -> None:
             if self.worker and self.worker.isRunning():

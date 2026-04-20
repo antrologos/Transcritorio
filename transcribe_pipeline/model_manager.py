@@ -121,6 +121,7 @@ class ModelStatus:
 ASR_VARIANTS: dict[str, dict[str, Any]] = {
     "large-v3-turbo": {
         "label": "Whisper large-v3-turbo",
+        "friendly_pt": "Preciso rapido (recomendado, 3,1 GB)",
         "repo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
         "estimated_gb": 3.1,
         "quality": 8,
@@ -129,6 +130,7 @@ ASR_VARIANTS: dict[str, dict[str, Any]] = {
     },
     "large-v3": {
         "label": "Whisper large-v3",
+        "friendly_pt": "Maxima precisao (melhor qualidade, 5,8 GB)",
         "repo": "Systran/faster-whisper-large-v3",
         "estimated_gb": 5.8,
         "quality": 10,
@@ -137,6 +139,7 @@ ASR_VARIANTS: dict[str, dict[str, Any]] = {
     },
     "medium": {
         "label": "Whisper medium",
+        "friendly_pt": "Preciso (alta qualidade, 2,8 GB)",
         "repo": "Systran/faster-whisper-medium",
         "estimated_gb": 2.8,
         "quality": 7,
@@ -145,6 +148,7 @@ ASR_VARIANTS: dict[str, dict[str, Any]] = {
     },
     "small": {
         "label": "Whisper small",
+        "friendly_pt": "Equilibrado (qualidade boa, 900 MB)",
         "repo": "Systran/faster-whisper-small",
         "estimated_gb": 0.9,
         "quality": 5,
@@ -153,6 +157,7 @@ ASR_VARIANTS: dict[str, dict[str, Any]] = {
     },
     "base": {
         "label": "Whisper base",
+        "friendly_pt": "Equilibrado leve (qualidade boa, 300 MB)",
         "repo": "Systran/faster-whisper-base",
         "estimated_gb": 0.3,
         "quality": 3,
@@ -161,12 +166,18 @@ ASR_VARIANTS: dict[str, dict[str, Any]] = {
     },
     "tiny": {
         "label": "Whisper tiny",
+        "friendly_pt": "Rapido (qualidade basica, 150 MB)",
         "repo": "Systran/faster-whisper-tiny",
         "estimated_gb": 0.15,
         "quality": 2,
         "speed": 10,
         "desc": "Qualidade ruim.",
     },
+}
+
+_FRIENDLY_FIXED_MODELS: dict[str, str] = {
+    "alignment_pt": "Alinhamento de tempo (portugues, 6,9 GB)",
+    "diarization": "Identificacao de falantes (70 MB)",
 }
 
 DEFAULT_ASR_VARIANT = "large-v3-turbo"
@@ -348,6 +359,166 @@ def _dir_size(path: Path) -> int:
     except OSError:
         pass
     return total
+
+
+def friendly_name(key: str) -> str:
+    """Nome amigavel em pt-BR para exibicao ao usuario final.
+
+    Aceita chaves de ASR_VARIANTS (ex.: 'tiny') ou ids de _FIXED_MODELS
+    ('alignment_pt', 'diarization'). Para chaves desconhecidas retorna a
+    propria chave como fallback."""
+    info = ASR_VARIANTS.get(key)
+    if info and info.get("friendly_pt"):
+        return str(info["friendly_pt"])
+    fixed = _FRIENDLY_FIXED_MODELS.get(key)
+    if fixed:
+        return fixed
+    return key
+
+
+def _known_repos() -> set[str]:
+    """Conjunto de repo_ids conhecidos (ASR + fixos)."""
+    known: set[str] = set()
+    for info in ASR_VARIANTS.values():
+        repo = info.get("repo")
+        if repo:
+            known.add(str(repo))
+    for asset in _FIXED_MODELS:
+        if asset.repo_id:
+            known.add(str(asset.repo_id))
+    return known
+
+
+def orphan_repos(cache_dir: Path | None = None) -> list[str]:
+    """Retorna repo_ids (no formato 'org/repo') de pastas models--* nao
+    listadas em ASR_VARIANTS + _FIXED_MODELS."""
+    root = cache_dir or runtime.model_cache_dir()
+    if not root.exists():
+        return []
+    known = _known_repos()
+    orphans: list[str] = []
+    for child in root.iterdir():
+        if not child.is_dir():
+            continue
+        name = child.name
+        if not name.startswith("models--"):
+            continue
+        # models--org--repo -> org/repo (primeiro "--" apos "models-" e separador)
+        parts = name[len("models--"):].split("--")
+        if len(parts) < 2:
+            continue
+        repo_id = parts[0] + "/" + "--".join(parts[1:])
+        if repo_id not in known:
+            orphans.append(repo_id)
+    return orphans
+
+
+def model_install_date(repo_id: str, cache_dir: Path | None = None) -> float | None:
+    """Retorna o ctime minimo (unix) dos blobs do snapshot ativo. None se nao
+    houver snapshot. Usa blobs/ (arquivos reais) — mais preciso que mtime
+    do snapshot/ que pode ter sido atualizado ao re-abrir."""
+    snapshot = cached_snapshot_path(repo_id, cache_dir)
+    if snapshot is None:
+        return None
+    repo_cache = hf_cache_path(repo_id, cache_dir)
+    blobs_dir = repo_cache / "blobs"
+    candidates: list[float] = []
+    if blobs_dir.exists():
+        for f in blobs_dir.iterdir():
+            if f.is_file():
+                try:
+                    candidates.append(f.stat().st_ctime)
+                except OSError:
+                    pass
+    if not candidates:
+        # Fallback para mtime do snapshot
+        try:
+            return snapshot.stat().st_mtime
+        except OSError:
+            return None
+    return min(candidates)
+
+
+def scan_cache(cache_dir: Path | None = None) -> list[dict[str, Any]]:
+    """Lista repos no cache com tamanho real em disco (dedup de blobs).
+
+    Tenta usar huggingface_hub.scan_cache_dir() para dedup correta. Fallback
+    para _dir_size (pode overcountar blobs compartilhados entre revisoes)."""
+    root = cache_dir or runtime.model_cache_dir()
+    entries: list[dict[str, Any]] = []
+    try:
+        from huggingface_hub import scan_cache_dir
+        scan = scan_cache_dir(cache_dir=str(root))
+        for repo in scan.repos:
+            entries.append({
+                "repo_id": repo.repo_id,
+                "repo_type": repo.repo_type,
+                "size_on_disk": int(repo.size_on_disk),
+                "nb_files": int(repo.nb_files),
+                "last_accessed": float(repo.last_accessed) if repo.last_accessed else 0.0,
+                "last_modified": float(repo.last_modified) if repo.last_modified else 0.0,
+            })
+        return entries
+    except Exception:
+        pass
+    # Fallback: iterar diretorio
+    if not root.exists():
+        return entries
+    for child in root.iterdir():
+        if not child.is_dir() or not child.name.startswith("models--"):
+            continue
+        parts = child.name[len("models--"):].split("--")
+        if len(parts) < 2:
+            continue
+        repo_id = parts[0] + "/" + "--".join(parts[1:])
+        size = _dir_size(child)
+        entries.append({
+            "repo_id": repo_id,
+            "repo_type": "model",
+            "size_on_disk": size,
+            "nb_files": sum(1 for _ in child.rglob("*") if _.is_file()),
+            "last_accessed": 0.0,
+            "last_modified": 0.0,
+        })
+    return entries
+
+
+def delete_model(repo_id: str, cache_dir: Path | None = None, max_retries: int = 3) -> dict[str, Any]:
+    """Remove um modelo do cache. Usa scan_cache_dir().delete_revisions().execute()
+    para dedup correta dos blobs. Retry com backoff para lock (Windows mmap).
+
+    Retorna: {success: bool, bytes_freed: int, error: str | None}.
+    """
+    import time as _time
+    try:
+        from huggingface_hub import scan_cache_dir
+    except Exception as exc:
+        return {"success": False, "bytes_freed": 0, "error": f"huggingface_hub ausente: {exc}"}
+    root = cache_dir or runtime.model_cache_dir()
+    last_err: str | None = None
+    for attempt, delay in enumerate([0.0, 0.2, 0.5, 1.5]):
+        if attempt >= max_retries + 1:
+            break
+        if delay:
+            _time.sleep(delay)
+        try:
+            scan = scan_cache_dir(cache_dir=str(root))
+            target_repo = next((r for r in scan.repos if r.repo_id == repo_id), None)
+            if target_repo is None:
+                return {"success": True, "bytes_freed": 0, "error": "modelo ja nao estava em cache"}
+            revisions = [rev.commit_hash for rev in target_repo.revisions]
+            if not revisions:
+                return {"success": True, "bytes_freed": 0, "error": "sem revisoes a remover"}
+            strategy = scan.delete_revisions(*revisions)
+            bytes_freed = int(strategy.expected_freed_size)
+            strategy.execute()
+            return {"success": True, "bytes_freed": bytes_freed, "error": None}
+        except (PermissionError, OSError) as exc:
+            last_err = str(exc)
+            continue
+        except Exception as exc:  # pragma: no cover (api surface do hub)
+            return {"success": False, "bytes_freed": 0, "error": str(exc)}
+    return {"success": False, "bytes_freed": 0, "error": f"falhou apos {max_retries} tentativas: {last_err}"}
 
 
 def _poll_download_progress(
