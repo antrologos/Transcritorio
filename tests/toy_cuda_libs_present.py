@@ -120,6 +120,8 @@ def test_cache() -> None:
         libdir.mkdir(parents=True)
         if sys.platform == "win32":
             (libdir / "torch_cuda.dll").write_bytes(b"fake")
+        elif sys.platform == "darwin":
+            (libdir / "libtorch_cuda.dylib").write_bytes(b"fake")
         else:
             (libdir / "libtorch_cuda.so").write_bytes(b"fake")
         _install_fake_torch_with_libdir(libdir)
