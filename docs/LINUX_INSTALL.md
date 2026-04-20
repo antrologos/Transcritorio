@@ -19,9 +19,16 @@ instale uma vez via gerenciador de pacotes.
 ```sh
 sudo apt update
 sudo apt install -y ffmpeg \
-    libxcb-cursor0 libxcb-shape0 libxcb-xinerama0 \
-    libxkbcommon-x11-0 libegl1
+    libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+    libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-sync1 \
+    libxcb-util1 libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1 \
+    libxkbcommon-x11-0 libxkbcommon0 libegl1 \
+    libfuse2 libglib2.0-0 libasound2
 ```
+
+(Lista completa — Qt 6.5+ exige varias libs xcb para o plugin da
+plataforma X11 carregar corretamente. Se esquecer alguma, o app mostra
+"Could not load the Qt platform plugin 'xcb'" no terminal.)
 
 ### Fedora
 

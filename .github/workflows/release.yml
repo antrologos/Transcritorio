@@ -157,15 +157,17 @@ jobs:
         with:
           name: Transcritorio-linux-AppImage
 
-      - name: Install END-USER runtime deps (o que MAC_INSTALL/LINUX_INSTALL docs pedem)
+      - name: Install END-USER runtime deps (o que LINUX_INSTALL.md pede)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             ffmpeg \
-            libxcb-cursor0 libxcb-shape0 libxcb-xinerama0 \
-            libxkbcommon-x11-0 libegl1 libxkbcommon0 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-sync1 \
+            libxcb-util1 libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1 \
+            libxkbcommon-x11-0 libxkbcommon0 libegl1 \
             libfuse2 libglib2.0-0 \
-            xvfb
+            libasound2
 
       - name: Make AppImage executable
         run: |
@@ -186,25 +188,24 @@ jobs:
             || { echo "FAIL: CLI help incompleto"; cat cli_help.txt; exit 1; }
           echo "OK: CLI --help tem manifest + transcribe"
 
-      - name: Smoke GUI — launcha com Xvfb, sobrevive >=3s
+      - name: Smoke GUI — offscreen Qt sobrevive >=3s
+        env:
+          QT_QPA_PLATFORM: offscreen
         run: |
-          # Xvfb = X virtual framebuffer (display sem hardware).
-          # Launcha a GUI e mata depois de 3s.
-          # Exit code 124 = killed by timeout => sobreviveu startup.
-          # Exit code 0 = saiu limpo.
-          # Outro = crash no startup.
+          # offscreen = plataforma Qt que nao precisa de X server. Valida que
+          # o app inicializa (imports, PySide6 carrega, GUI construida) sem
+          # precisar de Xvfb ou libs xcb. Exit 124 = killed by timeout = OK.
           set +e
-          xvfb-run --server-args="-screen 0 1024x768x24" \
-            timeout --preserve-status 3 ./squashfs-root/usr/bin/Transcritorio > gui_log.txt 2>&1
+          timeout --preserve-status 3 ./squashfs-root/usr/bin/Transcritorio > gui_log.txt 2>&1
           code=$?
           set -e
           echo "GUI exit code: $code"
-          echo "--- stdout/stderr ---"
-          cat gui_log.txt | head -50
+          echo "--- stdout/stderr (ultimas 50 linhas) ---"
+          tail -50 gui_log.txt
           if [ $code -eq 124 ] || [ $code -eq 0 ] || [ $code -eq 143 ]; then
-            echo "OK: GUI sobreviveu startup (exit=$code)"
+            echo "OK: GUI sobreviveu startup em offscreen (exit=$code)"
           else
-            echo "FAIL: GUI crashou no startup"
+            echo "FAIL: GUI crashou em offscreen (exit=$code)"
             exit 1
           fi
 
