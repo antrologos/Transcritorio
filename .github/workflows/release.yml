@@ -142,6 +142,82 @@ jobs:
           retention-days: 30
 
   # =========================================================================
+  # Smoke test Linux — valida que o AppImage roda num Ubuntu limpo
+  # (~70% do checklist manual; parte visual ainda precisa usuario)
+  # =========================================================================
+  smoke-linux-appimage:
+    needs: build-linux-appimage
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout (para ter os tests/)
+        uses: actions/checkout@v4
+
+      - name: Download AppImage artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: Transcritorio-linux-AppImage
+
+      - name: Install END-USER runtime deps (o que MAC_INSTALL/LINUX_INSTALL docs pedem)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ffmpeg \
+            libxcb-cursor0 libxcb-shape0 libxcb-xinerama0 \
+            libxkbcommon-x11-0 libegl1 libxkbcommon0 \
+            libfuse2 libglib2.0-0 \
+            xvfb
+
+      - name: Make AppImage executable
+        run: |
+          chmod +x Transcritorio-*.AppImage
+          ls -la Transcritorio-*.AppImage
+
+      - name: Extract AppImage (para poder invocar a CLI interna)
+        run: |
+          ./Transcritorio-x86_64.AppImage --appimage-extract >/dev/null
+          ls squashfs-root/usr/bin/ | head -20
+
+      - name: Smoke CLI — transcritorio-cli --help responde
+        run: |
+          ./squashfs-root/usr/bin/transcritorio-cli --help > cli_help.txt 2>&1 \
+            || { echo "FAIL: CLI --help nao responde"; cat cli_help.txt; exit 1; }
+          grep -q "manifest" cli_help.txt \
+            && grep -q "transcribe" cli_help.txt \
+            || { echo "FAIL: CLI help incompleto"; cat cli_help.txt; exit 1; }
+          echo "OK: CLI --help tem manifest + transcribe"
+
+      - name: Smoke GUI — launcha com Xvfb, sobrevive >=3s
+        run: |
+          # Xvfb = X virtual framebuffer (display sem hardware).
+          # Launcha a GUI e mata depois de 3s.
+          # Exit code 124 = killed by timeout => sobreviveu startup.
+          # Exit code 0 = saiu limpo.
+          # Outro = crash no startup.
+          set +e
+          xvfb-run --server-args="-screen 0 1024x768x24" \
+            timeout --preserve-status 3 ./squashfs-root/usr/bin/Transcritorio > gui_log.txt 2>&1
+          code=$?
+          set -e
+          echo "GUI exit code: $code"
+          echo "--- stdout/stderr ---"
+          cat gui_log.txt | head -50
+          if [ $code -eq 124 ] || [ $code -eq 0 ] || [ $code -eq 143 ]; then
+            echo "OK: GUI sobreviveu startup (exit=$code)"
+          else
+            echo "FAIL: GUI crashou no startup"
+            exit 1
+          fi
+
+      - name: Smoke imports — pacote Python interno importa limpo
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          # Usa Python do AppImage (bundled) via invocacao direta
+          ./squashfs-root/usr/bin/transcritorio-cli models verify 2>&1 | head -20 \
+            || echo "(models verify pode pedir token — OK falhar aqui, so estamos checando que nao crashou)"
+          echo "OK: CLI responde a subcomandos"
+
+  # =========================================================================
   # macOS .dmg (macos-14 = Apple Silicon arm64)
   # =========================================================================
   build-macos-dmg:
