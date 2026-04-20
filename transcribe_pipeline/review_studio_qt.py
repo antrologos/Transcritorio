@@ -2200,11 +2200,13 @@ if QT_IMPORT_ERROR is None:
             self.add_folder_action.triggered.connect(self.add_audio_folder)
 
             self.new_project_action = QAction("Novo projeto...", self)
-            self.new_project_action.setToolTip("Criar uma nova pasta de projeto de transcricoes.")
+            self.new_project_action.setShortcut(QKeySequence("Ctrl+N"))
+            self.new_project_action.setToolTip("Criar uma nova pasta de projeto de transcricoes. (Ctrl+N)")
             self.new_project_action.triggered.connect(self.new_project)
 
             self.open_project_action = QAction("Abrir projeto...", self)
-            self.open_project_action.setToolTip("Abrir uma pasta de projeto de transcricoes existente.")
+            self.open_project_action.setShortcut(QKeySequence("Ctrl+O"))
+            self.open_project_action.setToolTip("Abrir uma pasta de projeto de transcricoes existente. (Ctrl+O)")
             self.open_project_action.triggered.connect(self.open_project)
 
             self.add_files_action = QAction("Adicionar arquivos...", self)
@@ -2256,9 +2258,8 @@ if QT_IMPORT_ERROR is None:
             self.reload_list_action.setToolTip("Recarregar a lista de entrevistas a partir dos arquivos do projeto. (F5)")
             self.reload_list_action.triggered.connect(self.refresh_interviews)
 
-            self.open_transcript_action = QAction("Abrir arquivo", self)
-            self.open_transcript_action.setShortcut(QKeySequence.StandardKey.Open)
-            self.open_transcript_action.setToolTip("Abrir a transcrição do arquivo selecionado para edição. (Ctrl+O)\nSelecione um arquivo na lista.")
+            self.open_transcript_action = QAction("Abrir transcricao", self)
+            self.open_transcript_action.setToolTip("Abrir a transcricao do arquivo selecionado (duplo-clique ou Enter na linha). Selecione um arquivo na lista.")
             self.open_transcript_action.triggered.connect(self.open_selected_review)
 
             self.transcribe_action = QAction("Transcrever selecionados", self)
@@ -2279,8 +2280,8 @@ if QT_IMPORT_ERROR is None:
             self.save_action.triggered.connect(lambda _checked=False: self.save_current_turn(force=True))
 
             self.generate_files_action = QAction("Exportar...", self)
-            self.generate_files_action.setShortcut(QKeySequence.StandardKey.SaveAs)
-            self.generate_files_action.setToolTip("Exportar a transcricao aberta, os arquivos selecionados ou todas as transcricoes.")
+            self.generate_files_action.setShortcut(QKeySequence("Ctrl+E"))
+            self.generate_files_action.setToolTip("Exportar a transcricao aberta, os arquivos selecionados ou todas as transcricoes. (Ctrl+E)")
             self.generate_files_action.triggered.connect(self.export_current_review)
 
             self.export_selected_action = QAction("Exportar selecionados...", self)
@@ -2456,6 +2457,7 @@ if QT_IMPORT_ERROR is None:
             arquivo_menu.addAction(self.save_action)
             arquivo_menu.addAction(self.close_open_file_action)
             arquivo_menu.addSeparator()
+            arquivo_menu.addAction(self.generate_files_action)
             arquivo_menu.addAction(self.export_current_action)
             arquivo_menu.addAction(self.export_selected_action)
             arquivo_menu.addSeparator()
@@ -2754,6 +2756,8 @@ if QT_IMPORT_ERROR is None:
             self.interview_table.setSortingEnabled(True)
             self.interview_table.cellClicked.connect(self._on_interview_cell_clicked)
             self.interview_table.itemSelectionChanged.connect(self.update_action_states)
+            # Enter ou duplo-clique abre a transcricao selecionada
+            self.interview_table.itemActivated.connect(lambda _item: self.open_selected_review())
             self.interview_table.horizontalHeader().sectionClicked.connect(self._on_header_section_clicked)
             self.interview_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             self.interview_table.customContextMenuRequested.connect(self._show_library_context_menu)

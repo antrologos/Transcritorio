@@ -300,7 +300,9 @@ def export_review(context: ProjectContext, interview_id: str, formats: list[str]
     exported = export_review_outputs(context.paths, interview_id, formats=formats)
     # Mirror user-facing formats into {project_root}/Resultados/ (hardlink or copy fallback).
     if context.config.get("use_resultados_dir", True) and exported:
-        user_facing = [p for p in exported if p.suffix.lower() in {".docx", ".md", ".srt", ".vtt", ".csv", ".tsv"}]
+        # Filtrar por SUBPASTA (nao suffix): NVivo tem .tsv mas vive em final/nvivo/ — tecnico.
+        _USER_FACING = {"docx", "md", "srt", "vtt", "csv", "tsv"}
+        user_facing = [p for p in exported if p.parent.name in _USER_FACING]
         if user_facing:
             try:
                 project_store.ensure_results_dir(context.paths.project_root, user_facing)
