@@ -289,15 +289,21 @@ jobs:
         run: |
           # create-dmg falha se .dmg ja existe
           rm -f Transcritorio.dmg
+          # Background customizado (commit no repo em packaging/mac/)
+          BG_ARG=""
+          if [ -f packaging/mac/dmg_background.png ]; then
+            BG_ARG="--background packaging/mac/dmg_background.png"
+          fi
           create-dmg \
             --volname "Transcritorio" \
             --window-pos 200 120 \
             --window-size 640 400 \
             --icon-size 100 \
-            --icon "Transcritorio.app" 180 180 \
+            --icon "Transcritorio.app" 180 200 \
             --hide-extension "Transcritorio.app" \
-            --app-drop-link 460 180 \
+            --app-drop-link 460 200 \
             --hdiutil-quiet \
+            $BG_ARG \
             "Transcritorio.dmg" \
             "dist/Transcritorio.app" \
             || (echo "create-dmg falhou — tentando hdiutil direto" && \
