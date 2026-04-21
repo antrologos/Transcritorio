@@ -10,7 +10,9 @@ normal CPU path.
 """
 from __future__ import annotations
 
+import math
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -20,7 +22,13 @@ from .config import Paths
 from .manifest import selected_rows
 from . import runtime
 from .model_manager import validate_local_diarization_model
-from .utils import append_jsonl, format_timestamp, now_utc, write_json
+from .utils import append_jsonl, format_timestamp, now_utc, sanitize_message, write_json
+
+
+# Same safe pattern asr_output_dir() uses for variant names. interview_id
+# comes from manifest.csv which is user-editable; enforce safety before
+# using it as a path component.
+_SAFE_ID_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
@@ -98,6 +106,16 @@ def run_mlx_whisper(
     cache_only = bool(config.get("asr_model_cache_only", True))
     runtime.apply_secure_hf_environment(offline=cache_only, token_env=token_env)
 
+    # Respect config.model_cache_dir override: apply_secure_hf_environment points
+    # HF_HOME at runtime.model_cache_dir() (app default); if the project config
+    # overrides that, re-point HF_HOME/HF_HUB_CACHE here so mlx-whisper, which
+    # uses HuggingFace's env-var-driven cache location, picks up the override.
+    custom_cache = config.get("model_cache_dir")
+    if custom_cache:
+        cache_path = Path(str(custom_cache))
+        os.environ["HF_HUB_CACHE"] = str(cache_path)
+        os.environ["HF_HOME"] = str(cache_path.parent if cache_path.parent != cache_path else cache_path)
+
     # Fail fast when diarization is enabled but the model is missing — matches
     # whisperx_runner behavior (otherwise we'd spend 5+ min transcribing before
     # the diarize step discovers the missing model).
@@ -126,7 +144,19 @@ def run_mlx_whisper(
             failures += 1
             break
 
-        interview_id = row["interview_id"]
+        raw_id = str(row.get("interview_id", "") or "")
+        # Defuse path traversal / shell chars / empty: accept only safe chars,
+        # matching the pattern asr_output_dir() uses for variants.
+        safe_id = _SAFE_ID_RE.sub("_", raw_id).strip("._")
+        if not safe_id:
+            _emit(progress_callback, raw_id or "<sem_id>",
+                  {"event": "asr_error", "progress": 0,
+                   "message": "Linha sem interview_id valido; pulando."})
+            _log_job(paths, raw_id or "<invalid>", mlx_repo, config, "error",
+                     error="interview_id vazio ou invalido apos sanitizacao")
+            failures += 1
+            continue
+        interview_id = safe_id
         wav = paths.project_root / row["wav_path"]
         if not wav.exists():
             _emit(progress_callback, interview_id,
@@ -178,20 +208,34 @@ def run_mlx_whisper(
         except Exception as exc:
             # Include the exception message, not just the type name, so the
             # user can act on it (model not found / OOM / corrupted file / ...).
-            # Truncated to keep the UI dialog readable.
-            detail = str(exc).strip() or type(exc).__name__
+            # Truncated to keep the UI dialog readable. Sanitize to redact
+            # HF tokens that upstream error strings can include.
+            detail = sanitize_message(str(exc).strip() or type(exc).__name__)
             if len(detail) > 240:
                 detail = detail[:240].rstrip() + "..."
             _emit(progress_callback, interview_id,
                   {"event": "asr_error", "progress": 0,
                    "message": f"mlx-whisper falhou ({type(exc).__name__}): {detail}"})
-            _log_job(paths, interview_id, mlx_repo, config, "error", error=str(exc))
+            _log_job(paths, interview_id, mlx_repo, config, "error",
+                     error=sanitize_message(str(exc)))
             failures += 1
             continue
         finally:
             # Stop the creep thread whether transcribe raised or returned.
             creep_stop.set()
             creep_thread.join(timeout=1.0)
+
+        # transcribe() may return None or an unexpected type in edge cases
+        # (corrupt model, internal MLX errors). Treat as a failure without
+        # crashing the batch.
+        if not isinstance(result, dict):
+            _emit(progress_callback, interview_id,
+                  {"event": "asr_error", "progress": 0,
+                   "message": f"mlx-whisper retornou {type(result).__name__}, esperado dict."})
+            _log_job(paths, interview_id, mlx_repo, config, "error",
+                     error=f"transcribe returned non-dict ({type(result).__name__})")
+            failures += 1
+            continue
 
         elapsed = time.monotonic() - started
 
@@ -221,15 +265,37 @@ def _normalize_mlx_result(result: dict[str, Any]) -> dict[str, Any]:
     Keys preserved: language, text. Segments get ensured start/end/text and
     optional words list with word/start/end fields. Extra mlx fields
     (avg_logprob, no_speech_prob, etc.) are passed through.
+
+    Defensive against adversarial/corrupt inputs from the transcribe call:
+    - result=None / non-dict -> empty output (raised by caller earlier)
+    - NaN/Inf timestamps -> segment dropped
+    - start > end -> swapped (preserve what we can)
+    - empty text -> segment dropped (renders nothing meaningful anyway)
     """
+    if not isinstance(result, dict):
+        # Caller should have raised, but be defensive here too.
+        return {"language": "", "segments": [], "text": ""}
+
     out_segments: list[dict[str, Any]] = []
     for raw in result.get("segments", []) or []:
         if not isinstance(raw, dict):
             continue
+        try:
+            start = float(raw.get("start", 0) or 0)
+            end = float(raw.get("end", start) if raw.get("end") is not None else start)
+        except (TypeError, ValueError):
+            continue
+        if not (math.isfinite(start) and math.isfinite(end)):
+            continue
+        if start > end:
+            start, end = end, start
+        text = str(raw.get("text", "") or "")
+        if not text.strip():
+            continue
         seg: dict[str, Any] = dict(raw)
-        seg["start"] = float(raw.get("start", 0) or 0)
-        seg["end"] = float(raw.get("end", seg["start"]) or seg["start"])
-        seg["text"] = str(raw.get("text", "") or "")
+        seg["start"] = start
+        seg["end"] = end
+        seg["text"] = text
         raw_words = raw.get("words")
         if isinstance(raw_words, list):
             norm_words = []
@@ -244,6 +310,10 @@ def _normalize_mlx_result(result: dict[str, Any]) -> dict[str, Any]:
                     we = float(w.get("end"))
                 except (TypeError, ValueError):
                     continue
+                if not (math.isfinite(ws) and math.isfinite(we)):
+                    continue
+                if ws > we:
+                    ws, we = we, ws
                 nw = dict(w)
                 nw["word"] = word_text
                 nw["start"] = ws
@@ -259,12 +329,27 @@ def _normalize_mlx_result(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _safe_subtitle_text(raw_text: Any) -> str:
+    """Sanitize a segment text for SRT/VTT output:
+    - replace '-->' (collides with timecode separator)
+    - collapse \\r/\\n into spaces (multi-line text would fragment cue)
+    - strip.
+    """
+    s = str(raw_text or "")
+    # Hyphen-minus + hyphen-minus + greater-than is the SRT/VTT cue separator.
+    # An attacker-controlled or accidental "-->" inside the text line would be
+    # read by parsers as a new timecode line.
+    s = s.replace("-->", "->")
+    s = s.replace("\r", " ").replace("\n", " ")
+    return s.strip()
+
+
 def _write_srt(path: Path, segments: list[dict[str, Any]]) -> None:
     lines: list[str] = []
     for i, seg in enumerate(segments, start=1):
         lines.append(str(i))
         lines.append(f"{_srt_ts(seg['start'])} --> {_srt_ts(seg['end'])}")
-        lines.append(str(seg.get("text", "")).strip())
+        lines.append(_safe_subtitle_text(seg.get("text", "")))
         lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -273,7 +358,7 @@ def _write_vtt(path: Path, segments: list[dict[str, Any]]) -> None:
     lines = ["WEBVTT", ""]
     for seg in segments:
         lines.append(f"{_vtt_ts(seg['start'])} --> {_vtt_ts(seg['end'])}")
-        lines.append(str(seg.get("text", "")).strip())
+        lines.append(_safe_subtitle_text(seg.get("text", "")))
         lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -284,7 +369,11 @@ def _write_txt(path: Path, segments: list[dict[str, Any]]) -> None:
 
 
 def _write_tsv(path: Path, segments: list[dict[str, Any]]) -> None:
-    """Tab-separated format produced by whisperx CLI: start\\tend\\ttext (ms)."""
+    """Tab-separated format produced by whisperx CLI: start\\tend\\ttext (ms).
+
+    Text is flattened: tabs and newlines become spaces so a 3-column TSV
+    stays 3 columns per row even if the ASR text happened to contain them.
+    """
     lines = ["start\tend\ttext"]
     for seg in segments:
         try:
@@ -292,7 +381,8 @@ def _write_tsv(path: Path, segments: list[dict[str, Any]]) -> None:
             end_ms = int(round(float(seg.get("end", 0) or 0) * 1000))
         except (TypeError, ValueError):
             continue
-        text = str(seg.get("text", "")).strip().replace("\t", " ").replace("\n", " ")
+        text = (str(seg.get("text", "")).strip()
+                .replace("\t", " ").replace("\r", " ").replace("\n", " "))
         lines.append(f"{start_ms}\t{end_ms}\t{text}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -310,11 +400,17 @@ def _vtt_ts(seconds: float) -> str:
 
 def _emit(callback: ProgressCallback | None, interview_id: str,
           payload: dict[str, Any]) -> None:
+    """Best-effort emit: a rude callback (disconnected Qt signal, user bug)
+    must not abort the batch or crash the creep thread."""
     if callback is None:
         return
     data = dict(payload)
     data.setdefault("file_id", interview_id)
-    callback(data)
+    try:
+        callback(data)
+    except Exception:
+        # Intentionally swallow: progress is cosmetic, transcription is not.
+        pass
 
 
 def _log_job(

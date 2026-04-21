@@ -23,7 +23,8 @@ Motor local
   transcribe_pipeline/app_service.py
   transcribe_pipeline/status.py
   transcribe_pipeline/review_store.py
-  WhisperX / faster-whisper
+  WhisperX / faster-whisper (CUDA/CPU, Windows+Linux)
+  mlx-whisper (Apple Silicon / Metal, opt-in via extra `[mac]`)
   pyannote community-1
   FFmpeg
 
