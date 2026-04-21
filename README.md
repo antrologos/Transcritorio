@@ -140,4 +140,4 @@ Autor: **Rogério Jerônimo Barbosa** — IESP-UERJ / CERES — [antrologos.gith
 
 Agradecimentos às bibliotecas sobre as quais este projeto se apoia: [WhisperX](https://github.com/m-bain/whisperX), [faster-whisper](https://github.com/SYSTRAN/faster-whisper), [mlx-whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper), [pyannote.audio](https://github.com/pyannote/pyannote-audio), [PySide6](https://pypi.org/project/PySide6/), [FFmpeg](https://ffmpeg.org/).
 
-O ffmpeg/ffprobe embutidos nos binários distribuídos são builds GPL de terceiros (BtbN para Windows, evermeet.cx para macOS, johnvansickle.com para Linux). O source correspondente está disponível nessas URLs, satisfazendo os termos da GPL.
+O ffmpeg/ffprobe embutidos nos binários distribuídos são builds GPL de terceiros (BtbN para Windows, evermeet.cx para macOS, johnvansickle.com para Linux). Veja [`NOTICE`](NOTICE) para a lista completa de componentes bundled e seus termos.

@@ -1,0 +1,27 @@
+Transcritorio — third-party components bundled with distributed binaries.
+
+The Python source in this repository is licensed under the MIT License (see LICENSE).
+
+Some distributed release artifacts bundle static builds of FFmpeg (ffmpeg + ffprobe),
+which are licensed under the GNU General Public License (GPL). The bundled builds
+come from the following upstream sources, which also provide the corresponding
+source code required by the GPL:
+
+- Windows x86_64:  https://github.com/BtbN/FFmpeg-Builds        (GPL 3.0 shared build)
+- macOS arm64:     https://evermeet.cx/ffmpeg/                  (GPL 3.0 static build)
+- Linux x86_64:    https://johnvansickle.com/ffmpeg/            (GPL 3.0 static build)
+
+Using, redistributing or modifying the bundled FFmpeg binaries is subject to the
+terms of their license. The Python source of Transcritorio (MIT) and the bundled
+FFmpeg binaries (GPL) are distributed together as a convenience; this repository
+as source does not include, require or derive from FFmpeg's source code.
+
+This product also relies on the following open-source libraries (each under its
+own permissive or compatible license; not bundled as binary):
+
+- WhisperX         https://github.com/m-bain/whisperX              BSD-2
+- faster-whisper   https://github.com/SYSTRAN/faster-whisper       MIT
+- mlx-whisper      https://github.com/ml-explore/mlx-examples      MIT
+- pyannote.audio   https://github.com/pyannote/pyannote-audio      MIT
+- PySide6          https://pypi.org/project/PySide6/               LGPL
+- torch            https://pytorch.org                             BSD-3
