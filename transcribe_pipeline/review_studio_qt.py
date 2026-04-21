@@ -1654,7 +1654,17 @@ if QT_IMPORT_ERROR is None:
             grid.addLayout(model_row, 0, 1)
 
             self.device_combo = QComboBox()
-            for value, label in [("cuda", "GPU NVIDIA (CUDA)"), ("cpu", "CPU")]:
+            # Build device list dynamically. On Apple Silicon we surface
+            # "GPU Apple Silicon (MLX/Metal)" as a third option so the user
+            # understands Metal acceleration is available; selecting it (or
+            # the default "cuda") both route through mlx_whisper_runner at
+            # runtime when MPS is detected.
+            from . import runtime as _runtime_dev
+            device_options: list[tuple[str, str]] = [("cuda", "GPU NVIDIA (CUDA)")]
+            if _runtime_dev.detect_device() == "mps":
+                device_options.append(("mps", "GPU Apple Silicon (MLX/Metal)"))
+            device_options.append(("cpu", "CPU"))
+            for value, label in device_options:
                 self.device_combo.addItem(label, value)
             self.device_combo.setCurrentIndex(max(0, self.device_combo.findData(str(config.get("asr_device") or "cuda"))))
             grid.addWidget(QLabel("Dispositivo:"), 1, 0)

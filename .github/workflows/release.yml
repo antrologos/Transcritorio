@@ -488,12 +488,18 @@ jobs:
       # Exige secret SITE_DISPATCH_PAT (PAT fine-grained com contents:write
       # em antrologos.github.io). Se o secret nao existe, o step apenas avisa
       # e segue — nao quebra a release.
+      #
+      # Nota: secrets nao sao acessiveis em `if:` step-level. Por isso o
+      # check e feito dentro do `run:`, onde secrets sao expostos via env.
       - name: Trigger site rebuild
-        if: env.SITE_DISPATCH_PAT != ''
         env:
           SITE_DISPATCH_PAT: ${{ secrets.SITE_DISPATCH_PAT }}
           VERSION: ${{ github.ref_name }}
         run: |
+          if [ -z "${SITE_DISPATCH_PAT}" ]; then
+            echo "::warning::SITE_DISPATCH_PAT nao configurado. Pulando rebuild automatico do site (veja docs/SITE_DISPATCH_PAT.md)."
+            exit 0
+          fi
           VER="${VERSION#v}"
           echo "Disparando rebuild do site para v${VER}..."
           curl -fsSL -X POST \
@@ -503,10 +509,3 @@ jobs:
             https://api.github.com/repos/antrologos/antrologos.github.io/dispatches \
             -d "{\"event_type\":\"transcritorio-release\",\"client_payload\":{\"version\":\"${VER}\"}}"
           echo "OK: dispatch enviado para antrologos.github.io"
-
-      - name: Warn if PAT missing
-        if: env.SITE_DISPATCH_PAT == ''
-        env:
-          SITE_DISPATCH_PAT: ${{ secrets.SITE_DISPATCH_PAT }}
-        run: |
-          echo "::warning::SITE_DISPATCH_PAT nao configurado. O site antrologos.github.io nao sera reconstruido automaticamente. Veja docs/SITE_DISPATCH_PAT.md."

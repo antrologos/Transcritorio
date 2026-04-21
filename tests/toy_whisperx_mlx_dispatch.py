@@ -104,6 +104,61 @@ def test_cpu_forced_skips_mlx() -> None:
     _drop_mlx_modules()
 
 
+def test_explicit_mps_device_dispatches_to_mlx() -> None:
+    """User picks 'GPU Apple Silicon (MLX/Metal)' in the dialog -> asr_device=mps.
+    Must dispatch to MLX runner."""
+    _drop_mlx_modules()
+    _fake_mlx_whisper_module()
+    from transcribe_pipeline import whisperx_runner, runtime
+
+    with patch.object(runtime, "detect_device", return_value="mps"):
+        called = {"n": 0}
+
+        def fake_mlx_runner(rows, config, paths, **kwargs):  # noqa: ARG001
+            called["n"] += 1
+            return 0
+
+        with patch.object(whisperx_runner, "mlx_whisper_runner") as mock_mod:
+            mock_mod.is_available.return_value = True
+            mock_mod.run_mlx_whisper = fake_mlx_runner
+            result = whisperx_runner.run_whisperx(
+                rows=[],
+                config={
+                    "asr_device": "mps",
+                    "model_download_token_env": "HF_TOKEN",
+                },
+                paths=None,  # type: ignore[arg-type]
+            )
+        assert result == 0
+        assert called["n"] == 1, "asr_device=mps should dispatch to MLX runner"
+    print("PASS: asr_device=mps -> MLX runner")
+    _drop_mlx_modules()
+
+
+def test_mlx_opt_out_via_config() -> None:
+    """User set asr_use_mlx_on_mps=false -> stays on whisperx CLI path."""
+    _drop_mlx_modules()
+    _fake_mlx_whisper_module()
+    from transcribe_pipeline import whisperx_runner, runtime
+
+    with patch.object(runtime, "detect_device", return_value="mps"):
+        with patch.object(whisperx_runner, "mlx_whisper_runner") as mock_mod:
+            mock_mod.is_available.return_value = True
+            result = whisperx_runner.run_whisperx(
+                rows=[],
+                config={
+                    "asr_device": "mps",
+                    "asr_use_mlx_on_mps": False,
+                    "model_download_token_env": "HF_TOKEN",
+                },
+                paths=_StubPaths(),
+            )
+        assert result == 0
+        mock_mod.run_mlx_whisper.assert_not_called()
+    print("PASS: asr_use_mlx_on_mps=False respects opt-out")
+    _drop_mlx_modules()
+
+
 def test_windows_like_stays_cuda_path() -> None:
     """On Windows (no MPS detected), MLX path must never fire."""
     _drop_mlx_modules()
@@ -144,5 +199,7 @@ if __name__ == "__main__":
     test_mps_plus_mlx_dispatches()
     test_mps_without_mlx_stays_on_cli_path()
     test_cpu_forced_skips_mlx()
+    test_explicit_mps_device_dispatches_to_mlx()
+    test_mlx_opt_out_via_config()
     test_windows_like_stays_cuda_path()
     print("\nPASS: toy_whisperx_mlx_dispatch")

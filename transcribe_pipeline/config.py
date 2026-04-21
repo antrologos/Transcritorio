@@ -35,6 +35,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "asr_variant": None,
     "model_cache_dir": None,
     "asr_model_cache_only": True,
+    # When True and the detected device is MPS (Apple Silicon) and
+    # mlx-whisper is installed, route ASR through mlx_whisper_runner for
+    # Metal acceleration. On Windows/Linux this key is ignored.
+    "asr_use_mlx_on_mps": True,
+    # Emit per-word timestamps (required for pyannote-based diarization
+    # post-processing). Default True; rarely needs to be turned off.
+    "asr_word_timestamps": True,
     "diarize": True,
     "diarize_model": "pyannote/speaker-diarization-community-1",
     "diarization_num_speakers": 2,
