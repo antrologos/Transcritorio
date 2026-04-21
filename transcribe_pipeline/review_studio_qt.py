@@ -3153,9 +3153,21 @@ if QT_IMPORT_ERROR is None:
                 return "Nenhum projeto aberto"
             name = str(self.context.project.get("project_name") or self.context.paths.project_root.name)
             from . import model_manager
+            from . import runtime as _runtime_local
             model = model_manager.resolve_asr_model(str(self.context.config.get("asr_model", "?")))
+            backend = _runtime_local.describe_backend()
+            # Color the backend badge: green for GPU acceleration, amber when
+            # only CPU is available so the user sees it at a glance.
+            is_accel = "CUDA" in backend or "MLX" in backend
+            badge_color = "#2e7d32" if is_accel else "#b8860b"
+            badge = (
+                f'<span style="color:{badge_color};font-weight:600;">'
+                f'Motor: {backend}'
+                f'</span>'
+            )
             return (f"Projeto: {name}  |  "
                     f'<a href="engine-settings" style="color:#888;text-decoration:underline;">Modelo: {model}</a>'
+                    f"  |  {badge}"
                     f"  |  {self.context.paths.project_root}")
 
         def _build_review_panel(self) -> QWidget:

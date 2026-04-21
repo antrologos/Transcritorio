@@ -245,3 +245,23 @@ def resolve_device(configured: str | None) -> tuple[str, bool]:
     if detected == "cuda":
         return "cuda", False
     return "cpu", True
+
+
+def describe_backend() -> str:
+    """Short human-readable label of the active ASR backend.
+
+    Used by the GUI header so the user can confirm at a glance whether GPU
+    acceleration is in use.
+    """
+    device = detect_device()
+    if device == "cuda":
+        return "CUDA (NVIDIA)"
+    if device == "mps":
+        try:
+            from . import mlx_whisper_runner
+            if mlx_whisper_runner.is_available():
+                return "MLX (Metal)"
+        except Exception:
+            pass
+        return "MPS (sem MLX - usando CPU)"
+    return "CPU"
