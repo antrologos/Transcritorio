@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "Se você usou o Transcritório em sua pesquisa, por favor cite como abaixo."
+title: "Transcritório: transcrição local de entrevistas em português brasileiro"
+authors:
+  - family-names: "Barbosa"
+    given-names: "Rogério Jerônimo"
+    affiliation: "IESP-UERJ / CERES"
+    orcid: "https://orcid.org/0000-0002-6796-4547"
+version: "0.1.1"
+date-released: "2026-04-21"
+license: "MIT"
+repository-code: "https://github.com/antrologos/Transcritorio"
+url: "https://antrologos.github.io/Transcritorio/"
+type: software
+keywords:
+  - transcription
+  - speech recognition
+  - speaker diarization
+  - brazilian portuguese
+  - qualitative research
+  - whisper
+  - pyannote

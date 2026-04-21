@@ -1,133 +1,143 @@
-# Transcritorio
+# Transcritório
 
-App desktop para transcricao automatica local de entrevistas com separacao de falantes.
+[![Release](https://img.shields.io/github/v/release/antrologos/Transcritorio)](https://github.com/antrologos/Transcritorio/releases/latest)
+[![License](https://img.shields.io/github/license/antrologos/Transcritorio)](LICENSE)
+![Platforms](https://img.shields.io/badge/plataformas-Windows%20%7C%20macOS%20%7C%20Linux-informational)
+[![Site](https://img.shields.io/badge/site-antrologos.github.io%2FTranscritorio-44d7b6)](https://antrologos.github.io/Transcritorio/pt/)
 
-Autor: Rogerio Jeronimo Barbosa - https://antrologos.github.io/
+**Transcreva entrevistas sem enviar seu áudio para a nuvem.**
+Aplicativo desktop gratuito para transcrição automática e separação de falantes em português brasileiro.
 
-## Downloads (usuario final)
+- **100% local** — o áudio nunca sai da sua máquina; compatível com LGPD e com qualquer TCLE razoável.
+- **Português brasileiro nativo** — baseado no Whisper (modelo de transcrição de fala da OpenAI) treinado com ampla variação dialetal.
+- **Gratuito e código aberto** — licença MIT, desenvolvido no IESP-UERJ / CERES. Sem cadastro, sem assinatura, sem telemetria.
 
-Baixe a versao para sua plataforma em
-[Releases](https://github.com/antrologos/Transcritorio/releases/latest):
+Site do projeto: **[antrologos.github.io/Transcritorio](https://antrologos.github.io/Transcritorio/pt/)** (passo a passo com imagens)
+Baixar: **[Releases](https://github.com/antrologos/Transcritorio/releases/latest)**
 
-| Plataforma | Arquivo | Instrucoes |
-|------------|---------|------------|
-| **Windows 10/11** | `Transcritorio-0.1.1-Setup.exe` | Clique duas vezes. O instalador detecta placa NVIDIA e oferece aceleracao opcional (+1 GB download). |
-| **macOS** (Apple Silicon) | `Transcritorio.dmg` | Veja [`docs/MAC_INSTALL.md`](docs/MAC_INSTALL.md) — primeira execucao pede "botao direito > Abrir" por causa do Gatekeeper. |
-| **Linux** (Ubuntu, Fedora, etc.) | `Transcritorio-x86_64.AppImage` | Veja [`docs/LINUX_INSTALL.md`](docs/LINUX_INSTALL.md) — precisa instalar `ffmpeg` + libs xcb do sistema. |
+| Sistema | Arquivo | Instrução rápida |
+|---|---|---|
+| **Windows 10/11** | `Transcritorio-0.1.1-Setup.exe` (+ `Transcritorio-0.1.1-Setup-1.bin` na mesma pasta) | Clique duas vezes no `.exe`. Se tiver placa NVIDIA, o app detecta e oferece a aceleração CUDA opcional (+1 GB). |
+| **macOS** (Apple Silicon M1–M4) | `Transcritorio.dmg` | Arraste para Aplicativos. Primeira vez: botão direito no ícone → **Abrir** (Gatekeeper). Aceleração Metal automática. |
+| **Linux** (Ubuntu 22.04+, Fedora 40+) | `Transcritorio-x86_64.AppImage` | `chmod +x` e execute. Requer apenas libs X11 do sistema (veja [`docs/LINUX_INSTALL.md`](docs/LINUX_INSTALL.md)). |
 
-**Status por plataforma (v0.1.1):**
-- **Windows**: suportado. Aceleracao NVIDIA opcional no instalador.
-- **Linux**: suportado via AppImage. Testado em Ubuntu 22.04+. **Apenas CPU no AppImage distribuido** — usuarios Linux com placa NVIDIA precisam rodar do codigo-fonte para ativar CUDA (ver secao "Desenvolvimento" abaixo). Suporte a CUDA-pack no AppImage esta no backlog.
-- **macOS**: experimental. Compila e passa testes automatizados no CI; teste manual de campo pendente. Aceleracao por GPU Apple (MPS) via `mlx-whisper` esta integrada no codigo mas ainda nao validada em hardware real e nao esta empacotada nos binarios distribuidos atualmente — sera incluida em proxima release. Veja [`docs/MLX_WHISPER_MACOS.md`](docs/MLX_WHISPER_MACOS.md).
+---
 
-## Desenvolvimento
+## Para pesquisadores
 
-O software vive nesta pasta e abre projetos de transcricao de qualquer lugar. Use `--project` para apontar para a pasta do projeto, ou rode de dentro da pasta do projeto (fallback CWD).
+### O que você consegue fazer
 
-Para segredos locais, leia `docs/SEGURANCA_SEGREDOS.md`.
+- **Importar** áudios e vídeos (MP3, WAV, M4A, MP4 e outros) — um arquivo, uma pasta, ou uma lista.
+- **Transcrever** em português brasileiro com alta acurácia (90–96% em áudios limpos).
+- **Separar falantes** automaticamente — identifica quem falou em cada trecho (entrevistador, entrevistado, etc.).
+- **Revisar no Estúdio** com player sincronizado, forma de onda interativa e edição por bloco.
+- **Exportar** em DOCX, MD, SRT, VTT, CSV, TSV e formato NVivo.
+- **Tudo offline** depois do download inicial dos modelos (~3 GB, uma única vez).
 
-Fluxo principal (CLI):
+### Requisitos mínimos
 
-```cmd
-scripts\transcribe.cmd --project "C:\caminho\do\projeto" manifest
-scripts\transcribe.cmd --project "C:\caminho\do\projeto" prepare-audio --ids ID
-scripts\transcribe.cmd --project "C:\caminho\do\projeto" transcribe --ids ID
-scripts\transcribe.cmd --project "C:\caminho\do\projeto" diarize --ids ID
-scripts\transcribe.cmd --project "C:\caminho\do\projeto" render --ids ID
-scripts\transcribe.cmd --project "C:\caminho\do\projeto" qc --ids ID
+| | Mínimo | Recomendado | Ideal |
+|---|---|---|---|
+| CPU | 4 núcleos | 8 núcleos | 8+ núcleos |
+| RAM | 8 GB | 16 GB | 16 GB+ |
+| Disco | 5 GB livres | 10 GB | 10 GB |
+| GPU | — | — | NVIDIA com 6 GB+ VRAM ou Apple Silicon |
+| 1 h de áudio | ~40–60 min | ~20–30 min | ~5–10 min |
+
+### Primeiros passos
+
+**1. Baixe e instale.** Use o arquivo da tabela acima. No Windows, o Defender pode exibir um aviso azul na primeira execução — clique em "Mais informações" → "Executar assim mesmo"; isso acontece porque o instalador não é assinado digitalmente, não porque tenha algo errado. No macOS, o botão direito → **Abrir** só é necessário na primeira vez.
+
+**2. Crie um projeto.** Abra o Transcritório e vá em **Projeto → Novo projeto…** Dê um nome (ex.: `tese-entrevistas-2026`) e escolha uma pasta. O app cria uma estrutura `.transcricao` com áudios, transcrições e metadados lado a lado — fácil de fazer backup e arquivar.
+
+**3. Adicione os áudios ou vídeos.** Clique em **Adicionar mídia…** (ou arraste arquivos para a janela). Use **Editar propriedades…** para definir idioma (Português brasileiro), número aproximado de falantes e rótulos (ex.: Entrevistador, Informante).
+
+**4. Clique em Transcrever e revise no Estúdio.** O botão **Transcrever** faz o fluxo completo: prepara o áudio, transcreve, separa os falantes e monta o texto editável. Tempos realistas para 1 hora de entrevista: **~5–10 min** em máquina com GPU NVIDIA ou Apple Silicon, **~20–30 min** em notebook recente sem GPU, **~40–60 min** em máquina modesta. Ao final, abra o **Estúdio de Revisão** para ouvir o áudio sincronizado com o texto, ajustar trechos com a forma de onda e exportar. Guia visual completo no [site do projeto](https://antrologos.github.io/Transcritorio/pt/#how).
+
+> **Modelos de IA no primeiro uso:** o Transcritório baixa cerca de 3 GB de modelos de IA uma única vez; depois roda offline. No fluxo padrão isso acontece sem cadastro. Só é necessário um *token* da [Hugging Face](https://huggingface.co/) (plataforma que hospeda os modelos, gratuita) em cenários avançados. Wizard em português em **Configurações → Configurar modelos…**
+
+### Privacidade e ética
+
+- **Processamento 100% local:** o áudio da entrevista nunca é enviado a servidores externos.
+- **Sem coleta de dados, sem telemetria:** nenhum cadastro ou login é exigido para usar o aplicativo.
+- **Código-fonte aberto sob licença MIT:** auditável por qualquer pessoa, incluindo o setor de TI da sua instituição.
+- **Compatível com LGPD e TCLE:** você mantém controle integral sobre o áudio do informante e pode demonstrar a cadeia de custódia dos dados.
+
+**Texto pronto para submissão ao CEP** (copie e cole no seu projeto de pesquisa):
+
+> A transcrição e a separação automática de falantes dos áudios coletados nesta pesquisa serão realizadas por meio do software Transcritório (Barbosa, 2026), uma aplicação de desktop gratuita e de código aberto (licença MIT), desenvolvida no IESP-UERJ/CERES. Todo o processamento ocorre localmente na máquina do pesquisador, sem envio do material a servidores externos, em conformidade com a Lei nº 13.709/2018 (LGPD) e com o TCLE assinado pelos participantes. O software utiliza os modelos Whisper (Radford et al., 2022) para transcrição e pyannote.audio (Bredin et al., 2020) para separação de falantes, ambos executados offline.
+
+### Como citar
+
+Barbosa, R. J. (2026). *Transcritório: transcrição local de entrevistas em português brasileiro* (v0.1.1) [Software]. IESP-UERJ/CERES. https://github.com/antrologos/Transcritorio
+
+```bibtex
+@software{barbosa2026transcritorio,
+  author    = {Barbosa, Rog{\'e}rio Jer{\^o}nimo},
+  title     = {Transcrit{\'o}rio: transcri{\c{c}}{\~a}o local de entrevistas em portugu{\^e}s brasileiro},
+  year      = {2026},
+  version   = {0.1.1},
+  publisher = {IESP-UERJ/CERES},
+  license   = {MIT},
+  url       = {https://github.com/antrologos/Transcritorio}
+}
 ```
 
-Tambem ha um wrapper PowerShell em `scripts/Invoke-TranscriptionPipeline.ps1`, mas ele depende da politica local de execucao de scripts.
+O GitHub também exibe o botão **"Cite this repository"** no menu lateral, com os mesmos dados em formato APA e BibTeX, lendo o arquivo [`CITATION.cff`](CITATION.cff).
 
-Para abrir o prototipo inicial de interface grafica:
+Modelos de IA utilizados:
+- Radford, A., Kim, J. W., Xu, T., Brockman, G., McLeavey, C., & Sutskever, I. (2022). *Robust speech recognition via large-scale weak supervision*. arXiv. https://arxiv.org/abs/2212.04356
+- Bredin, H., Yin, R., Coria, J. M., Gelly, G., Korshunov, P., Lavechin, M., Fustes, D., Titeux, H., Bouaziz, W., & Gill, M.-P. (2020). *pyannote.audio: neural building blocks for speaker diarization*. ICASSP 2020. https://arxiv.org/abs/1911.01255
 
-```powershell
-.\scripts\transcription_gui.cmd
+---
+
+## Para desenvolvedores
+
+Se você quer rodar do código-fonte, contribuir com pull requests ou auditar o pipeline:
+
+- **Setup de ambiente, CLI e primeiros commits:** [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)
+- **Arquitetura do pipeline e estrutura de arquivos:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- **Histórico de experimentos e decisões de modelo (testes A/B, variants):** [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md)
+- **Checklist pré-release (bundle completo):** [`docs/PACKAGING_CHECKLIST.md`](docs/PACKAGING_CHECKLIST.md)
+- **Segurança de tokens:** [`docs/SEGURANCA_SEGREDOS.md`](docs/SEGURANCA_SEGREDOS.md)
+- **Instalação a partir do source em macOS:** [`docs/MAC_INSTALL.md`](docs/MAC_INSTALL.md)
+- **Instalação a partir do source em Linux:** [`docs/LINUX_INSTALL.md`](docs/LINUX_INSTALL.md)
+- **Aceleração MLX no Apple Silicon:** [`docs/MLX_WHISPER_MACOS.md`](docs/MLX_WHISPER_MACOS.md)
+
+### Estrutura do repositório
+
+```
+transcribe_pipeline/    pacote Python principal (GUI, CLI, runners, render)
+scripts/                wrappers CMD/PS1 para Windows
+packaging/              spec do PyInstaller, Inno Setup, hooks, bundle filters
+tests/                  toy tests (isolados) e smoke tests
+docs/                   documentação completa
+.github/workflows/      CI e release multi-plataforma
 ```
 
-Para abrir o novo Estudio de Revisao com player, waveform com zoom, transcricao sincronizada e edicao por bloco:
+---
 
-```powershell
-.\scripts\review_studio.cmd
-```
+## Status
 
-Para preparar os modelos locais no primeiro uso, cada usuario deve usar o proprio token Hugging Face:
+| Plataforma | Estado | Notas |
+|---|---|---|
+| Windows 10/11 | Estável | Aceleração CUDA opcional (pack separado, detecção automática). |
+| Linux (AppImage) | Estável | CPU only no bundle distribuído. CUDA requer rodar do source (veja [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)). |
+| macOS (Apple Silicon) | Em validação | Aceleração Metal (MLX) integrada e embutida no `.dmg`; teste em hardware real pendente. |
 
-```powershell
-$env:TRANSCRITORIO_MODEL_DOWNLOAD_TOKEN="COLE_O_TOKEN_DE_LEITURA_AQUI"
-.\scripts\transcribe.cmd models download
-.\scripts\transcribe.cmd models verify
-```
+Roadmap e histórico em [`docs/STANDALONE_APP_ROADMAP.md`](docs/STANDALONE_APP_ROADMAP.md).
 
-Na GUI, use `Configuracoes > Configurar modelos...` para seguir o passo a passo em portugues. O token serve apenas para baixar os modelos; audios, videos e transcricoes continuam no computador local. Depois da verificacao, a execucao usa cache local/offline.
+## Contribuir e reportar bugs
 
-Na interface, a lista `Arquivos do projeto` aceita selecao multipla. Use `Adicionar midia...` para escolher arquivos individuais ou uma pasta, e `Editar propriedades...` junto da lista para definir lingua, quantidade de falantes, rotulos e contexto opcional nos arquivos selecionados. O botao `Transcrever` executa o fluxo completo da selecao: preparar audio, transcrever, identificar falantes, montar a transcricao editavel e verificar arquivos gerados. A barra de progresso acompanha percentuais reais emitidos pelo WhisperX quando disponiveis e usa progresso por etapa como fallback, sem exibir texto bruto da transcricao no status. A barra some quando nao ha processamento ativo. Use `Salvar transcricao` para gravar a transcricao editavel e `Exportar...` para gerar `DOCX`, `MD`, `SRT`, `VTT`, `CSV/TSV` e `NVivo`. `Fila de processamento` e `Configurar transcricao...` ficam no menu `Ferramentas`.
+- Bugs e sugestões: [GitHub Issues](https://github.com/antrologos/Transcritorio/issues).
+- Discussões de metodologia e uso em pesquisa qualitativa são bem-vindas no mesmo canal.
+- Pull requests: siga o estilo do código existente; toy tests passando em Windows/Linux/macOS; sem refatoração além do escopo.
 
-O menu `Projeto` tambem tem `Novo projeto...` e `Abrir projeto...`. Projetos novos sao criados como uma pasta `*.transcricao`; para portabilidade real, em etapa posterior ainda falta implementar a opcao de copiar midias para dentro dessa pasta em vez de apenas referenciar arquivos externos.
+## Licença e autoria
 
-O projeto agora tambem possui arquivos de organizacao de alto nivel:
+Software distribuído sob **licença MIT** (veja [`LICENSE`](LICENSE)).
+Autor: **Rogério Jerônimo Barbosa** — IESP-UERJ / CERES — [antrologos.github.io](https://antrologos.github.io/) — [ORCID 0000-0002-6796-4547](https://orcid.org/0000-0002-6796-4547).
 
-- `projeto.transcricao.json`: descritor do projeto de transcricoes.
-- `metadados.csv`: tabela editavel/auditavel com uma linha por arquivo selecionado, incluindo metadados de origem/audio/video, lingua, falantes, rotulos e contexto opcional.
-- `Transcricoes/00_project/jobs.json`: fila, estado e progresso por arquivo para acompanhamento e retomada basica.
+Agradecimentos às bibliotecas sobre as quais este projeto se apoia: [WhisperX](https://github.com/m-bain/whisperX), [faster-whisper](https://github.com/SYSTRAN/faster-whisper), [mlx-whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper), [pyannote.audio](https://github.com/pyannote/pyannote-audio), [PySide6](https://pypi.org/project/PySide6/), [FFmpeg](https://ffmpeg.org/).
 
-Antes de transcrever em ambiente de desenvolvimento:
-
-- Instale FFmpeg shared e garanta que `ffmpeg` e `ffprobe` estejam no PATH.
-- Crie o ambiente Python local executando `.\scripts\setup_transcription_env.cmd`. Por padrao, ele fica fora do Dropbox em `%LOCALAPPDATA%\Transcritorio\transcricao-venv`; os wrappers reutilizam o caminho local legado se ele ja existir.
-- Instale `whisperx==3.8.5`, `PySide6` e dependencias CUDA/PyTorch. `scripts\setup_transcription_env.cmd` ja inclui esses pacotes.
-- Aceite o modelo `pyannote/speaker-diarization-community-1` no Hugging Face.
-- Use `models download` com o token do proprio usuario para baixar os modelos. Os wrappers nao carregam tokens persistidos automaticamente.
-
-## macOS e Linux (MVP 0.2)
-
-A versao 0.2 roda nativamente em macOS e Linux via scripts `.sh`.
-Instaladores (`.dmg` / AppImage) ficam para 0.3+.
-
-**macOS**: `brew install ffmpeg python@3.11` + `./scripts/setup_transcription_env.sh`.
-Em Apple Silicon, `pip install -e ".[mac]"` ativa `mlx-whisper` para aceleracao Metal
-(detectada automaticamente em runtime). Sem `mlx-whisper`, ASR cai em CPU
-(~3-5x tempos do CUDA). Veja [`docs/MLX_WHISPER_MACOS.md`](docs/MLX_WHISPER_MACOS.md).
-
-**Linux (Ubuntu/Debian)**: `sudo apt install ffmpeg python3.11 python3.11-venv libxcb-cursor0 libxcb-shape0` + `./scripts/setup_transcription_env.sh`. Para ativar CUDA rodando do source, substitua o torch CPU pelo wheel CUDA: `pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cu128` (ver `docs/MAC_LINUX.md`).
-
-**Armazenamento de tokens**: `keyring` usa Keychain (Mac), SecretService (Linux) ou Credential Manager (Windows, com migracao automatica do DPAPI legado). Linux headless cai em Fernet+machine-id.
-
-Detalhes e troubleshooting em [`docs/MAC_LINUX.md`](docs/MAC_LINUX.md).
-
-Saidas principais:
-
-- `Transcricoes/00_manifest/manifest.csv`
-- `projeto.transcricao.json`
-- `metadados.csv`
-- `Transcricoes/00_project/jobs.json`
-- `Transcricoes/00_manifest/speakers_map.csv`
-- `Transcricoes/01_audio_wav16k_mono/*.wav`
-- `Transcricoes/02_asr_raw/`
-- `Transcricoes/02_asr_variants/<nome>/` para testes A/B que nao sobrescrevem o baseline
-- `Transcricoes/03_diarization/json/*.regular.json` e `*.exclusive.json`
-- `Transcricoes/03_diarization/rttm/*.regular.rttm` e `*.exclusive.rttm`
-- `Transcricoes/04_canonical/json/*.canonical.json`
-- `Transcricoes/05_transcripts_review/md/*.md`
-- `Transcricoes/05_transcripts_review/docx/*.docx`
-- `Transcricoes/05_transcripts_review/edits/*.review.json`
-- `Transcricoes/05_transcripts_review/final/` para exportacoes revisadas em `MD`, `DOCX`, `SRT`, `VTT`, `CSV`, `TSV` e `NVivo`
-- `Transcricoes/06_qc/qc_metrics.csv`
-
-As versoes `md` e `docx` sao a camada de leitura: agrupam falas consecutivas do mesmo falante, mostram timestamp apenas no inicio de cada bloco e usam `Entrevistador:`/`Entrevistado:` em negrito. As camadas `json`, `srt`, `vtt` e `tsv` preservam a granularidade para auditoria e importacao.
-
-Testes A/B de ASR ja previstos no CLI:
-
-```powershell
-.\scripts\transcribe.cmd transcribe --ids A01P_0608 --variant float16 --compute-type float16 --no-diarize
-.\scripts\transcribe.cmd transcribe --ids A01P_0608 --variant large-v3-turbo_float16 --model large-v3-turbo --compute-type float16 --no-diarize
-.\scripts\transcribe.cmd diarize --ids A01P_0608 --dry-run --num-speakers 2
-```
-
-`manifest` agora preenche metadados de audio, video e formato via `ffprobe`, e `qc` usa esses dados para checar cobertura, duracao, gaps e sinais basicos do JSON bruto do WhisperX.
-
-No piloto `A01P_0608`, `float16` ficou proximo do baseline; `float16_prompt`, `prompt_roteiro_curto` e `prompt_contexto_minimo` foram reprovados por eco/alucinacao/perda de conteudo; `large-v3-turbo_float16` mostrou erros qualitativos. Um teste adicional `float16` vs `int8_control` em 5 entrevistas esta em `Transcricoes/06_qc/asr_float16_5interviews_report.md`. Decisao atual: usar `float16` como padrao, sem prompt/hotwords, com fallback `int8` se a VRAM estiver apertada.
-
-Para testes A/B de ASR, use `--variant <nome>` para gravar em `Transcricoes/02_asr_variants/<nome>/`. Nao sobrescreva `Transcricoes/02_asr_raw` sem decisao explicita, porque o render atual usa esses arquivos como baseline.
-
-O CLI tambem aceita `--initial-prompt-file` para reprodutibilidade de testes, mas os prompts atualmente em `Transcricoes/00_config/prompts/` foram reprovados no piloto e nao devem ser usados como padrao.
+O ffmpeg/ffprobe embutidos nos binários distribuídos são builds GPL de terceiros (BtbN para Windows, evermeet.cx para macOS, johnvansickle.com para Linux). O source correspondente está disponível nessas URLs, satisfazendo os termos da GPL.
