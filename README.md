@@ -17,7 +17,7 @@ Baixe a versao para sua plataforma em
 
 **Status por plataforma (v0.1.1):**
 - **Windows**: suportado. Aceleracao NVIDIA opcional no instalador.
-- **Linux**: suportado. Testado em Ubuntu 22.04+; CUDA opcional no primeiro uso.
+- **Linux**: suportado via AppImage. Testado em Ubuntu 22.04+. **Apenas CPU no AppImage distribuido** — usuarios Linux com placa NVIDIA precisam rodar do codigo-fonte para ativar CUDA (ver secao "Desenvolvimento" abaixo). Suporte a CUDA-pack no AppImage esta no backlog.
 - **macOS**: experimental. Compila e passa testes automatizados no CI; teste manual de campo pendente. Aceleracao por GPU Apple (MPS) via `mlx-whisper` esta integrada no codigo mas ainda nao validada em hardware real e nao esta empacotada nos binarios distribuidos atualmente — sera incluida em proxima release. Veja [`docs/MLX_WHISPER_MACOS.md`](docs/MLX_WHISPER_MACOS.md).
 
 ## Desenvolvimento
@@ -89,7 +89,7 @@ Em Apple Silicon, `pip install -e ".[mac]"` ativa `mlx-whisper` para aceleracao 
 (detectada automaticamente em runtime). Sem `mlx-whisper`, ASR cai em CPU
 (~3-5x tempos do CUDA). Veja [`docs/MLX_WHISPER_MACOS.md`](docs/MLX_WHISPER_MACOS.md).
 
-**Linux (Ubuntu/Debian)**: `sudo apt install ffmpeg python3.11 python3.11-venv libxcb-cursor0 libxcb-shape0` + `./scripts/setup_transcription_env.sh`. CUDA opcional (ver `docs/MAC_LINUX.md`).
+**Linux (Ubuntu/Debian)**: `sudo apt install ffmpeg python3.11 python3.11-venv libxcb-cursor0 libxcb-shape0` + `./scripts/setup_transcription_env.sh`. Para ativar CUDA rodando do source, substitua o torch CPU pelo wheel CUDA: `pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cu128` (ver `docs/MAC_LINUX.md`).
 
 **Armazenamento de tokens**: `keyring` usa Keychain (Mac), SecretService (Linux) ou Credential Manager (Windows, com migracao automatica do DPAPI legado). Linux headless cai em Fernet+machine-id.
 
