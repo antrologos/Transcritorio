@@ -227,14 +227,14 @@ def _write_txt(path: Path, segments: list[dict[str, Any]]) -> None:
 
 
 def _srt_ts(seconds: float) -> str:
-    # 00:00:00,000
-    stamp = format_timestamp(float(seconds))
-    # format_timestamp returns HH:MM:SS.mmm; SRT wants HH:MM:SS,mmm
+    # SRT requires HH:MM:SS,mmm (comma decimal).
+    stamp = format_timestamp(float(seconds), millis=True)
     return stamp.replace(".", ",")
 
 
 def _vtt_ts(seconds: float) -> str:
-    return format_timestamp(float(seconds))
+    # WebVTT requires HH:MM:SS.mmm (dot decimal).
+    return format_timestamp(float(seconds), millis=True)
 
 
 def _emit(callback: ProgressCallback | None, interview_id: str,

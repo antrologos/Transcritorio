@@ -83,6 +83,37 @@ asr_device: cpu
 - **Diarizacao**: continua via pyannote.audio (CPU ou MPS parcial).
   Independente do caminho de ASR.
 
+## Validação e limitações conhecidas
+
+Esta integração foi desenvolvida **sem acesso a hardware Apple Silicon**.
+Seguem os limites:
+
+**O que foi validado:**
+- 23 toy tests cobrindo: dispatch de backend, normalização de saída,
+  formato SRT/VTT, propagação de config, compatibilidade retroativa de
+  `run_config.yaml`, filtragem de segments/words malformados, captura de
+  exceções (batch não é derrubado), popula MLX no combo da GUI só quando
+  MPS detectado, fallback para CLI quando mlx-whisper ausente.
+- Schema de saída do `mlx_whisper.transcribe()` conferido contra o
+  código-fonte em `ml-explore/mlx-examples`: keys `text`, `segments`,
+  `language`; words com `word`/`start`/`end`/`probability`.
+- Bug real descoberto e corrigido durante testes: `_srt_ts`/`_vtt_ts`
+  usavam `format_timestamp()` sem `millis=True`, emitindo SRT sem
+  milissegundos (players recusariam). Fix: passar `millis=True`.
+- Dependência `mlx` verificada no PyPI: wheels apenas para
+  `macosx_13_0_arm64` / `macosx_14_0_arm64`. Windows/Linux sem mlx -> o
+  caminho CPU é preservado.
+
+**O que NÃO foi validado (requer Mac físico):**
+- Transcrição real de áudio pelo caminho MLX.
+- Comparação de performance MLX × CPU no mesmo áudio.
+- Consumo de memória GPU / crashes em áudios longos.
+- PyInstaller em `macos-14` realmente produzindo um `.app` com mlx-whisper
+  embarcado (possível de validar só com `git push` + observar CI).
+
+A recomendação é fazer um teste guiado com 1-2 colegas com Mac antes de
+anunciar o suporte MLX em público.
+
 ## Arquitetura
 
 ```
