@@ -9,6 +9,7 @@ from .config import Paths
 from .manifest import selected_rows
 from . import runtime
 from . import model_manager
+from . import mlx_whisper_runner
 from .model_manager import validate_local_diarization_model
 from .utils import append_jsonl, now_utc, run_command_stream
 
@@ -25,6 +26,21 @@ def run_whisperx(
     progress_callback: ProgressCallback | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> int:
+    # Apple Silicon fast path: when MPS is detected and mlx-whisper is
+    # installed, route transcription through the MLX runner. faster-whisper
+    # (used by the whisperx CLI) does not support Metal; without this branch
+    # we would fall back to CPU and lose the ~3-5x speedup available on M-series.
+    wanted_device = (config.get("asr_device") or "").lower()
+    mlx_opt_in = bool(config.get("asr_use_mlx_on_mps", True))
+    if mlx_opt_in and wanted_device != "cpu":
+        if runtime.detect_device() == "mps" and mlx_whisper_runner.is_available():
+            return mlx_whisper_runner.run_mlx_whisper(
+                rows, config, paths,
+                ids=ids, dry_run=dry_run,
+                progress_callback=progress_callback,
+                should_cancel=should_cancel,
+            )
+
     failures = 0
     token_env = str(config["model_download_token_env"])
     cache_only = bool(config.get("asr_model_cache_only", True))
@@ -44,7 +60,8 @@ def run_whisperx(
         if fell_back:
             detected = runtime.detect_device()
             if detected == "mps":
-                print(f"[Transcritorio] Apple Silicon (MPS) detectado, mas faster-whisper usa CPU para ASR. Transcrevendo {row['interview_id']} em CPU (~3x tempo real).")
+                # mlx-whisper not installed; we could not take the Metal fast path.
+                print(f"[Transcritorio] Apple Silicon (MPS) detectado mas mlx-whisper nao esta instalado. Transcrevendo {row['interview_id']} em CPU (~3x tempo real). Instale 'mlx-whisper' para usar Metal.")
             else:
                 print(f"[Transcritorio] CUDA indisponivel. Usando CPU para transcrever {row['interview_id']}.")
         effective_model = model_manager.resolve_asr_model(str(config["asr_model"]))

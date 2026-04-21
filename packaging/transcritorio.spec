@@ -98,6 +98,16 @@ try:
 except Exception:
     pass
 
+# mlx-whisper: only available on macOS arm64. On Windows/Linux builds this
+# import fails silently and the runtime code takes the whisperx CLI path.
+try:
+    import mlx_whisper  # noqa: F401
+    hidden_imports += collect_submodules("mlx_whisper")
+    hidden_imports += collect_submodules("mlx")
+    print(f"=== mlx-whisper detected; bundling MLX acceleration ({sys.platform}) ===")
+except Exception:
+    pass
+
 # ---------------------------------------------------------------------------
 # Data files
 # ---------------------------------------------------------------------------

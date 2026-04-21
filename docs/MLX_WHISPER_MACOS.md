@@ -1,0 +1,102 @@
+# Aceleracao Metal no Apple Silicon (mlx-whisper)
+
+O Transcritorio usa a framework MLX da Apple para rodar Whisper direto
+no GPU integrado dos chips M1/M2/M3/M4. Isso da tipicamente **3x a 5x
+mais rapido** que CPU puro em Apple Silicon.
+
+## Para usuarios finais (baixaram o .dmg)
+
+**Nao precisa instalar nada.** A partir da v0.1.2, a build macOS do
+Transcritorio ja inclui `mlx-whisper` dentro do `Transcritorio.app`.
+Ao abrir o app num Mac com Apple Silicon, a aceleracao MPS e detectada
+automaticamente e o caminho MLX e usado.
+
+> **Confirmar que a aceleracao esta ativa**: abra o Transcritorio, va em
+> *Preferencias → Sobre* (ou equivalente) e verifique que o backend
+> aparece como `mlx-whisper`. Alternativamente, transcreva uma entrevista
+> curta e observe no log: deve aparecer `Carregando modelo MLX
+> mlx-community/whisper-large-v3-mlx...`.
+
+### Requisitos
+
+- macOS 13.5+ (Ventura ou superior)
+- Chip Apple Silicon (M1/M2/M3/M4). Nao funciona em Macs Intel.
+- ~5 GB livres para o modelo large-v3-turbo (download automatico no
+  primeiro uso).
+
+## Para desenvolvedores (rodando do source)
+
+Se voce clonou o repositorio e quer usar MLX:
+
+```bash
+pip install -e ".[mac]"
+# ou, equivalente:
+pip install mlx-whisper
+```
+
+Valide que funciona:
+
+```bash
+python -c "
+from transcribe_pipeline import mlx_whisper_runner
+from transcribe_pipeline.runtime import detect_device
+print('device:', detect_device())
+print('mlx available:', mlx_whisper_runner.is_available())
+"
+```
+
+Esperado em Mac M-series: `device: mps`, `mlx available: True`.
+
+## Fallback automatico
+
+Se, por qualquer motivo, `mlx-whisper` nao estiver presente:
+
+- O Transcritorio **detecta** isso e cai automaticamente no caminho CPU
+  via `faster-whisper`.
+- Uma mensagem no log informa: *"MPS detectado mas mlx-whisper nao esta
+  instalado. Usando CPU (~3x tempo real)."*
+- Voce pode forcar o caminho CPU em qualquer situacao definindo
+  `asr_device: cpu` no `run_config.yaml`.
+
+## Desligar a aceleracao MLX
+
+Edite `Transcricoes/00_config/run_config.yaml` no seu projeto:
+
+```yaml
+asr_use_mlx_on_mps: false
+```
+
+Ou mude o device para forcar CPU:
+
+```yaml
+asr_device: cpu
+```
+
+## Limitacoes
+
+- **Word-level timestamps**: habilitado por padrao (`word_timestamps=True`).
+  Em modelos muito pequenos (tiny/base) os timestamps podem ser
+  aproximados. Para revisao manual, prefira large-v3 ou large-v3-turbo.
+- **Modelos CTranslate2 (padrao no Windows)**: nao sao compativeis com
+  MLX. O runner MLX usa modelos da HF org `mlx-community/` (mapeamento
+  em `mlx_whisper_runner.MLX_MODEL_MAP`).
+- **Diarizacao**: continua via pyannote.audio (CPU ou MPS parcial).
+  Independente do caminho de ASR.
+
+## Arquitetura
+
+```
+whisperx_runner.run_whisperx()
+  │
+  ├─ detect_device() == "mps" AND mlx_whisper_runner.is_available()
+  │        AND config.asr_device != "cpu"
+  │        AND config.asr_use_mlx_on_mps != false
+  │  └→ mlx_whisper_runner.run_mlx_whisper()
+  │     └→ mlx_whisper.transcribe() → normaliza JSON → escreve em 02_asr_raw/json/
+  │
+  └─ Caminho default:
+     └→ whisperx CLI (subprocess) com CT2/faster-whisper
+```
+
+Ambos os caminhos produzem o mesmo formato de JSON; `render.py`,
+`diarization.py` e o resto do pipeline sao agnosticos.

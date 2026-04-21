@@ -244,6 +244,10 @@ jobs:
           # macOS: wheels oficiais do pytorch sao arm64+CPU/MPS (nao tem CUDA)
           python -m pip install torch==2.8.0 torchaudio==2.8.0
           python -m pip install torchcodec==0.7.0
+          # mlx-whisper fornece o caminho de aceleracao Metal no Apple Silicon.
+          # macos-14 runner e arm64 (M1), entao mlx instala sem problema.
+          # Instalado ANTES do PyInstaller para que seja incluido no .app.
+          python -m pip install "mlx-whisper>=0.4.0"
           python -m pip install -e . "pyinstaller>=6.0"
 
       - name: Generate .icns from SVG
@@ -479,3 +483,30 @@ jobs:
             artifacts/**/*-cuda-pack-*.zip
           draft: false
           generate_release_notes: true
+
+      # Dispara rebuild do site antrologos.github.io para pegar a nova versao.
+      # Exige secret SITE_DISPATCH_PAT (PAT fine-grained com contents:write
+      # em antrologos.github.io). Se o secret nao existe, o step apenas avisa
+      # e segue — nao quebra a release.
+      - name: Trigger site rebuild
+        if: env.SITE_DISPATCH_PAT != ''
+        env:
+          SITE_DISPATCH_PAT: ${{ secrets.SITE_DISPATCH_PAT }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          VER="${VERSION#v}"
+          echo "Disparando rebuild do site para v${VER}..."
+          curl -fsSL -X POST \
+            -H "Authorization: Bearer ${SITE_DISPATCH_PAT}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/antrologos/antrologos.github.io/dispatches \
+            -d "{\"event_type\":\"transcritorio-release\",\"client_payload\":{\"version\":\"${VER}\"}}"
+          echo "OK: dispatch enviado para antrologos.github.io"
+
+      - name: Warn if PAT missing
+        if: env.SITE_DISPATCH_PAT == ''
+        env:
+          SITE_DISPATCH_PAT: ${{ secrets.SITE_DISPATCH_PAT }}
+        run: |
+          echo "::warning::SITE_DISPATCH_PAT nao configurado. O site antrologos.github.io nao sera reconstruido automaticamente. Veja docs/SITE_DISPATCH_PAT.md."

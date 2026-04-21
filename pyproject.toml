@@ -28,6 +28,11 @@ transcritorio = "transcribe_pipeline.review_studio_qt:main"
 
 [project.optional-dependencies]
 build = ["pyinstaller>=6.0"]
+# Apple Silicon Metal acceleration via MLX. Installs only on macOS ARM64
+# (mlx framework does not build on Windows/Linux). Safe to leave off the
+# default dependency set — the runtime code path checks availability and
+# falls back to the CPU whisperx path.
+mac = ["mlx-whisper>=0.4.0"]
 
 [tool.setuptools.packages.find]
 include = ["transcribe_pipeline*"]
