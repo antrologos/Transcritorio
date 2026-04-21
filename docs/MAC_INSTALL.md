@@ -41,7 +41,7 @@ Nao clique duas vezes — **o Mac vai bloquear**. Em vez disso:
 A partir daqui o Mac lembra, e nas proximas vezes voce pode abrir
 normalmente pelo Launchpad, Spotlight ou clicando duas vezes.
 
-### Alternativa (se o item 4 acima nao aparecer)
+### Alternativa 1 — se nao aparecer o botao "Abrir"
 
 Em alguns macOS mais novos a opcao "Abrir" no menu direito vem
 desabilitada. Nesse caso:
@@ -53,37 +53,89 @@ desabilitada. Nesse caso:
 3. Clique em **Abrir Mesmo Assim**
 4. Digite sua senha do Mac se pedido
 
-## Pre-requisito: FFmpeg
+### Alternativa 2 — macOS 15 Sequoia (se depois do "Open Anyway" o app **ainda nao abre**)
 
-O Transcritorio usa o **FFmpeg** para ler arquivos de audio e video.
-Instale uma vez pelo Terminal:
+O macOS 15.1+ endureceu o Gatekeeper e em alguns cenarios bloqueia o
+lancamento mesmo depois do "Abrir Mesmo Assim". Felizmente, **incluimos
+um script de ajuda dentro do proprio `.dmg`**.
+
+**IMPORTANTE**: em macOS 15.1+, o proprio duplo-clique no script tambem
+pode ser bloqueado. O caminho confiavel e abrir o Terminal primeiro e
+depois **arrastar** o script pra dentro:
+
+1. Monte o `Transcritorio.dmg` novamente (duplo-clique no arquivo
+   baixado).
+2. Abra o **Terminal** (Spotlight → digite "Terminal" → Enter; ou
+   Applications → Utilities → Terminal).
+3. Com o Terminal aberto, volte pro Finder. No conteudo do DMG voce
+   vai ver um arquivo chamado **`Habilitar Transcritorio.command`**.
+4. **Arraste** esse arquivo de dentro do DMG para a janela do Terminal.
+   Um caminho aparece na linha de comando do Terminal.
+5. **Aperte Enter**. O script roda, mostra "pronto" e fecha.
+
+Depois disso, abra o Transcritorio normalmente (Launchpad, Spotlight ou
+duplo-clique em Applications).
+
+O script apenas remove o flag de "quarentena" que o navegador colocou
+no arquivo quando voce baixou — procedimento oficial da Apple
+documentado em [support.apple.com/guide/security/gatekeeper](https://support.apple.com/guide/security/gatekeeper-and-runtime-protection-sec5599b66df/web).
+Nao desliga nenhuma protecao do seu Mac.
+
+### Alternativa 3 — fazer manualmente no Terminal (se nada acima funcionar)
+
+Abra o **Terminal** (Applications → Utilities → Terminal, ou Spotlight
+"Terminal") e cole **uma linha**:
 
 ```sh
-brew install ffmpeg
+xattr -dr com.apple.quarantine /Applications/Transcritorio.app
 ```
 
-Se voce nao tem o Homebrew, instale primeiro:
+Pressione **Enter**. Se pedir senha, digite a do seu Mac. Depois disso,
+o Transcritorio abre normalmente.
 
-```sh
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-```
+### Se mesmo assim nao abrir: me envie o diagnostico
+
+O script `Habilitar Transcritorio.command` (dentro do DMG) faz mais do
+que so tentar o fix: ele coleta informacoes do seu sistema (versao do
+macOS, chip, estado da assinatura do app, logs do Gatekeeper) e salva
+um arquivo de texto no seu Desktop chamado
+`transcritorio-diagnostico-AAAAMMDD_HHMMSS.txt`.
+
+Se o Transcritorio ainda nao abrir depois de rodar o script, por favor
+me envie esse arquivo por email ou WhatsApp. Com ele eu consigo ver
+exatamente o que o seu Mac esta bloqueando — bem melhor do que tentar
+adivinhar por screenshots de mensagens genericas do sistema.
+
+Voce nao precisa ler o arquivo antes de enviar; nenhuma informacao
+pessoal vai nele (so detalhes tecnicos do sistema e do app).
+
+## FFmpeg vem embutido
+
+A partir da v0.1.1, o `.dmg` ja inclui `ffmpeg` e `ffprobe` compilados
+para Apple Silicon. **Voce nao precisa instalar nada pelo Terminal** —
+nem Homebrew, nem Xcode Command Line Tools, nem brew install.
+
+Se voce ja instalou o FFmpeg antes por outros motivos, tudo bem — o
+Transcritorio usa o que vem dentro do `.app`, sem conflito com o que
+estiver no seu sistema.
 
 ## Desempenho no Mac
 
-No Apple Silicon (M1/M2/M3/M4), o Transcritorio roda a transcricao em
-**CPU**, nao no acelerador grafico (MPS). Isso acontece porque o motor
-de transcricao que usamos (`faster-whisper`) ainda nao suporta o GPU
-da Apple.
+No Apple Silicon (M1/M2/M3/M4), a partir da v0.1.1 o Transcritorio usa
+**MLX/Metal** — o acelerador grafico da Apple — para transcrever. Um
+selo **Motor: MLX (Metal)** aparece no cabecalho do projeto quando a
+aceleracao esta ativa.
 
-- **Audio de 1 hora** leva aproximadamente **3 a 5 horas** para
-  transcrever, dependendo do modelo e da geracao do chip.
-- **Recomendado** deixar rodando enquanto voce faz outra coisa
-  (almoco, reuniao, etc.)
-- Em computadores com placa NVIDIA (Windows), o mesmo audio leva ~10-15
-  minutos. Mac nao tem essa opcao hoje.
-
-No backlog ha um suporte experimental a `mlx-whisper` que traria
-aceleracao real em Apple Silicon (3-5x mais rapido). Ainda nao publicado.
+- **Audio de 1 hora** leva aproximadamente **10 a 15 minutos** num Mac
+  M2/M3. Em M1 um pouco mais, em M4 um pouco menos.
+- Na **primeira transcricao**, o modelo otimizado pra Metal (~1,6 GB)
+  e baixado em segundo plano. A barra de progresso sobe lentamente
+  (1% → 89%) durante o download, depois salta pra 100% ao finalizar.
+  Isso e esperado; o app nao travou.
+- Se por algum motivo o MLX nao estiver disponivel (instalacao
+  incompleta, etc.), o Transcritorio cai automaticamente para CPU. O
+  selo do cabecalho mostra **Motor: CPU** e o tempo sobe para 45-60
+  min por hora de audio.
 
 ## Desinstalar
 

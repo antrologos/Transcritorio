@@ -337,30 +337,211 @@ jobs:
             --clean --noconfirm packaging/transcritorio.spec
           ls -la dist/
 
+      - name: Ad-hoc codesign (macOS 15 Sequoia Gatekeeper)
+        # Sem assinatura, macOS 15+ bloqueia mesmo apos "Open Anyway"
+        # porque sub-binarios (ffmpeg, Python framework, PySide6 dylibs)
+        # falham na validacao secundaria. A assinatura ad-hoc ("-"
+        # identity) e gratuita (nao exige Apple Developer $99/ano) e
+        # satisfaz a exigencia de "binario tem signature valida", o que
+        # combinado com a autorizacao manual do usuario ("Open Anyway")
+        # permite a execucao.
+        #
+        # --force: sobrescreve se ja assinado
+        # --deep: assina recursivamente todo Mach-O no .app
+        # --sign -: identity "-" significa ad-hoc (self-signed, no cert)
+        run: |
+          codesign --force --deep --sign - dist/Transcritorio.app
+          echo "=== Verificacao ==="
+          codesign --verify --deep --strict --verbose=2 dist/Transcritorio.app
+          echo "=== Assinatura do bundle ==="
+          codesign -dv dist/Transcritorio.app 2>&1 | head -8
+
+      - name: Prepare DMG source (app + script de desbloqueio)
+        # Monta um diretorio com tudo que vai aparecer no DMG. Alem do .app,
+        # incluimos um script .command que o usuario clica caso o Gatekeeper
+        # bloqueie o app apos "Open Anyway" (comportamento do macOS 15.1+).
+        # O script roda xattr -dr com.apple.quarantine em /Applications/
+        # Transcritorio.app — documentado pela Apple como workaround seguro.
+        # Shell scripts (.command) dentro de um DMG quarentined NAO sao
+        # bloqueados pelo Gatekeeper, entao o usuario consegue executa-lo.
+        run: |
+          mkdir -p dmg-source
+          cp -R dist/Transcritorio.app dmg-source/
+
+          # Script de fix + diagnostico. Tres funcoes integradas:
+          # 1. Detecta o estado do Transcritorio.app (assinatura, quarentena,
+          #    Gatekeeper assessment, hardware, versao macOS, logs recentes)
+          # 2. Tenta o fix automatico (xattr -dr com.apple.quarantine)
+          # 3. Salva o relatorio inteiro em ~/Desktop/transcritorio-diagnostico-*.txt
+          #    e abre no TextEdit, para o usuario poder enviar ao autor se o
+          #    Transcritorio ainda nao abrir.
+          cat > "dmg-source/Habilitar Transcritorio.command" <<'SCRIPT_EOF'
+          #!/bin/bash
+          # Transcritorio - Habilitar + Diagnostico
+          # Se duplo-clique for bloqueado pelo macOS 15+: abra o Terminal
+          # e arraste este arquivo para dentro dele, depois aperte Enter.
+
+          APP="/Applications/Transcritorio.app"
+          TS=$(date +%Y%m%d_%H%M%S)
+          LOG="$HOME/Desktop/transcritorio-diagnostico-${TS}.txt"
+
+          # tee: saida visivel no Terminal E copiada pro arquivo
+          exec > >(tee "$LOG") 2>&1
+
+          echo "============================================================"
+          echo "  Transcritorio - Diagnostico + Habilitar primeira execucao"
+          echo "============================================================"
+          echo "Data: $(date)"
+          echo "Relatorio sera salvo em: $LOG"
+          echo ""
+
+          echo "--- Sistema operacional ---"
+          sw_vers 2>&1 || true
+          uname -a 2>&1 || true
+          echo "Arquitetura: $(uname -m)"
+          echo ""
+
+          echo "--- Hardware ---"
+          sysctl -n machdep.cpu.brand_string 2>&1 || true
+          sysctl -n hw.model 2>&1 || true
+          echo ""
+
+          if [ ! -d "$APP" ]; then
+            echo "[ERRO] $APP nao existe."
+            echo ""
+            echo "Antes de rodar este script:"
+            echo "  1. Abra o Transcritorio.dmg"
+            echo "  2. Arraste Transcritorio.app para /Applications"
+            echo "  3. Execute este script novamente"
+            echo ""
+            echo "Diagnostico salvo em:"
+            echo "  $LOG"
+            echo ""
+            echo "Aperte Enter para fechar."
+            read _
+            exit 1
+          fi
+
+          echo "--- Transcritorio.app encontrado ---"
+          du -sh "$APP" 2>&1 | awk '{print "Tamanho total: " $1}'
+          echo ""
+
+          echo "--- Assinatura de codigo (codesign -dv) ---"
+          codesign -dv "$APP" 2>&1 | head -12 || true
+          echo ""
+
+          echo "--- Verificacao da assinatura ---"
+          if codesign --verify --deep --strict "$APP" 2>&1; then
+            echo "[ok] assinatura valida"
+          else
+            echo "[falha] assinatura invalida ou ausente"
+          fi
+          echo ""
+
+          echo "--- Avaliacao do Gatekeeper (spctl) ---"
+          spctl --assess --verbose=4 "$APP" 2>&1 | head -5 || true
+          echo ""
+
+          echo "--- Atributos estendidos antes do fix ---"
+          xattr -l "$APP" 2>&1 | head -10 || true
+          echo ""
+
+          if xattr -l "$APP" 2>/dev/null | grep -q "com.apple.quarantine"; then
+            echo "--- Removendo flag de quarentena ---"
+            if xattr -dr com.apple.quarantine "$APP" 2>&1; then
+              echo "[ok] quarentena removida sem sudo"
+            else
+              echo "Pedindo senha do seu Mac para remover quarentena:"
+              sudo xattr -dr com.apple.quarantine "$APP" 2>&1
+              echo "[ok] quarentena removida com sudo"
+            fi
+            echo ""
+            echo "--- Atributos apos fix ---"
+            xattr -l "$APP" 2>&1 || true
+          else
+            echo "[diag] .app sem quarentena (nada a fazer aqui)."
+          fi
+          echo ""
+
+          echo "--- Logs do Gatekeeper / syspolicyd (ultimos 10 min) ---"
+          log show \
+            --predicate 'eventMessage CONTAINS "Transcritorio" OR subsystem == "com.apple.syspolicy"' \
+            --last 10m --style compact 2>&1 | tail -30 || true
+          echo ""
+
+          echo "--- Crash reports recentes (se existirem) ---"
+          CRASH_DIR="$HOME/Library/Logs/DiagnosticReports"
+          if [ -d "$CRASH_DIR" ]; then
+            ls -t "$CRASH_DIR" 2>/dev/null | grep -i transcrit | head -3 || true
+          fi
+          echo ""
+
+          echo "============================================================"
+          echo "  RELATORIO SALVO EM:"
+          echo "  $LOG"
+          echo ""
+          echo "  PROXIMO PASSO: tente abrir o Transcritorio pelo Launchpad"
+          echo "  ou duplo-clique na pasta Applications."
+          echo ""
+          echo "  Se NAO abrir, envie o arquivo de diagnostico acima para"
+          echo "  o desenvolvedor. O arquivo ja foi aberto no TextEdit; basta"
+          echo "  anexar ao email / WhatsApp que voce costuma usar."
+          echo "============================================================"
+          echo ""
+
+          # abre o relatorio automaticamente pro usuario ver
+          open -a TextEdit "$LOG" 2>/dev/null || true
+
+          echo "(Esta janela fecha em 5 segundos...)"
+          sleep 5
+          osascript -e 'tell application "Terminal" to close first window' 2>/dev/null || true
+          SCRIPT_EOF
+          chmod +x "dmg-source/Habilitar Transcritorio.command"
+
+          echo "=== Conteudo do dmg-source ==="
+          ls -la dmg-source/
+
       - name: Create DMG
         run: |
-          # create-dmg falha se .dmg ja existe
           rm -f Transcritorio.dmg
-          # Background customizado (commit no repo em packaging/mac/)
           BG_ARG=""
           if [ -f packaging/mac/dmg_background.png ]; then
             BG_ARG="--background packaging/mac/dmg_background.png"
           fi
+          # Layout: app a esquerda, Applications symlink a direita, script
+          # de desbloqueio no centro-baixo (clique de exceção).
           create-dmg \
             --volname "Transcritorio" \
             --window-pos 200 120 \
-            --window-size 640 400 \
-            --icon-size 100 \
-            --icon "Transcritorio.app" 180 200 \
+            --window-size 680 460 \
+            --icon-size 96 \
+            --icon "Transcritorio.app" 160 180 \
+            --icon "Habilitar Transcritorio.command" 340 320 \
+            --app-drop-link 520 180 \
             --hide-extension "Transcritorio.app" \
-            --app-drop-link 460 200 \
+            --hide-extension "Habilitar Transcritorio.command" \
             --hdiutil-quiet \
             $BG_ARG \
             "Transcritorio.dmg" \
-            "dist/Transcritorio.app" \
+            "dmg-source" \
             || (echo "create-dmg falhou — tentando hdiutil direto" && \
-                hdiutil create -volname "Transcritorio" -srcfolder "dist/Transcritorio.app" -ov -format UDZO "Transcritorio.dmg")
+                hdiutil create -volname "Transcritorio" -srcfolder "dmg-source" -ov -format UDZO "Transcritorio.dmg")
           ls -la Transcritorio.dmg
+
+      - name: Verify DMG contents (script is executable)
+        # Valida que o .command preservou o bit de execucao dentro do DMG.
+        # hdiutil attach para inspecao read-only.
+        run: |
+          MOUNT=$(hdiutil attach -readonly -nobrowse Transcritorio.dmg | tail -1 | awk '{print $NF}')
+          echo "Mounted at: $MOUNT"
+          ls -la "$MOUNT/"
+          if [ -x "$MOUNT/Habilitar Transcritorio.command" ]; then
+            echo "[ok] script tem bit de execucao"
+          else
+            echo "[aviso] script sem bit de execucao — vai falhar no duplo-clique"
+            exit 1
+          fi
+          hdiutil detach "$MOUNT" || true
 
       - name: Upload .dmg artifact
         uses: actions/upload-artifact@v4
