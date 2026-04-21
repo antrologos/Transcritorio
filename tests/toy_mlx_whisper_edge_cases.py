@@ -442,6 +442,104 @@ def test_jobs_jsonl_schema_parity() -> None:
     _drop_fake_mlx()
 
 
+def test_creep_progress_emits_during_slow_transcribe() -> None:
+    """During a slow mlx_whisper.transcribe(), a background thread must emit
+    intermediate asr_progress events so the UI doesn't freeze at 1%.
+    We simulate a slow transcribe and check progress events received."""
+    _drop_fake_mlx()
+    import time as _time
+
+    def slow_transcribe(*a, **k):
+        _time.sleep(7.0)  # longer than 2 creep ticks of 3s
+        return {"segments": [{"start": 0, "end": 1, "text": "demora"}]}
+
+    _install_fake_mlx(slow_transcribe)
+    from transcribe_pipeline import mlx_whisper_runner
+
+    rows, cfg, paths = _make_rows_and_paths("CREEP01")
+    events: list[dict] = []
+
+    def collect(evt):
+        events.append(evt)
+
+    mlx_whisper_runner.run_mlx_whisper(rows, cfg, paths, progress_callback=collect)
+
+    progress_events = [e for e in events if e.get("event") == "asr_progress"]
+    # Expect at least: initial 1%, one or more creep events, (done fires separately)
+    assert len(progress_events) >= 3, \
+        f"expected multiple progress events, got {len(progress_events)}: {[e.get('progress') for e in progress_events]}"
+    percents = [e["progress"] for e in progress_events]
+    # Creep must be strictly increasing and bounded by 89
+    assert percents[0] == 1
+    assert max(percents) >= 2, f"creep did not advance: {percents}"
+    assert all(p <= 89 for p in percents), f"creep exceeded cap: {percents}"
+    print(f"PASS: creep emitted {len(progress_events)} progress events (range {min(percents)}-{max(percents)})")
+    _drop_fake_mlx()
+
+
+def test_error_message_includes_exception_detail() -> None:
+    """When transcribe raises, the asr_error event carries str(exc), not just
+    the type — so the user sees actionable info in the dialog."""
+    _drop_fake_mlx()
+
+    def transcribe_boom(*a, **k):
+        raise RuntimeError("CUDA out of memory: requested 4.5 GB, available 1.2 GB")
+
+    _install_fake_mlx(transcribe_boom)
+    from transcribe_pipeline import mlx_whisper_runner
+
+    rows, cfg, paths = _make_rows_and_paths("ERR01")
+    events: list[dict] = []
+    mlx_whisper_runner.run_mlx_whisper(rows, cfg, paths, progress_callback=events.append)
+
+    errors = [e for e in events if e.get("event") == "asr_error"]
+    assert errors, "no asr_error emitted"
+    msg = errors[0]["message"]
+    assert "RuntimeError" in msg, msg
+    assert "out of memory" in msg.lower(), f"detail missing: {msg!r}"
+    print(f"PASS: error message carries detail ({msg[:60]}...)")
+    _drop_fake_mlx()
+
+
+def test_error_message_truncates_long_detail() -> None:
+    """Very long exception messages must be truncated so the UI dialog
+    remains readable."""
+    _drop_fake_mlx()
+
+    long_err = "x" * 1000
+
+    def boom(*a, **k):
+        raise RuntimeError(long_err)
+
+    _install_fake_mlx(boom)
+    from transcribe_pipeline import mlx_whisper_runner
+
+    rows, cfg, paths = _make_rows_and_paths("ERR02")
+    events: list[dict] = []
+    mlx_whisper_runner.run_mlx_whisper(rows, cfg, paths, progress_callback=events.append)
+
+    errors = [e for e in events if e.get("event") == "asr_error"]
+    msg = errors[0]["message"]
+    assert "..." in msg, f"long message not truncated: {msg[:50]}..."
+    assert len(msg) < 320, f"message still too long: {len(msg)}"
+    print(f"PASS: long error truncated ({len(msg)} chars)")
+    _drop_fake_mlx()
+
+
+def test_whisperx_writes_backend_field() -> None:
+    """whisperx_runner must also write backend='whisperx' to jobs.jsonl so
+    mixed projects can distinguish the producer in audit trails."""
+    import inspect
+    from transcribe_pipeline import whisperx_runner
+
+    # Read the source of run_whisperx to confirm "backend" key is emitted.
+    # (A full integration test would require real whisperx subprocess.)
+    src = inspect.getsource(whisperx_runner.run_whisperx)
+    assert '"backend": "whisperx"' in src, \
+        "whisperx_runner.jobs.jsonl is missing backend=whisperx field"
+    print("PASS: whisperx_runner writes backend='whisperx' to jobs.jsonl")
+
+
 if __name__ == "__main__":
     test_srt_timestamp_has_milliseconds_and_comma()
     test_normalize_handles_missing_segments_key()
@@ -460,4 +558,9 @@ if __name__ == "__main__":
     test_diarize_validate_skipped_when_diarize_false()
     test_pyannote_metrics_env_set_when_configured()
     test_jobs_jsonl_schema_parity()
+    # Round 4: UX/parity fixes from second 3-agent audit
+    test_creep_progress_emits_during_slow_transcribe()
+    test_error_message_includes_exception_detail()
+    test_error_message_truncates_long_detail()
+    test_whisperx_writes_backend_field()
     print("\nPASS: toy_mlx_whisper_edge_cases")

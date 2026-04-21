@@ -124,6 +124,9 @@ def run_whisperx(
                 "status": status,
                 "started_at": now_utc(),
                 "model": config["asr_model"],
+                # "backend" distinguishes whisperx CLI runs from mlx-whisper
+                # runs on Apple Silicon. Both write to the same jobs.jsonl.
+                "backend": "whisperx",
                 "compute_type": config["asr_compute_type"],
                 "batch_size": config["asr_batch_size"],
                 "variant": config.get("asr_variant") or "",

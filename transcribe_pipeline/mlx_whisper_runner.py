@@ -11,6 +11,7 @@ normal CPU path.
 from __future__ import annotations
 
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -83,8 +84,8 @@ def run_mlx_whisper(
     """
     if not is_available():
         raise RuntimeError(
-            "mlx-whisper is not installed. Install with 'pip install mlx-whisper' "
-            "on macOS Apple Silicon, or use the WhisperX CPU path."
+            "mlx-whisper nao esta instalado. Instale com 'pip install mlx-whisper' "
+            "em macOS Apple Silicon, ou use o caminho CPU via WhisperX."
         )
 
     import mlx_whisper  # type: ignore[import-not-found]
@@ -132,7 +133,7 @@ def run_mlx_whisper(
                   {"event": "asr_error", "progress": 0,
                    "message": f"WAV ausente: {wav.name}"})
             _log_job(paths, interview_id, mlx_repo, config, "error",
-                     error=f"wav not found: {wav}")
+                     error=f"WAV nao encontrado: {wav}")
             failures += 1
             continue
 
@@ -144,6 +145,27 @@ def run_mlx_whisper(
               {"event": "asr_progress", "progress": 1,
                "message": f"Carregando modelo MLX {mlx_repo}..."})
 
+        # mlx_whisper.transcribe() is synchronous and emits nothing while it
+        # runs. Without a creep we would freeze at 1% for minutes, then jump
+        # to 100% — the user would assume the app hung. Spawn a daemon thread
+        # that advances progress 1% every 3s up to 89 while the call runs.
+        # Cap at 89 so the real 100 only fires after successful completion.
+        creep_stop = threading.Event()
+        creep_state = {"percent": 1}
+
+        def _creep() -> None:
+            while not creep_stop.wait(3.0):
+                if creep_state["percent"] < 89:
+                    creep_state["percent"] += 1
+                    _emit(progress_callback, interview_id, {
+                        "event": "asr_progress",
+                        "progress": creep_state["percent"],
+                        "message": f"Transcrevendo com MLX ({creep_state['percent']}%)...",
+                    })
+
+        creep_thread = threading.Thread(target=_creep, daemon=True, name=f"mlx-creep-{interview_id}")
+        creep_thread.start()
+
         started = time.monotonic()
         try:
             result = mlx_whisper.transcribe(
@@ -154,12 +176,22 @@ def run_mlx_whisper(
                 verbose=False,
             )
         except Exception as exc:
+            # Include the exception message, not just the type name, so the
+            # user can act on it (model not found / OOM / corrupted file / ...).
+            # Truncated to keep the UI dialog readable.
+            detail = str(exc).strip() or type(exc).__name__
+            if len(detail) > 240:
+                detail = detail[:240].rstrip() + "..."
             _emit(progress_callback, interview_id,
                   {"event": "asr_error", "progress": 0,
-                   "message": f"mlx-whisper falhou: {type(exc).__name__}"})
+                   "message": f"mlx-whisper falhou ({type(exc).__name__}): {detail}"})
             _log_job(paths, interview_id, mlx_repo, config, "error", error=str(exc))
             failures += 1
             continue
+        finally:
+            # Stop the creep thread whether transcribe raised or returned.
+            creep_stop.set()
+            creep_thread.join(timeout=1.0)
 
         elapsed = time.monotonic() - started
 

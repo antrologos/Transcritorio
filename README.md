@@ -18,7 +18,7 @@ Baixe a versao para sua plataforma em
 **Status por plataforma (v0.1.1):**
 - **Windows**: suportado. Aceleracao NVIDIA opcional no instalador.
 - **Linux**: suportado. Testado em Ubuntu 22.04+; CUDA opcional no primeiro uso.
-- **macOS**: experimental. Compila e passa testes automatizados no CI; teste manual de campo pendente. Aceleracao por GPU Apple (MPS) nao esta habilitada ainda.
+- **macOS**: experimental. Compila e passa testes automatizados no CI; teste manual de campo pendente. Aceleracao por GPU Apple (MPS) via `mlx-whisper` esta integrada no codigo e empacotada no `.dmg` a partir da v0.1.2, mas ainda nao validada em hardware real — veja [`docs/MLX_WHISPER_MACOS.md`](docs/MLX_WHISPER_MACOS.md).
 
 ## Desenvolvimento
 
@@ -85,7 +85,9 @@ A versao 0.2 roda nativamente em macOS e Linux via scripts `.sh`.
 Instaladores (`.dmg` / AppImage) ficam para 0.3+.
 
 **macOS**: `brew install ffmpeg python@3.11` + `./scripts/setup_transcription_env.sh`.
-ASR roda em CPU (faster-whisper nao suporta MPS); ~3-5x tempos do CUDA.
+Em Apple Silicon, `pip install -e ".[mac]"` ativa `mlx-whisper` para aceleracao Metal
+(detectada automaticamente em runtime). Sem `mlx-whisper`, ASR cai em CPU
+(~3-5x tempos do CUDA). Veja [`docs/MLX_WHISPER_MACOS.md`](docs/MLX_WHISPER_MACOS.md).
 
 **Linux (Ubuntu/Debian)**: `sudo apt install ffmpeg python3.11 python3.11-venv libxcb-cursor0 libxcb-shape0` + `./scripts/setup_transcription_env.sh`. CUDA opcional (ver `docs/MAC_LINUX.md`).
 
