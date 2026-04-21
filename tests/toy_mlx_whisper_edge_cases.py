@@ -31,7 +31,7 @@ def _drop_fake_mlx() -> None:
 def _make_rows_and_paths(interview_id: str = "EDGE01"):
     from transcribe_pipeline.config import DEFAULT_CONFIG, ensure_directories, make_paths
     tmp = tempfile.mkdtemp(prefix="edge_")
-    project_root = Path(tmp)
+    project_root = Path(tmp).resolve()  # macOS aliases /var -> /private/var
     cfg = dict(DEFAULT_CONFIG)
     cfg["project_root"] = str(project_root)
     paths = make_paths(cfg, base_dir=project_root)
@@ -159,7 +159,7 @@ def test_transcribe_exception_caught_and_logged() -> None:
     from transcribe_pipeline.config import DEFAULT_CONFIG, ensure_directories, make_paths
 
     tmp = tempfile.mkdtemp(prefix="boom_")
-    project_root = Path(tmp)
+    project_root = Path(tmp).resolve()  # macOS aliases /var -> /private/var
     cfg = dict(DEFAULT_CONFIG)
     cfg["project_root"] = str(project_root)
     paths = make_paths(cfg, base_dir=project_root)

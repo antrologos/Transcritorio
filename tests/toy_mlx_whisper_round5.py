@@ -31,7 +31,7 @@ def _drop_fake_mlx() -> None:
 def _make_paths_and_cfg(interview_id: str = "X01", wav_path: str | None = None):
     from transcribe_pipeline.config import DEFAULT_CONFIG, ensure_directories, make_paths
     tmp = tempfile.mkdtemp(prefix="r5_")
-    project_root = Path(tmp)
+    project_root = Path(tmp).resolve()
     cfg = dict(DEFAULT_CONFIG)
     cfg["project_root"] = str(project_root)
     paths = make_paths(cfg, base_dir=project_root)
@@ -285,7 +285,7 @@ def test_empty_interview_id_is_failure_not_crash() -> None:
     from transcribe_pipeline.config import DEFAULT_CONFIG, ensure_directories, make_paths
 
     tmp = tempfile.mkdtemp(prefix="empty_")
-    project_root = Path(tmp)
+    project_root = Path(tmp).resolve()
     cfg = dict(DEFAULT_CONFIG)
     cfg["project_root"] = str(project_root)
     paths = make_paths(cfg, base_dir=project_root)

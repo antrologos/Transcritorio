@@ -103,7 +103,7 @@ def test_run_writes_compatible_json() -> None:
     from transcribe_pipeline import render
 
     with tempfile.TemporaryDirectory() as tmp:
-        project_root = Path(tmp)
+        project_root = Path(tmp).resolve()
         cfg = dict(DEFAULT_CONFIG)
         cfg["project_root"] = str(project_root)
         paths = make_paths(cfg, base_dir=project_root)
@@ -165,7 +165,7 @@ def test_run_appends_job_log() -> None:
     from transcribe_pipeline.config import DEFAULT_CONFIG, ensure_directories, make_paths
 
     with tempfile.TemporaryDirectory() as tmp:
-        project_root = Path(tmp)
+        project_root = Path(tmp).resolve()
         cfg = dict(DEFAULT_CONFIG)
         cfg["project_root"] = str(project_root)
         cfg["asr_model"] = "turbo"
