@@ -18,7 +18,7 @@ Baixe a versao para sua plataforma em
 **Status por plataforma (v0.1.1):**
 - **Windows**: suportado. Aceleracao NVIDIA opcional no instalador.
 - **Linux**: suportado. Testado em Ubuntu 22.04+; CUDA opcional no primeiro uso.
-- **macOS**: experimental. Compila e passa testes automatizados no CI; teste manual de campo pendente. Aceleracao por GPU Apple (MPS) via `mlx-whisper` esta integrada no codigo e empacotada no `.dmg` a partir da v0.1.2, mas ainda nao validada em hardware real — veja [`docs/MLX_WHISPER_MACOS.md`](docs/MLX_WHISPER_MACOS.md).
+- **macOS**: experimental. Compila e passa testes automatizados no CI; teste manual de campo pendente. Aceleracao por GPU Apple (MPS) via `mlx-whisper` esta integrada no codigo mas ainda nao validada em hardware real e nao esta empacotada nos binarios distribuidos atualmente — sera incluida em proxima release. Veja [`docs/MLX_WHISPER_MACOS.md`](docs/MLX_WHISPER_MACOS.md).
 
 ## Desenvolvimento
 

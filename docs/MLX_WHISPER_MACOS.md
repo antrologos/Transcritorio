@@ -6,8 +6,10 @@ mais rapido** que CPU puro em Apple Silicon.
 
 ## Para usuarios finais (baixaram o .dmg)
 
-**Nao precisa instalar nada.** A partir da v0.1.2, a build macOS do
-Transcritorio ja inclui `mlx-whisper` dentro do `Transcritorio.app`.
+**A integracao MLX esta no codigo mas ainda nao foi empacotada nos
+binarios publicos** — a v0.1.1 distribuida em `.dmg` foi montada antes da
+integracao. A proxima release macOS ja incluira `mlx-whisper` dentro do
+`Transcritorio.app`.
 Ao abrir o app num Mac com Apple Silicon, a aceleracao MPS e detectada
 automaticamente e o caminho MLX e usado.
 
