@@ -14,6 +14,14 @@ on:
         description: 'Label para o artefato (ex: 0.3.0-rc1 ou dev)'
         required: false
         default: 'dev'
+      only_platforms:
+        description: 'Rebuild parcial (CSV: linux,mac,windows). Vazio = todas. Plataformas fora da lista sao puladas e seus artefatos permanecem na Release existente.'
+        required: false
+        default: ''
+      target_tag:
+        description: 'Tag a atualizar em rebuild parcial (ex: v0.1.1). Obrigatorio quando only_platforms != vazio.'
+        required: false
+        default: ''
   push:
     tags:
       - 'v*'
@@ -28,6 +36,8 @@ jobs:
   # =========================================================================
   build-linux-appimage:
     runs-on: ubuntu-22.04
+    # Pulado em rebuild parcial quando "linux" nao esta na lista
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.only_platforms == '' || contains(inputs.only_platforms, 'linux') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -54,6 +64,22 @@ jobs:
             --index-url https://download.pytorch.org/whl/cpu
           python -m pip install torchcodec==0.7.0
           python -m pip install -e . "pyinstaller>=6.0"
+
+      - name: Download + stage FFmpeg (johnvansickle static x86_64)
+        # Para o AppImage vir com ffmpeg + ffprobe embutidos — usuario nao
+        # precisa de 'sudo apt install ffmpeg'. packaging/transcritorio.spec
+        # linhas 168-172 incluem qualquer arquivo em packaging/vendor/ffmpeg/bin/.
+        run: |
+          URL="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
+          mkdir -p "$GITHUB_WORKSPACE/packaging/vendor/ffmpeg/bin"
+          curl -fLsS "$URL" -o /tmp/ffmpeg.tar.xz
+          tar -xJf /tmp/ffmpeg.tar.xz -C /tmp
+          EXTRACTED=$(find /tmp -maxdepth 1 -type d -name 'ffmpeg-*-static' | head -1)
+          cp "$EXTRACTED/ffmpeg" "$EXTRACTED/ffprobe" \
+             "$GITHUB_WORKSPACE/packaging/vendor/ffmpeg/bin/"
+          chmod +x "$GITHUB_WORKSPACE/packaging/vendor/ffmpeg/bin/"*
+          ls -la "$GITHUB_WORKSPACE/packaging/vendor/ffmpeg/bin/"
+          "$GITHUB_WORKSPACE/packaging/vendor/ffmpeg/bin/ffmpeg" -version | head -1
 
       - name: Run PyInstaller
         env:
@@ -148,6 +174,8 @@ jobs:
   smoke-linux-appimage:
     needs: build-linux-appimage
     runs-on: ubuntu-22.04
+    # So roda quando build-linux-appimage efetivamente rodou
+    if: ${{ needs.build-linux-appimage.result == 'success' }}
     steps:
       - name: Checkout (para ter os tests/)
         uses: actions/checkout@v4
@@ -223,6 +251,8 @@ jobs:
   # =========================================================================
   build-macos-dmg:
     runs-on: macos-14
+    # Pulado em rebuild parcial quando "mac" nao esta na lista
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.only_platforms == '' || contains(inputs.only_platforms, 'mac') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -249,6 +279,23 @@ jobs:
           # Instalado ANTES do PyInstaller para que seja incluido no .app.
           python -m pip install "mlx-whisper>=0.4.0"
           python -m pip install -e . "pyinstaller>=6.0"
+
+      - name: Download + stage FFmpeg (evermeet.cx arm64)
+        # Para o .dmg vir com ffmpeg + ffprobe embutidos no Transcritorio.app —
+        # usuario Mac nao precisa de 'brew install ffmpeg'. packaging/transcritorio.spec
+        # linhas 168-172 incluem qualquer arquivo em packaging/vendor/ffmpeg/bin/.
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/packaging/vendor/ffmpeg/bin"
+          curl -fLsS "https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip" -o /tmp/ffmpeg.zip
+          curl -fLsS "https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip" -o /tmp/ffprobe.zip
+          mkdir -p /tmp/ffmpeg-extract /tmp/ffprobe-extract
+          unzip -j -o /tmp/ffmpeg.zip -d /tmp/ffmpeg-extract
+          unzip -j -o /tmp/ffprobe.zip -d /tmp/ffprobe-extract
+          cp /tmp/ffmpeg-extract/ffmpeg "$GITHUB_WORKSPACE/packaging/vendor/ffmpeg/bin/"
+          cp /tmp/ffprobe-extract/ffprobe "$GITHUB_WORKSPACE/packaging/vendor/ffmpeg/bin/"
+          chmod +x "$GITHUB_WORKSPACE/packaging/vendor/ffmpeg/bin/"*
+          file "$GITHUB_WORKSPACE/packaging/vendor/ffmpeg/bin/"*
+          "$GITHUB_WORKSPACE/packaging/vendor/ffmpeg/bin/ffmpeg" -version | head -1
 
       - name: Generate .icns from SVG
         env:
@@ -327,6 +374,8 @@ jobs:
   # =========================================================================
   build-windows-installer:
     runs-on: windows-latest
+    # Pulado em rebuild parcial quando "windows" nao esta na lista
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.only_platforms == '' || contains(inputs.only_platforms, 'windows') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -458,10 +507,17 @@ jobs:
           retention-days: 30
 
   # =========================================================================
-  # Cria GitHub Release quando gatilho foi tag push (nao workflow_dispatch)
+  # Cria/atualiza GitHub Release. Aceita 2 gatilhos:
+  # - Push de tag v*: cria Release nova.
+  # - workflow_dispatch com only_platforms nao-vazio: atualiza Release
+  #   existente (mesma tag). Jobs pulados nao tem artefatos; action-gh-release
+  #   com files: glob nao falha se o glob retorna vazio, preservando os
+  #   artefatos antigos dessas plataformas na Release.
   # =========================================================================
   publish-release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    # always() para rodar mesmo com jobs pulados (skipped). Abaixo filtramos
+    # por sucesso dos jobs que efetivamente rodaram.
+    if: ${{ always() && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.only_platforms != '')) }}
     needs: [build-linux-appimage, build-macos-dmg, build-windows-installer]
     runs-on: ubuntu-latest
     permissions:
@@ -472,9 +528,14 @@ jobs:
         with:
           path: artifacts
 
-      - name: Create GitHub Release
+      - name: Create/update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          # Em push de tag v*, usa a propria tag (github.ref). Em rebuild parcial
+          # via workflow_dispatch, usa o target_tag explicito (ex: v0.1.1) para
+          # atualizar a Release existente. Nomes iguais de arquivo substituem;
+          # plataformas puladas tem glob vazio -> artefatos antigos preservados.
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.target_tag != '' && inputs.target_tag || github.ref_name }}
           files: |
             artifacts/**/*.AppImage
             artifacts/**/*.dmg
@@ -482,7 +543,10 @@ jobs:
             artifacts/**/*-Setup-*.bin
             artifacts/**/*-cuda-pack-*.zip
           draft: false
-          generate_release_notes: true
+          # generate_release_notes: cria notas novas na primeira vez; em update
+          # subsequente mantem as notas existentes.
+          generate_release_notes: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          fail_on_unmatched_files: false
 
       # Dispara rebuild do site antrologos.github.io para pegar a nova versao.
       # Exige secret SITE_DISPATCH_PAT (PAT fine-grained com contents:write
