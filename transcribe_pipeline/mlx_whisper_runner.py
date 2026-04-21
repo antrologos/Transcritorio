@@ -10,12 +10,15 @@ normal CPU path.
 """
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 from typing import Any, Callable
 
 from .config import Paths
 from .manifest import selected_rows
+from . import runtime
+from .model_manager import validate_local_diarization_model
 from .utils import append_jsonl, format_timestamp, now_utc, write_json
 
 
@@ -86,16 +89,33 @@ def run_mlx_whisper(
 
     import mlx_whisper  # type: ignore[import-not-found]
 
-    failures = 0
-    output_json_dir = paths.asr_dir / "json"
-    output_srt_dir = paths.asr_dir / "srt"
-    output_vtt_dir = paths.asr_dir / "vtt"
-    output_txt_dir = paths.asr_dir / "txt"
-    output_json_dir.mkdir(parents=True, exist_ok=True)
-    output_srt_dir.mkdir(parents=True, exist_ok=True)
-    output_vtt_dir.mkdir(parents=True, exist_ok=True)
-    output_txt_dir.mkdir(parents=True, exist_ok=True)
+    # Apply same HF environment hygiene that whisperx_runner does: offline flag,
+    # token redaction, HF_TOKEN cleanup. Without this, the HF token can leak
+    # across the pyannote/HF cache paths and the model_cache_dir override is
+    # ignored.
+    token_env = str(config.get("model_download_token_env") or "TRANSCRITORIO_MODEL_DOWNLOAD_TOKEN")
+    cache_only = bool(config.get("asr_model_cache_only", True))
+    runtime.apply_secure_hf_environment(offline=cache_only, token_env=token_env)
 
+    # Fail fast when diarization is enabled but the model is missing — matches
+    # whisperx_runner behavior (otherwise we'd spend 5+ min transcribing before
+    # the diarize step discovers the missing model).
+    if config.get("diarize", True):
+        validate_local_diarization_model(config.get("diarize_model"))
+
+    # pyannote metrics env var — set only when explicitly configured so MLX
+    # and whisperx paths behave identically for downstream logs.
+    if config.get("pyannote_metrics_enabled") is not None:
+        os.environ["PYANNOTE_METRICS_ENABLED"] = str(config["pyannote_metrics_enabled"])
+
+    # Output dir respects asr_variant: baseline -> paths.asr_dir; variant ->
+    # paths.asr_variants_dir/<name>. Imported lazily to avoid a circular import
+    # between whisperx_runner and mlx_whisper_runner.
+    from .whisperx_runner import asr_output_dir
+    output_dir = asr_output_dir(paths, config)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    failures = 0
     mlx_repo = resolve_mlx_model(str(config.get("asr_model", "")))
     language = config.get("asr_language") or None
     word_timestamps = bool(config.get("asr_word_timestamps", True))
@@ -144,16 +164,21 @@ def run_mlx_whisper(
         elapsed = time.monotonic() - started
 
         json_payload = _normalize_mlx_result(result)
-        write_json(output_json_dir / f"{interview_id}.json", json_payload)
-
-        _write_srt(output_srt_dir / f"{interview_id}.srt", json_payload["segments"])
-        _write_vtt(output_vtt_dir / f"{interview_id}.vtt", json_payload["segments"])
-        _write_txt(output_txt_dir / f"{interview_id}.txt", json_payload["segments"])
+        # Output layout matches whisperx CLI (--output_format all): JSON, SRT,
+        # VTT, TXT and TSV all written directly into output_dir, so
+        # render.find_whisperx_json(paths, id) finds the baseline file and
+        # asr_variant routing works identically.
+        write_json(output_dir / f"{interview_id}.json", json_payload)
+        _write_srt(output_dir / f"{interview_id}.srt", json_payload["segments"])
+        _write_vtt(output_dir / f"{interview_id}.vtt", json_payload["segments"])
+        _write_txt(output_dir / f"{interview_id}.txt", json_payload["segments"])
+        _write_tsv(output_dir / f"{interview_id}.tsv", json_payload["segments"])
 
         _emit(progress_callback, interview_id,
               {"event": "asr_done", "progress": 100,
                "message": f"MLX Whisper concluido em {elapsed:.1f}s"})
-        _log_job(paths, interview_id, mlx_repo, config, "ok", elapsed_s=elapsed)
+        _log_job(paths, interview_id, mlx_repo, config, "ok",
+                 output_dir=str(output_dir), elapsed_s=elapsed)
 
     return failures
 
@@ -226,6 +251,20 @@ def _write_txt(path: Path, segments: list[dict[str, Any]]) -> None:
     path.write_text(text + "\n", encoding="utf-8")
 
 
+def _write_tsv(path: Path, segments: list[dict[str, Any]]) -> None:
+    """Tab-separated format produced by whisperx CLI: start\\tend\\ttext (ms)."""
+    lines = ["start\tend\ttext"]
+    for seg in segments:
+        try:
+            start_ms = int(round(float(seg.get("start", 0) or 0) * 1000))
+            end_ms = int(round(float(seg.get("end", 0) or 0) * 1000))
+        except (TypeError, ValueError):
+            continue
+        text = str(seg.get("text", "")).strip().replace("\t", " ").replace("\n", " ")
+        lines.append(f"{start_ms}\t{end_ms}\t{text}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def _srt_ts(seconds: float) -> str:
     # SRT requires HH:MM:SS,mmm (comma decimal).
     stamp = format_timestamp(float(seconds), millis=True)
@@ -253,9 +292,12 @@ def _log_job(
     config: dict,
     status: str,
     *,
+    output_dir: str | None = None,
     elapsed_s: float | None = None,
     error: str | None = None,
 ) -> None:
+    # Schema mirrors whisperx_runner.jobs.jsonl entries (same consumers)
+    # plus backend="mlx-whisper" to differentiate the producer.
     entry: dict[str, Any] = {
         "interview_id": interview_id,
         "stage": "transcribe",
@@ -265,8 +307,12 @@ def _log_job(
         "resolved_model": model,
         "backend": "mlx-whisper",
         "language": config.get("asr_language", ""),
+        "compute_type": config.get("asr_compute_type", ""),
+        "batch_size": config.get("asr_batch_size", ""),
         "variant": config.get("asr_variant") or "",
     }
+    if output_dir is not None:
+        entry["output_dir"] = output_dir
     if elapsed_s is not None:
         entry["elapsed_s"] = round(elapsed_s, 2)
     if error is not None:

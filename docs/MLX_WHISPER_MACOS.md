@@ -111,6 +111,21 @@ Seguem os limites:
 - PyInstaller em `macos-14` realmente produzindo um `.app` com mlx-whisper
   embarcado (possível de validar só com `git push` + observar CI).
 
+**Limitações conhecidas da integração:**
+- **Cancelamento durante transcrição**: `mlx_whisper.transcribe()` é uma
+  chamada síncrona de Python sem suporte a interrupção cooperativa. O botão
+  "Cancelar" só tem efeito **entre arquivos** num lote — uma vez iniciada a
+  transcrição de um áudio, ela vai até o fim (tipicamente 1-5 min por hora
+  de áudio em MLX). O runner emite `asr_progress` no início e `asr_done` no
+  fim, mas não durante.
+- **Sem smoke test macOS no CI**: o workflow `.github/workflows/release.yml`
+  tem `smoke-linux-appimage` mas não o equivalente `smoke-macos-dmg`. A
+  primeira validação real do bundle macOS com mlx-whisper vai acontecer
+  só com um usuário abrindo o `.dmg` — manter expectativas ajustadas.
+- **Hook PyInstaller**: o spec usa `collect_submodules("mlx_whisper")` +
+  `collect_submodules("mlx")` inline (try/except). Se a estrutura interna
+  do MLX mudar, hoje não temos um `packaging/hooks/hook-mlx.py` dedicado.
+
 A recomendação é fazer um teste guiado com 1-2 colegas com Mac antes de
 anunciar o suporte MLX em público.
 

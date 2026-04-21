@@ -7,6 +7,7 @@ fail, the mlx_whisper_runner needs a surgical patch.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import types
@@ -60,8 +61,8 @@ def test_srt_timestamp_has_milliseconds_and_comma() -> None:
     rows, cfg, paths = _make_rows_and_paths("FMT01")
     mlx_whisper_runner.run_mlx_whisper(rows, cfg, paths)
 
-    srt = (paths.asr_dir / "srt" / "FMT01.srt").read_text(encoding="utf-8")
-    vtt = (paths.asr_dir / "vtt" / "FMT01.vtt").read_text(encoding="utf-8")
+    srt = (paths.asr_dir / "FMT01.srt").read_text(encoding="utf-8")
+    vtt = (paths.asr_dir / "FMT01.vtt").read_text(encoding="utf-8")
 
     # SRT: must contain e.g. "00:01:05,500 --> 00:01:07,123"
     assert "00:01:05,500 --> 00:01:07,123" in srt, f"SRT bad: {srt[:200]!r}"
@@ -82,7 +83,7 @@ def test_normalize_handles_missing_segments_key() -> None:
     rows, cfg, paths = _make_rows_and_paths("NORM01")
     failures = mlx_whisper_runner.run_mlx_whisper(rows, cfg, paths)
     assert failures == 0, "empty result dict should not be a failure"
-    data = json.loads((paths.asr_dir / "json" / "NORM01.json").read_text(encoding="utf-8"))
+    data = json.loads((paths.asr_dir / "NORM01.json").read_text(encoding="utf-8"))
     assert data["segments"] == [], data
     print("PASS: normalize survives missing 'segments' key")
     _drop_fake_mlx()
@@ -102,7 +103,7 @@ def test_normalize_filters_non_dict_segments() -> None:
 
     rows, cfg, paths = _make_rows_and_paths("NORM02")
     mlx_whisper_runner.run_mlx_whisper(rows, cfg, paths)
-    data = json.loads((paths.asr_dir / "json" / "NORM02.json").read_text(encoding="utf-8"))
+    data = json.loads((paths.asr_dir / "NORM02.json").read_text(encoding="utf-8"))
     assert len(data["segments"]) == 1, data
     print("PASS: normalize filters non-dict segments")
     _drop_fake_mlx()
@@ -129,7 +130,7 @@ def test_normalize_handles_missing_word_probability() -> None:
 
     rows, cfg, paths = _make_rows_and_paths("NORM03")
     mlx_whisper_runner.run_mlx_whisper(rows, cfg, paths)
-    data = json.loads((paths.asr_dir / "json" / "NORM03.json").read_text(encoding="utf-8"))
+    data = json.loads((paths.asr_dir / "NORM03.json").read_text(encoding="utf-8"))
     words = data["segments"][0]["words"]
     # Expected: a, b, d (3 valid)
     assert [w["word"] for w in words] == ["a", "b", "d"], words
@@ -173,7 +174,7 @@ def test_transcribe_exception_caught_and_logged() -> None:
     assert failures == 1, f"one failure expected, got {failures}"
     assert calls["n"] == 2, "runner should have called both rows"
     # Good row still produced JSON
-    assert (paths.asr_dir / "json" / "GOOD02.json").exists(), "good row should have output"
+    assert (paths.asr_dir / "GOOD02.json").exists(), "good row should have output"
     # jobs.jsonl should have an error entry
     log = (paths.manifest_dir / "jobs.jsonl").read_text(encoding="utf-8")
     entries = [json.loads(L) for L in log.splitlines() if L.strip()]
@@ -268,6 +269,179 @@ def test_resolve_mlx_model_with_empty_and_none() -> None:
     print("PASS: resolve_mlx_model handles empty/None/whitespace/unknown")
 
 
+# ============================================================
+# Round 3 (found by 3-agent audit): parity with whisperx_runner
+# ============================================================
+def test_asr_variant_routes_to_variants_dir() -> None:
+    """asr_variant=foo -> output goes to asr_variants_dir/foo/, not baseline."""
+    _drop_fake_mlx()
+    _install_fake_mlx(lambda *a, **k: {
+        "segments": [{"start": 0, "end": 1, "text": "variante"}],
+    })
+    from transcribe_pipeline import mlx_whisper_runner
+
+    rows, cfg, paths = _make_rows_and_paths("VAR01")
+    cfg["asr_variant"] = "mlx_test_ab"
+    mlx_whisper_runner.run_mlx_whisper(rows, cfg, paths)
+
+    # Output must be in the variants dir, NOT in paths.asr_dir
+    variant_file = paths.asr_variants_dir / "mlx_test_ab" / "VAR01.json"
+    assert variant_file.exists(), f"variant JSON missing: {variant_file}"
+    # Baseline must be untouched
+    baseline_file = paths.asr_dir / "VAR01.json"
+    baseline_json_file = paths.asr_dir / "json" / "VAR01.json"
+    assert not baseline_file.exists() and not baseline_json_file.exists(), \
+        "variant should NOT contaminate baseline asr_dir"
+    print(f"PASS: asr_variant routes to {variant_file.relative_to(paths.project_root)}")
+    _drop_fake_mlx()
+
+
+def test_output_layout_matches_whisperx() -> None:
+    """JSON, SRT, VTT, TXT, TSV all written directly in output_dir (no subdir),
+    matching `whisperx --output_format all`."""
+    _drop_fake_mlx()
+    _install_fake_mlx(lambda *a, **k: {
+        "language": "pt",
+        "segments": [{"start": 0.5, "end": 2.0, "text": "ola", "words": []}],
+    })
+    from transcribe_pipeline import mlx_whisper_runner
+
+    rows, cfg, paths = _make_rows_and_paths("LAY01")
+    mlx_whisper_runner.run_mlx_whisper(rows, cfg, paths)
+
+    expected = [
+        paths.asr_dir / "LAY01.json",
+        paths.asr_dir / "LAY01.srt",
+        paths.asr_dir / "LAY01.vtt",
+        paths.asr_dir / "LAY01.txt",
+        paths.asr_dir / "LAY01.tsv",
+    ]
+    for p in expected:
+        assert p.exists(), f"missing output file: {p}"
+    # TSV header check
+    tsv = expected[-1].read_text(encoding="utf-8")
+    assert tsv.startswith("start\tend\ttext\n"), f"TSV header bad: {tsv[:60]!r}"
+    assert "500\t2000\tola" in tsv, tsv
+    print(f"PASS: output layout matches whisperx ({len(expected)} file types)")
+    _drop_fake_mlx()
+
+
+def test_hf_env_hygiene_applied() -> None:
+    """apply_secure_hf_environment is called before transcribe, matching
+    whisperx_runner. Verify side-effect: HF_HUB_OFFLINE gets set when
+    asr_model_cache_only=True."""
+    _drop_fake_mlx()
+    _install_fake_mlx(lambda *a, **k: {"segments": []})
+    from transcribe_pipeline import mlx_whisper_runner
+
+    os.environ.pop("HF_HUB_OFFLINE", None)
+    rows, cfg, paths = _make_rows_and_paths("HF01")
+    cfg["asr_model_cache_only"] = True
+    mlx_whisper_runner.run_mlx_whisper(rows, cfg, paths)
+
+    assert os.environ.get("HF_HUB_OFFLINE") == "1", \
+        f"HF_HUB_OFFLINE not set after secure env application: {os.environ.get('HF_HUB_OFFLINE')!r}"
+    os.environ.pop("HF_HUB_OFFLINE", None)
+    print("PASS: apply_secure_hf_environment executed (HF_HUB_OFFLINE=1)")
+    _drop_fake_mlx()
+
+
+def test_diarize_validate_called_when_diarize_true() -> None:
+    """When config.diarize=True, validate_local_diarization_model runs at top
+    of the function (fail-fast). Test by mocking it and checking it was called."""
+    _drop_fake_mlx()
+    _install_fake_mlx(lambda *a, **k: {"segments": []})
+    import transcribe_pipeline.mlx_whisper_runner as runner_mod
+
+    called = {"n": 0, "arg": None}
+    orig = runner_mod.validate_local_diarization_model
+
+    def spy(model_id):
+        called["n"] += 1
+        called["arg"] = model_id
+
+    runner_mod.validate_local_diarization_model = spy  # type: ignore[assignment]
+    try:
+        rows, cfg, paths = _make_rows_and_paths("DIAR01")
+        cfg["diarize"] = True
+        cfg["diarize_model"] = "pyannote/fake-model"
+        runner_mod.run_mlx_whisper(rows, cfg, paths)
+        assert called["n"] == 1, f"validate called {called['n']} times, expected 1"
+        assert called["arg"] == "pyannote/fake-model"
+        print("PASS: validate_local_diarization_model called at start when diarize=True")
+    finally:
+        runner_mod.validate_local_diarization_model = orig  # type: ignore[assignment]
+    _drop_fake_mlx()
+
+
+def test_diarize_validate_skipped_when_diarize_false() -> None:
+    _drop_fake_mlx()
+    _install_fake_mlx(lambda *a, **k: {"segments": []})
+    import transcribe_pipeline.mlx_whisper_runner as runner_mod
+
+    called = {"n": 0}
+
+    def spy(model_id):  # noqa: ARG001
+        called["n"] += 1
+
+    orig = runner_mod.validate_local_diarization_model
+    runner_mod.validate_local_diarization_model = spy  # type: ignore[assignment]
+    try:
+        rows, cfg, paths = _make_rows_and_paths("DIAR02")
+        cfg["diarize"] = False
+        runner_mod.run_mlx_whisper(rows, cfg, paths)
+        assert called["n"] == 0, f"validate should NOT run when diarize=False, got {called['n']}"
+        print("PASS: validate_local_diarization_model skipped when diarize=False")
+    finally:
+        runner_mod.validate_local_diarization_model = orig  # type: ignore[assignment]
+    _drop_fake_mlx()
+
+
+def test_pyannote_metrics_env_set_when_configured() -> None:
+    _drop_fake_mlx()
+    _install_fake_mlx(lambda *a, **k: {"segments": []})
+    from transcribe_pipeline import mlx_whisper_runner
+
+    os.environ.pop("PYANNOTE_METRICS_ENABLED", None)
+    rows, cfg, paths = _make_rows_and_paths("PM01")
+    cfg["pyannote_metrics_enabled"] = "1"
+    mlx_whisper_runner.run_mlx_whisper(rows, cfg, paths)
+    assert os.environ.get("PYANNOTE_METRICS_ENABLED") == "1", \
+        f"env not set: {os.environ.get('PYANNOTE_METRICS_ENABLED')!r}"
+    os.environ.pop("PYANNOTE_METRICS_ENABLED", None)
+    print("PASS: PYANNOTE_METRICS_ENABLED propagated to env")
+    _drop_fake_mlx()
+
+
+def test_jobs_jsonl_schema_parity() -> None:
+    """jobs.jsonl entry has all the fields whisperx_runner writes, for
+    audit trail parity."""
+    _drop_fake_mlx()
+    _install_fake_mlx(lambda *a, **k: {"segments": [{"start": 0, "end": 1, "text": "x"}]})
+    from transcribe_pipeline import mlx_whisper_runner
+
+    rows, cfg, paths = _make_rows_and_paths("SCH01")
+    cfg["asr_compute_type"] = "float16"
+    cfg["asr_batch_size"] = 4
+    mlx_whisper_runner.run_mlx_whisper(rows, cfg, paths)
+
+    log = (paths.manifest_dir / "jobs.jsonl").read_text(encoding="utf-8")
+    entries = [json.loads(L) for L in log.splitlines() if L.strip()]
+    assert entries, "jobs.jsonl empty"
+    e = entries[-1]
+    required = {
+        "interview_id", "stage", "status", "started_at", "model",
+        "backend", "language", "compute_type", "batch_size",
+        "variant", "output_dir",
+    }
+    missing = required - set(e.keys())
+    assert not missing, f"jobs.jsonl missing fields: {missing}"
+    assert e["backend"] == "mlx-whisper"
+    assert e["output_dir"].endswith("02_asr_raw"), e["output_dir"]
+    print(f"PASS: jobs.jsonl has all {len(required)} parity fields")
+    _drop_fake_mlx()
+
+
 if __name__ == "__main__":
     test_srt_timestamp_has_milliseconds_and_comma()
     test_normalize_handles_missing_segments_key()
@@ -278,4 +452,12 @@ if __name__ == "__main__":
     test_word_timestamps_flag_propagates()
     test_word_timestamps_default_is_true()
     test_resolve_mlx_model_with_empty_and_none()
+    # Round 3: 3-agent audit findings
+    test_asr_variant_routes_to_variants_dir()
+    test_output_layout_matches_whisperx()
+    test_hf_env_hygiene_applied()
+    test_diarize_validate_called_when_diarize_true()
+    test_diarize_validate_skipped_when_diarize_false()
+    test_pyannote_metrics_env_set_when_configured()
+    test_jobs_jsonl_schema_parity()
     print("\nPASS: toy_mlx_whisper_edge_cases")
