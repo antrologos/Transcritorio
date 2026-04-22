@@ -22,6 +22,12 @@ from unittest.mock import MagicMock, patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+try:
+    import requests  # noqa: F401 — patch("requests.Session") requires module importable
+except ImportError:
+    print("SKIP: requests nao instalado neste venv")
+    sys.exit(0)
+
 from transcribe_pipeline.model_manager import (  # noqa: E402
     _etag_from_headers,
     _manual_snapshot_download,
