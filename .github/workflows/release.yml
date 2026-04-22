@@ -749,11 +749,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Transcritorio-windows-installer
-          # DiskSpanning=yes em .iss produz Setup.exe (launcher) + Setup-N.bin
-          # (dados). Ambos sao necessarios na mesma pasta pra install funcionar.
-          path: |
-            installer-out/*.exe
-            installer-out/*.bin
+          # Monolithic Setup.exe (DiskSpanning disabled in .iss). Single file
+          # download; users double-click and install runs.
+          path: installer-out/*.exe
           retention-days: 30
 
       - name: Upload CUDA pack
@@ -797,7 +795,6 @@ jobs:
             artifacts/**/*.AppImage
             artifacts/**/*.dmg
             artifacts/**/*-Setup.exe
-            artifacts/**/*-Setup-*.bin
             artifacts/**/*-cuda-pack-*.zip
           draft: false
           # generate_release_notes: cria notas novas na primeira vez; em update

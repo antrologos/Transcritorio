@@ -1,5 +1,5 @@
 ; Inno Setup script for Transcritorio
-; Requires Inno Setup 6.2+ (DiskSpanning support)
+; Requires Inno Setup 6.2+
 ;
 ; Build with:
 ;   ISCC.exe /DBundleDir=C:\path\to\dist\Transcritorio packaging\transcritorio.iss
@@ -33,8 +33,10 @@ DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 AllowNoIcons=yes
 ChangesAssociations=yes
-; Large bundle: enable disk spanning and best compression
-DiskSpanning=yes
+; Single monolithic .exe (no DiskSpanning). Bundle ~600 MB fits comfortably
+; under GitHub Release's 2 GB asset limit and avoids the two-files-in-same-folder
+; gotcha for end users. If the bundle ever grows past ~1.8 GB, reenable
+; DiskSpanning=yes and bump the site OsSwitcher to trigger both downloads.
 Compression=lzma2/ultra64
 SolidCompression=yes
 ; Output — override with ISCC /O flag or build.ps1 sets it automatically.
