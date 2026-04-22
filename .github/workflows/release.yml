@@ -338,46 +338,53 @@ jobs:
           ls -la dist/
 
       - name: Remover sub-apps Qt (dev tools) antes do codesign
-        # PyInstaller hook-PySide6 copia dev tools do Qt (Assistant, Designer,
-        # Linguist, qml tools, compiladores uic/rcc/lrelease/lupdate) que:
-        #   1) nao sao usados em runtime pelo Transcritorio (nosso codigo
-        #      importa so QtCore/QtGui/QtMultimedia/QtWidgets);
-        #   2) contem symlinks internos que fazem codesign --deep falhar com:
-        #      "the main executable or Info.plist must be a regular file
-        #       (no symlinks, etc.)" (Issue #8927 PyInstaller);
-        #   3) inflam o bundle em ~100-300 MB.
-        # Solucao canonica em 2025-2026 (consenso de ~3 rounds de pesquisa
-        # + Electrum/Spyder/pyinstaller wiki): remover pos-build.
+        # PyInstaller 6.5+ MOVE (nao duplica) os binarios Qt para
+        # Contents/Resources/PySide6/; deixa apenas symlinks em
+        # Contents/Frameworks/PySide6/. Nosso cleanup antigo so limpava
+        # Frameworks, entao deletava os symlinks mas mantinha os binarios
+        # reais em Resources — resultado: bundle de 1.4GB inflado + codesign
+        # assina arquivos em Resources com CodeDirectory referenciando
+        # Frameworks (que apagamos) => AMFI rejeita launch silenciosamente.
+        #
+        # Fix canonical (consenso de 9 rodadas / 27 agentes de pesquisa):
+        # limpar AMBOS Frameworks E Resources antes do codesign.
+        #
+        # Nosso codigo importa so QtCore/QtGui/QtMultimedia/QtWidgets —
+        # todos os dev tools (Assistant, Designer, Linguist, qml*, rcc,
+        # uic, lrelease, lupdate) sao removiveis sem breakage.
         run: |
-          APP_FWK="dist/Transcritorio.app/Contents/Frameworks/PySide6"
-          if [ ! -d "$APP_FWK" ]; then
-            echo "[aviso] PySide6/ nao existe em Frameworks — skip"
-            exit 0
-          fi
+          APP="dist/Transcritorio.app"
           echo "=== Tamanho antes ==="
-          du -sh "$APP_FWK"
+          du -sh "$APP"
           echo ""
-          echo "=== Sub-apps Qt encontrados ==="
-          find "$APP_FWK" -maxdepth 2 -type d \( -name '*__dot__app' -o -name '*.app' \) 2>/dev/null || true
-          echo ""
-          echo "=== Removendo ==="
-          # a) Todos os sub-apps .app e __dot__app (PyInstaller renomeia)
-          find "$APP_FWK" -maxdepth 2 -type d \( -name '*__dot__app' -o -name '*.app' \) \
-              -exec rm -rf {} + 2>/dev/null || true
-          # b) Binarios de ferramentas Qt que nao usamos
-          for tool in Assistant Designer Linguist lrelease lupdate rcc uic \
-                      qmlls qmllint qmlformat qmltestrunner qmlimportscanner \
-                      qmltyperegistrar qml qmlcachegen qmlpreview qmlprofiler \
-                      qmlscene qmltime qmlplugindump; do
-            find "$APP_FWK" -maxdepth 3 -name "$tool" -type f -delete 2>/dev/null || true
-            find "$APP_FWK" -maxdepth 3 -name "$tool.debug" -type f -delete 2>/dev/null || true
+          for base in "$APP/Contents/Frameworks/PySide6" "$APP/Contents/Resources/PySide6"; do
+            [ -d "$base" ] || continue
+            echo "--- Limpando $base ---"
+            echo "Sub-apps encontrados:"
+            find "$base" -maxdepth 2 -type d \( -name '*.app' -o -name '*__dot__app' \) 2>/dev/null || true
+            # a) Sub-apps .app e __dot__app (PyInstaller renomeia nested .app)
+            find "$base" -maxdepth 2 -type d \( -name '*.app' -o -name '*__dot__app' \) \
+                -exec rm -rf {} + 2>/dev/null || true
+            # b) Ferramentas Qt nao usadas em runtime
+            for tool in Assistant Designer Linguist \
+                        lrelease lupdate rcc uic \
+                        qmlls qmllint qmlformat qmltestrunner qmlimportscanner \
+                        qmltyperegistrar qmlcachegen qmlpreview qmlprofiler \
+                        qmlscene qmltime qmlplugindump qml; do
+              find "$base" -maxdepth 3 -name "$tool" -type f -delete 2>/dev/null || true
+              find "$base" -maxdepth 3 -name "$tool.debug" -type f -delete 2>/dev/null || true
+            done
+            # c) Symlinks orfaos (os que apontavam pros binarios/apps
+            # que acabamos de deletar). Sem isso, codesign --deep tenta
+            # seguir e quebra.
+            find "$base" -maxdepth 3 -type l ! -exec test -e {} \; -delete 2>/dev/null || true
+            echo ""
           done
-          echo ""
-          echo "=== Sub-apps restantes (deve ser vazio) ==="
-          find "$APP_FWK" -maxdepth 2 -type d \( -name '*__dot__app' -o -name '*.app' \) 2>/dev/null || echo "(nenhum)"
+          echo "=== Sub-apps remanescentes em todo o .app (deve ser vazio) ==="
+          find "$APP/Contents" -maxdepth 4 -type d \( -name '*.app' -o -name '*__dot__app' \) 2>/dev/null || echo "(nenhum)"
           echo ""
           echo "=== Tamanho depois ==="
-          du -sh "$APP_FWK"
+          du -sh "$APP"
 
       - name: Ad-hoc codesign (macOS 15 Sequoia Gatekeeper)
         # Sem assinatura, macOS 15+ bloqueia mesmo apos "Open Anyway"
