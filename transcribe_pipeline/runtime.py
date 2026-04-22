@@ -105,6 +105,17 @@ def secure_hf_environment(
     env["HF_HUB_CACHE"] = str(cache_dir)
     env["HF_HUB_DISABLE_TELEMETRY"] = "1"
     env["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"
+    # Network timeouts: bound each HTTP request so a hung TLS handshake or
+    # stalled response stream fails fast (30s) instead of deadlocking the
+    # wizard. Set at env level so hub library picks up at import time.
+    # Confirmed hang symptom: refs/main written (40B) but .incomplete blobs
+    # stay 0B for 6+ minutes. curl on same machine downloads in <1s.
+    env.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "30")
+    env.setdefault("HF_HUB_ETAG_TIMEOUT", "10")
+    # Disable hf_transfer Rust-based downloader: seen hanging on Windows
+    # bundled builds (not available / DLL issues). Fallback to pure Python
+    # requests client which is proven on the user's actual network.
+    env["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
     env["DO_NOT_TRACK"] = "1"
     env["PYANNOTE_METRICS_ENABLED"] = "0"
     if offline:
