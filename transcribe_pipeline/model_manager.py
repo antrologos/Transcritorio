@@ -26,6 +26,47 @@ def _download_diag_log(message: str) -> None:
     except Exception:
         pass
 
+
+def _clear_stale_hf_locks(cache_dir: Path) -> int:
+    """Remove stale filelock sentinels left by crashed HF downloads.
+
+    Bug symptom (2026-04-22): huggingface_hub creates ``.locks/**/*.lock``
+    files via the ``filelock`` package to serialize concurrent downloads.
+    When a previous Transcritório process crashed or was killed mid-download
+    (or the user force-quit during the 0% freeze), the lock file stayed on
+    disk but the owning PID was gone. On the next launch,
+    ``snapshot_download`` **deadlocks** waiting to acquire the stale lock —
+    the log shows the cache growing to exactly the size of the lockfile
+    (e.g. 40 bytes) and then staying there for minutes.
+
+    This helper removes every ``.lock`` file we can unlink. On Windows, a
+    file actively held by another process refuses to be deleted
+    (``PermissionError``); we silently skip those, so running instances
+    aren't affected. Stale locks get cleaned and the next download
+    proceeds. Safe on a single-user desktop app.
+    """
+    locks_dir = cache_dir / ".locks"
+    if not locks_dir.exists():
+        return 0
+    removed = 0
+    skipped = 0
+    try:
+        for lock_file in locks_dir.rglob("*.lock"):
+            try:
+                lock_file.unlink()
+                removed += 1
+            except (OSError, PermissionError):
+                skipped += 1
+                continue
+    except OSError as exc:
+        _download_diag_log(f"[locks] rglob error in {locks_dir}: {exc}")
+    if removed or skipped:
+        _download_diag_log(
+            f"[locks] cleaned {removed} stale lock(s), skipped {skipped} "
+            f"in-use in {locks_dir}"
+        )
+    return removed
+
 MINIMUM_DISK_GB = 10  # Minimum free disk space required for model downloads
 
 
@@ -659,6 +700,14 @@ def download_required_models(
     cache_dir = runtime.model_cache_dir()
     cache_dir.mkdir(parents=True, exist_ok=True)
     runtime.apply_secure_hf_environment(offline=False, token=token, token_env=token_env)
+    # Bound HF hub network timeouts so a hung request fails fast instead of
+    # deadlocking the whole wizard. 30s per-request is generous for a
+    # healthy connection; a chunk that takes longer indicates a real stall.
+    os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "30")
+    os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "10")
+    # Remove stale filelock sentinels from previous crashed downloads so
+    # snapshot_download doesn't deadlock. See _clear_stale_hf_locks.
+    _clear_stale_hf_locks(cache_dir)
     token_value = token if token is not None else os.environ.get(token_env)
     try:
         from huggingface_hub import snapshot_download
