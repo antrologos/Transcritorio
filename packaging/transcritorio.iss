@@ -4,12 +4,12 @@
 ; Build with:
 ;   ISCC.exe /DBundleDir=C:\path\to\dist\Transcritorio packaging\transcritorio.iss
 ;
-; CUDA opcional (0.1.1+):
-;   - Bundle base e sempre instalado (variant=cpu, ~1.5 GB)
-;   - Componente "cuda" baixa transcritorio-cuda-pack-{version}-win64.zip
-;     do GitHub Release v{version} via curl.exe + extrai via PowerShell
-;     Expand-Archive. Default: checked se nvidia-smi detecta NVIDIA;
-;     unchecked caso contrario.
+; Aceleracao NVIDIA (opcional):
+;   - Bundle base e sempre instalado (variant=cpu, ~1.5 GB).
+;   - Aceleracao CUDA e oferecida DENTRO do app no primeiro launch com
+;     barra de progresso nativa, via transcribe_pipeline/cuda_installer.py.
+;   - Uninstall pergunta se deve apagar tambem os ~13 GB de modelos em
+;     %LOCALAPPDATA%\Transcritorio (default Nao, pra preservar upgrades).
 
 #ifndef BundleDir
   #define BundleDir "..\dist\Transcritorio"
@@ -20,8 +20,6 @@
 #define AppPublisher "Rogerio Jeronimo Barbosa"
 #define AppURL       "https://github.com/antrologos/Transcritorio"
 #define AppExeName   "Transcritorio.exe"
-#define CudaPackFile "transcritorio-cuda-pack-" + AppVersion + "-win64.zip"
-#define CudaPackUrl  "https://github.com/antrologos/Transcritorio/releases/download/v" + AppVersion + "/" + CudaPackFile
 
 [Setup]
 AppId={{A1B2C3D4-E5F6-7890-ABCD-TRANSCRITORIO}
@@ -61,22 +59,13 @@ WizardStyle=modern
 Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
-[Types]
-Name: "full"; Description: "Completa (com aceleracao se o computador tem placa NVIDIA)"
-Name: "compact"; Description: "Basica (so CPU, menor, sem download extra)"
-Name: "custom"; Description: "Personalizada"; Flags: iscustom
-
-[Components]
-Name: "core"; Description: "Transcritorio (obrigatorio, ~1.5 GB)"; Types: full compact custom; Flags: fixed
-Name: "cuda"; Description: "Aceleracao para placas graficas NVIDIA (baixa ~1 GB no final da instalacao)"; Types: full
-
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 Name: "addtopath"; Description: "Adicionar CLI ao PATH do usuario"; GroupDescription: "Opcoes avancadas:"; Flags: unchecked
 
 [Files]
-; Bundle PyInstaller (ja sem CUDA apos split_bundle.py)
-Source: "{#BundleDir}\*"; DestDir: "{app}"; Components: core; Flags: ignoreversion recursesubdirs createallsubdirs
+; Bundle PyInstaller (CPU-only; aceleracao NVIDIA vem pelo app no 1o launch)
+Source: "{#BundleDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"
@@ -84,15 +73,8 @@ Name: "{group}\{cm:UninstallProgram,{#AppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
 
 [Run]
-; Baixar e extrair cuda_pack se o componente cuda foi selecionado.
-; curl.exe vem com Windows 10 1803+; PowerShell 5.1+ ships com Expand-Archive.
-Filename: "{cmd}"; Parameters: "/c curl.exe -L --fail -o ""{tmp}\{#CudaPackFile}"" ""{#CudaPackUrl}"""; \
-    StatusMsg: "Baixando aceleracao NVIDIA (~1 GB)..."; \
-    Components: cuda; Flags: runhidden
-Filename: "{cmd}"; Parameters: "/c powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ""Expand-Archive -Path '{tmp}\{#CudaPackFile}' -DestinationPath '{app}' -Force"""; \
-    StatusMsg: "Instalando aceleracao NVIDIA..."; \
-    Components: cuda; Flags: runhidden
-; Launch apos a instalacao (ultimo)
+; Launch apos a instalacao. Aceleracao NVIDIA e instalada DENTRO do app
+; no 1o start (via transcribe_pipeline/cuda_installer.py), nao aqui.
 Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 
 [Registry]
@@ -125,28 +107,29 @@ begin
     Result := Pos(';' + UpperCase(Param) + ';', ';' + UpperCase(OrigPath) + ';') = 0;
 end;
 
-function HasNvidiaGpu(): Boolean;
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
-    ResultCode: Integer;
+    AppData: string;
+    Response: Integer;
 begin
-    // nvidia-smi.exe vem com o driver NVIDIA. Retorna 0 se ha placa NVIDIA.
-    // Redireciona stdout/stderr pra NUL via cmd /c pra nao mostrar janela.
-    Result := Exec(ExpandConstant('{cmd}'), '/c nvidia-smi >NUL 2>&1', '',
-                   SW_HIDE, ewWaitUntilTerminated, ResultCode)
-              and (ResultCode = 0);
-end;
-
-procedure InitializeWizard();
-var
-    CudaIndex: Integer;
-begin
-    // Ajusta default do componente 'cuda' conforme presenca de NVIDIA.
-    // Se nao ha NVIDIA: desmarca (user pode marcar manualmente se quiser)
-    // Se ha NVIDIA: deixa marcado (comportamento 'full' type)
-    CudaIndex := WizardForm.ComponentsList.Items.IndexOf('Aceleracao para placas graficas NVIDIA (baixa ~1 GB no final da instalacao)');
-    if CudaIndex >= 0 then
+    // Apos desinstalar os arquivos do {app}, pergunta se tambem deve apagar
+    // os modelos de IA e cache em %LOCALAPPDATA%\Transcritorio (~13 GB).
+    // Default e NAO, pra preservar modelos em upgrades.
+    if CurUninstallStep = usPostUninstall then
     begin
-        WizardForm.ComponentsList.Checked[CudaIndex] := HasNvidiaGpu();
+        AppData := ExpandConstant('{localappdata}\Transcritorio');
+        if DirExists(AppData) then
+        begin
+            Response := MsgBox(
+                'Remover tambem os modelos de IA e o cache do Transcritorio em:' + #13#10 +
+                AppData + #13#10 + #13#10 +
+                'Sao ~13 GB de arquivos baixados (Whisper, pyannote, wav2vec2).' + #13#10 + #13#10 +
+                'Escolha SIM se esta desinstalando em definitivo.' + #13#10 +
+                'Escolha NAO se for reinstalar e quiser reaproveitar os modelos.',
+                mbConfirmation, MB_YESNO or MB_DEFBUTTON2);
+            if Response = IDYES then
+                DelTree(AppData, True, True, True);
+        end;
     end;
 end;
 

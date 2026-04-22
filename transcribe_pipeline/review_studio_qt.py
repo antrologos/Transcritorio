@@ -2887,34 +2887,26 @@ if QT_IMPORT_ERROR is None:
             # Todas as condicoes atendidas: oferece install
             msg = (
                 "Detectamos uma placa grafica NVIDIA no seu computador.\n\n"
-                "O Transcritorio foi instalado sem a aceleracao por placa "
+                "O Transcritorio esta instalado sem a aceleracao por placa "
                 "grafica. Ativando a aceleracao, a transcricao fica de 3 a 9 "
                 "vezes mais rapida, mas exige um download adicional de cerca "
                 "de 1 GB.\n\n"
-                "Para ativar agora:\n"
-                "1. Baixe o pacote de aceleracao no link abaixo\n"
-                "2. Extraia o zip sobre a pasta onde o Transcritorio esta "
-                "instalado (normalmente em C:\\Program Files\\Transcritorio)\n"
-                "3. Reinicie o Transcritorio\n\n"
-                "Ou reinstale o Transcritorio marcando 'Aceleracao para placas "
-                "graficas NVIDIA' no instalador."
+                "Clique em 'Baixar e instalar agora' para ativar; o "
+                "Transcritorio cuida do resto e avisa quando concluir."
             )
             box = QMessageBox(self)
             box.setWindowTitle("Aceleracao disponivel (NVIDIA detectada)")
             box.setIcon(QMessageBox.Icon.Information)
             box.setText(msg)
             box.setTextFormat(Qt.TextFormat.PlainText)
-            btn_download = box.addButton("Abrir pagina de download", QMessageBox.ButtonRole.AcceptRole)
+            btn_install = box.addButton("Baixar e instalar agora", QMessageBox.ButtonRole.AcceptRole)
             box.addButton("Agora nao", QMessageBox.ButtonRole.RejectRole)
             btn_never = box.addButton("Nunca perguntar", QMessageBox.ButtonRole.DestructiveRole)
             box.exec()
             clicked = box.clickedButton()
-            if clicked is btn_download:
+            if clicked is btn_install:
                 from . import __version__
-                url = QUrl(f"https://github.com/antrologos/Transcritorio/releases/download/v{__version__}/transcritorio-cuda-pack-{__version__}-win64.zip")
-                QDesktopServices.openUrl(url)
-                # Nao seta flag — deixa aparecer de novo caso usuario
-                # nao complete o download.
+                self._perform_cuda_install(__version__)
             elif clicked is btn_never:
                 try:
                     flag.parent.mkdir(parents=True, exist_ok=True)
@@ -2922,6 +2914,60 @@ if QT_IMPORT_ERROR is None:
                 except Exception as exc:
                     _logger.warning("nao foi possivel persistir flag CUDA dismiss: %s", exc)
             # Caso "Agora nao": nao seta flag; pergunta de novo no proximo start
+
+        def _perform_cuda_install(self, version: str) -> None:
+            from . import cuda_installer
+            if not cuda_installer.install_dir_writable():
+                QMessageBox.warning(
+                    self,
+                    "Permissao insuficiente",
+                    "A pasta de instalacao do Transcritorio nao permite escrita "
+                    "sem privilegios de administrador.\n\n"
+                    "Feche o Transcritorio, clique com o botao direito no "
+                    "atalho, escolha 'Executar como administrador' e tente "
+                    "de novo; OU reinstale o Transcritorio escolhendo "
+                    "'Instalar so pra mim (recomendado)'."
+                )
+                return
+            dlg = QProgressDialog("Conectando ao GitHub...", "Cancelar", 0, 100, self)
+            dlg.setWindowTitle("Instalando aceleracao NVIDIA")
+            dlg.setWindowModality(Qt.WindowModality.WindowModal)
+            dlg.setAutoClose(False)
+            dlg.setAutoReset(False)
+            dlg.setMinimumDuration(0)
+            dlg.setValue(0)
+            dlg.show()
+            QApplication.processEvents()
+            cancelled = {"flag": False}
+            dlg.canceled.connect(lambda: cancelled.__setitem__("flag", True))
+
+            def _progress(message: str, pct: int) -> None:
+                dlg.setLabelText(message)
+                dlg.setValue(pct)
+                QApplication.processEvents()
+
+            try:
+                cuda_installer.download_and_extract(
+                    version=version,
+                    progress_callback=_progress,
+                    should_cancel=lambda: cancelled["flag"],
+                )
+                dlg.close()
+                QMessageBox.information(
+                    self,
+                    "Aceleracao instalada",
+                    "Pronto! Reinicie o Transcritorio para ativar a aceleracao NVIDIA.",
+                )
+            except Exception as exc:
+                dlg.close()
+                if not cancelled["flag"]:
+                    QMessageBox.critical(
+                        self,
+                        "Falha ao instalar aceleracao",
+                        f"Nao foi possivel instalar a aceleracao NVIDIA:\n\n{exc}\n\n"
+                        "Voce pode tentar de novo mais tarde (a pergunta vai "
+                        "aparecer de novo no proximo inicio do Transcritorio).",
+                    )
 
         def show_startup_dialog(self) -> None:
             # Tela A: Setup wizard when AI components are missing
