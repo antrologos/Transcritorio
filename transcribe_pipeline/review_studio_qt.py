@@ -2114,6 +2114,7 @@ if QT_IMPORT_ERROR is None:
             layout.addSpacing(12)
             layout.addWidget(QLabel("Cole sua chave aqui:"))
             self.token_edit = QLineEdit()
+            self.token_edit.setEchoMode(QLineEdit.EchoMode.Password)
             self.token_edit.setPlaceholderText("Cole aqui a chave (começa com hf_...)")
             # Pre-fill from secure vault if available
             from . import token_vault
@@ -2201,9 +2202,11 @@ if QT_IMPORT_ERROR is None:
             self.progress_label.setWordWrap(True)
             layout.addWidget(self.progress_label)
             self.progress_bar = QProgressBar()
-            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setRange(0, 0)
             layout.addWidget(self.progress_bar)
             layout.addStretch()
+            from .progress_bar_fallback import ProgressBarController
+            self._bar_ctrl = ProgressBarController()
 
         def initializePage(self) -> None:
             if self._download_started:
@@ -2219,8 +2222,8 @@ if QT_IMPORT_ERROR is None:
             token_page = self._wizard.page(FirstRunWizard.PAGE_TOKEN)
             token = token_page.token() if hasattr(token_page, "token") else ""
             asr_variants = getattr(self._wizard, "selected_asr_variants", None)
-            self.progress_label.setText("Iniciando download...")
-            self.progress_bar.setValue(0)
+            self.progress_label.setText("Conectando ao HuggingFace...")
+            self._bar_ctrl.start(self.progress_bar)
             self._worker = _SetupDownloadThread(token, asr_variants=asr_variants)
             self._worker.progress.connect(self._on_progress)
             self._worker.finished_ok.connect(self._on_done)
@@ -2232,17 +2235,20 @@ if QT_IMPORT_ERROR is None:
 
         def _on_progress(self, message: str, percent: int) -> None:
             self.progress_label.setText(message)
-            self.progress_bar.setValue(max(0, min(100, percent)))
+            self._bar_ctrl.update(self.progress_bar, percent, message)
 
         def _on_done(self) -> None:
             self._download_done = True
             self._wizard.download_completed = True
+            self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(100)
             self.progress_label.setText("Componentes baixados e verificados com sucesso!")
             self.progress_label.setStyleSheet(_style_ok())
             self.completeChanged.emit()
 
         def _on_failed(self, message: str) -> None:
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(0)
             self.progress_label.setText(f"Erro: {message}\n\nVerifique sua conexão e tente novamente.")
             self.progress_label.setStyleSheet(_style_err())
             self._download_started = False  # allow retry via Back + Next
@@ -2392,7 +2398,10 @@ if QT_IMPORT_ERROR is None:
             layout.addWidget(self.token_edit)
 
             self.remember_checkbox = QCheckBox("Lembrar neste computador usando cofre seguro")
-            self.remember_checkbox.setChecked(bool(saved))
+            # Opt-out by default: the expected behavior for 95% of users is
+            # to paste the token once and never see this dialog again. Users
+            # who share a machine can explicitly uncheck.
+            self.remember_checkbox.setChecked(True)
             self.remember_checkbox.setToolTip("Armazena o token criptografado com suas credenciais do Windows (DPAPI). So voce neste computador pode acessar.")
             layout.addWidget(self.remember_checkbox)
 
@@ -2419,12 +2428,30 @@ if QT_IMPORT_ERROR is None:
                     "Cole o token de leitura do Hugging Face deste usuario para baixar o modelo de separacao de falantes.",
                 )
                 return
-            # Persist token if "remember" is checked
+            # Persist token if "remember" is checked. Backend errors (keyring
+            # unavailable, DPAPI access denied, etc.) must NEVER crash the app
+            # — log and warn, then proceed.
             from . import token_vault
-            if self.remember_checkbox.isChecked():
-                token_vault.store(self.token())
-            else:
-                token_vault.clear()
+            from . import model_manager as _mm
+            try:
+                if self.remember_checkbox.isChecked():
+                    token_vault.store(self.token())
+                else:
+                    token_vault.clear()
+            except Exception as exc:
+                _mm._download_diag_log(
+                    f"[ModelSetupDialog.accept] token_vault falhou: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                _logger.warning("token_vault falhou em accept(): %s", exc)
+                QMessageBox.warning(
+                    self,
+                    "Cofre de token indisponivel",
+                    f"Nao foi possivel salvar o token no cofre seguro.\n\n"
+                    f"{type(exc).__name__}: {exc}\n\n"
+                    "O download vai prosseguir usando o token desta sessao. "
+                    "Voce precisara colar o token de novo da proxima vez.",
+                )
             super().accept()
 
 
@@ -2484,6 +2511,9 @@ if QT_IMPORT_ERROR is None:
             self.set_editor_enabled(False)
             self._connect_player()
             self.refresh_interviews()
+            # Global drag-and-drop: users can drop audio/video files from
+            # Explorer/Finder/Nautilus anywhere on the window.
+            self.setAcceptDrops(True)
 
         def _build_actions(self) -> None:
             self.add_folder_action = QAction("Adicionar pasta...", self)
@@ -2501,7 +2531,11 @@ if QT_IMPORT_ERROR is None:
             self.open_project_action.triggered.connect(self.open_project)
 
             self.add_files_action = QAction("Adicionar arquivos...", self)
-            self.add_files_action.setToolTip("Escolher arquivos individuais de audio ou video.")
+            self.add_files_action.setShortcut(QKeySequence("Ctrl+I"))
+            self.add_files_action.setToolTip(
+                "Adicionar arquivos de áudio ou vídeo ao projeto. (Ctrl+I)\n"
+                "Também é possível arrastar arquivos do Explorer/Finder direto para a janela."
+            )
             self.add_files_action.triggered.connect(self.add_audio_files)
 
             self.save_project_action = QAction("Salvar projeto", self)
@@ -2710,14 +2744,43 @@ if QT_IMPORT_ERROR is None:
                 button.setStyleSheet("font-weight: 700;")
             return button
 
+        _MEDIA_BUTTON_PRIMARY_QSS = (
+            "QPushButton { background: #44d7b6; color: #0f1419; "
+            "font-weight: 700; font-size: 14px; padding: 9px 18px; "
+            "border-radius: 6px; border: 1px solid #44d7b6; } "
+            "QPushButton:hover { background: #5ae0c4; border-color: #5ae0c4; } "
+            "QPushButton::menu-indicator { subcontrol-position: right center; "
+            "subcontrol-origin: padding; right: 6px; }"
+        )
+        _MEDIA_BUTTON_GHOST_QSS = ""
+
         def media_button(self) -> QPushButton:
-            button = QPushButton("Adicionar mídia...")
-            button.setToolTip("Adicionar arquivos individuais ou uma pasta de mídia ao projeto.")
+            button = QPushButton("+ Adicionar mídia...")
+            button.setToolTip(
+                "Adicionar arquivos de áudio/vídeo ao projeto.\n"
+                "Também pode arrastar arquivos do Explorer/Finder para a janela."
+            )
             menu = QMenu(button)
             menu.addAction(self.add_files_action)
             menu.addAction(self.add_folder_action)
             button.setMenu(menu)
+            self._media_button_ref = button
             return button
+
+        def _update_add_media_emphasis(self, has_rows: bool) -> None:
+            """Toolbar 'Adicionar mídia' is primary (accent) when empty, ghost otherwise.
+
+            Contextual progressive disclosure: the button 'shouts' exactly when it's
+            the user's next logical step. As soon as at least one media file exists,
+            the button steps aside so 'Transcrever' can be visually primary.
+            """
+            button = getattr(self, "_media_button_ref", None)
+            if button is None:
+                return
+            button.setStyleSheet(
+                self._MEDIA_BUTTON_PRIMARY_QSS if not has_rows
+                else self._MEDIA_BUTTON_GHOST_QSS
+            )
 
         def transcribe_menu_button(self) -> QPushButton:
             button = QPushButton(self.transcribe_action.text())
@@ -2982,7 +3045,7 @@ if QT_IMPORT_ERROR is None:
                     if not app_service.required_models_ready():
                         self.progress_label.setText(
                             "⚠ Componentes de IA não instalados. "
-                            "Use Configurações > Configurar modelos."
+                            "Use o menu Transcrever > Gerenciar modelos..."
                         )
                         self.progress_label.setStyleSheet(_style_err())
                         self.refresh_interviews()
@@ -3046,11 +3109,29 @@ if QT_IMPORT_ERROR is None:
         def ensure_models_ready(self) -> bool:
             if app_service.required_models_ready():
                 return True
-            answer = QMessageBox.question(
-                self,
-                "Modelos locais pendentes",
-                "Os modelos de transcricao e separacao de falantes ainda nao foram verificados neste computador. Deseja preparar os modelos agora?",
-            )
+            from . import model_manager as _mm
+            partial = False
+            try:
+                partial = _mm.has_partial_cache()
+            except Exception:
+                partial = False
+            if partial:
+                title = "Download anterior inconcluso"
+                msg = (
+                    "Parece que um download anterior dos modelos de IA foi "
+                    "interrompido antes de completar. Alguns arquivos estão "
+                    "no cache mas não são suficientes para transcrever.\n\n"
+                    "Deseja retomar o download agora? O progresso já baixado "
+                    "será aproveitado."
+                )
+            else:
+                title = "Modelos locais pendentes"
+                msg = (
+                    "Os modelos de transcrição e separação de falantes ainda "
+                    "não foram baixados neste computador. Deseja preparar os "
+                    "modelos agora?"
+                )
+            answer = QMessageBox.question(self, title, msg)
             if answer == QMessageBox.StandardButton.Yes:
                 self.show_model_setup()
             return False
@@ -3173,11 +3254,50 @@ if QT_IMPORT_ERROR is None:
             self.interview_table.addAction(self.trash_undo_action)
             self.interview_table.addAction(self.trash_redo_action)
             layout.addWidget(self.interview_table, stretch=1)
-            self._empty_table_label = QLabel("Nenhuma entrevista.\nUse Arquivos \u203a Adicionar m\u00eddia.")
-            self._empty_table_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self._empty_table_label.setStyleSheet(f"{_style_muted()} font-size: 13px; padding: 24px;")
-            self._empty_table_label.setVisible(False)
-            layout.addWidget(self._empty_table_label)
+            # Rich empty-state drop zone shown when no media is in the project.
+            # Purpose: make the "add media" affordance obvious for non-technical
+            # users (explicit feedback from Lucas: UI should be more evident).
+            self._empty_state_widget = QWidget()
+            self._empty_state_widget.setStyleSheet(
+                "QWidget#emptyDropZone { border: 2px dashed #44d7b6; "
+                "border-radius: 10px; background: transparent; }"
+            )
+            self._empty_state_widget.setObjectName("emptyDropZone")
+            _es_layout = QVBoxLayout(self._empty_state_widget)
+            _es_layout.setContentsMargins(24, 36, 24, 36)
+            _es_layout.setSpacing(12)
+            _es_layout.addStretch(1)
+            _icon = QLabel("📁")
+            _icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            _icon.setStyleSheet("font-size: 48px;")
+            _es_layout.addWidget(_icon)
+            _title = QLabel("Arraste áudios e vídeos aqui")
+            _title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            _title.setStyleSheet("font-size: 16px; font-weight: 600;")
+            _es_layout.addWidget(_title)
+            _sub = QLabel("ou clique no botão abaixo")
+            _sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            _sub.setStyleSheet(f"{_style_muted()} font-size: 13px;")
+            _es_layout.addWidget(_sub)
+            _cta_row = QHBoxLayout()
+            _cta_row.addStretch(1)
+            self._empty_cta_btn = QPushButton("+ Adicionar mídia...")
+            self._empty_cta_btn.setStyleSheet(self._MEDIA_BUTTON_PRIMARY_QSS)
+            _cta_menu = QMenu(self._empty_cta_btn)
+            _cta_menu.addAction(self.add_files_action)
+            _cta_menu.addAction(self.add_folder_action)
+            self._empty_cta_btn.setMenu(_cta_menu)
+            _cta_row.addWidget(self._empty_cta_btn)
+            _cta_row.addStretch(1)
+            _es_layout.addLayout(_cta_row)
+            _hint = QLabel("Formatos aceitos: MP3, WAV, M4A, MP4, FLAC, OGG, OPUS, WMA")
+            _hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            _hint.setStyleSheet(f"{_style_muted()} font-size: 11px;")
+            _hint.setWordWrap(True)
+            _es_layout.addWidget(_hint)
+            _es_layout.addStretch(2)
+            self._empty_state_widget.setVisible(False)
+            layout.addWidget(self._empty_state_widget, stretch=1)
             metadata_button = self.action_button(self.apply_metadata_action)
             layout.addWidget(metadata_button)
             open_button = self.action_button(self.open_transcript_action)
@@ -3519,8 +3639,9 @@ if QT_IMPORT_ERROR is None:
                 self.interview_table.horizontalHeader().setSortIndicator(-1, Qt.SortOrder.AscendingOrder)
             has_rows = len(self.statuses) > 0
             self.interview_table.setVisible(has_rows)
-            if hasattr(self, "_empty_table_label"):
-                self._empty_table_label.setVisible(not has_rows)
+            if hasattr(self, "_empty_state_widget"):
+                self._empty_state_widget.setVisible(not has_rows)
+            self._update_add_media_emphasis(has_rows)
             self._apply_interview_filter()
             self.update_action_states()
 
@@ -3746,13 +3867,80 @@ if QT_IMPORT_ERROR is None:
             )
             if not files:
                 return
+            self._ingest_media_paths([Path(path) for path in files])
+
+        def _ingest_media_paths(self, paths: list[Path]) -> None:
+            """Add a list of media files to the current project.
+
+            Shared by the Add files dialog and the drag-and-drop handler.
+            Silently expands directories into their direct children.
+            """
+            if not paths:
+                return
+            if not self._require_project("Adicionar arquivos"):
+                return
+            allowed = {ext.lower() for ext in self.context.config.get("media_extensions", [])}
+            expanded: list[Path] = []
+            for entry in paths:
+                if entry.is_dir():
+                    for child in entry.iterdir():
+                        if child.is_file() and (not allowed or child.suffix.lower() in allowed):
+                            expanded.append(child)
+                elif entry.is_file():
+                    if not allowed or entry.suffix.lower() in allowed:
+                        expanded.append(entry)
+            if not expanded:
+                QMessageBox.information(
+                    self,
+                    "Nenhum arquivo compatível",
+                    "Os itens arrastados não contêm arquivos de áudio ou vídeo "
+                    "em formatos reconhecidos pelo Transcritório.",
+                )
+                return
             try:
-                self.context = app_service.add_audio_files(self.context, [Path(path) for path in files])
+                self.context = app_service.add_audio_files(self.context, expanded)
             except Exception as exc:
-                QMessageBox.critical(self, "Não foi possível adicionar os arquivos", sanitize_message(str(exc)))
+                QMessageBox.critical(
+                    self,
+                    "Não foi possível adicionar os arquivos",
+                    sanitize_message(str(exc)),
+                )
                 return
             self.refresh_interviews()
-            QMessageBox.information(self, "Arquivos adicionados", f"{len(files)} arquivo(s) foram adicionados ao projeto.")
+            QMessageBox.information(
+                self,
+                "Arquivos adicionados",
+                f"{len(expanded)} arquivo(s) foram adicionados ao projeto.",
+            )
+
+        def dragEnterEvent(self, event) -> None:
+            mime = event.mimeData()
+            if mime is not None and mime.hasUrls() and self.context is not None:
+                event.acceptProposedAction()
+            else:
+                event.ignore()
+
+        def dragMoveEvent(self, event) -> None:
+            mime = event.mimeData()
+            if mime is not None and mime.hasUrls() and self.context is not None:
+                event.acceptProposedAction()
+            else:
+                event.ignore()
+
+        def dropEvent(self, event) -> None:
+            mime = event.mimeData()
+            if mime is None or not mime.hasUrls():
+                event.ignore()
+                return
+            paths: list[Path] = []
+            for url in mime.urls():
+                if url.isLocalFile():
+                    paths.append(Path(url.toLocalFile()))
+            if not paths:
+                event.ignore()
+                return
+            event.acceptProposedAction()
+            self._ingest_media_paths(paths)
 
         def save_project_metadata(self) -> None:
             if not self._require_project("Salvar projeto"):
@@ -5687,6 +5875,23 @@ def main() -> int:
             project_root = pf.parent
         else:
             project_root = pf
+    # Top-level crash logger: catches every uncaught exception and writes
+    # a full traceback to %LOCALAPPDATA%\Transcritorio\download_diagnostic.log
+    # (or platform equivalent). Without this, Qt can eat Python exceptions
+    # silently — the app just disappears, no dialog, no log.
+    import traceback as _traceback
+    from . import model_manager as _mm_for_excepthook
+    def _crash_excepthook(exc_type, exc_value, exc_tb):
+        try:
+            tb_str = "".join(_traceback.format_exception(exc_type, exc_value, exc_tb))
+            _mm_for_excepthook._download_diag_log(
+                f"[uncaught] {exc_type.__name__}: {exc_value}\n{tb_str}"
+            )
+        except Exception:
+            pass
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+    sys.excepthook = _crash_excepthook
+
     app = QApplication(sys.argv)
     _apply_dark_theme(app)
     window = ReviewStudioWindow(project_root=project_root)

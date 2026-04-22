@@ -6,11 +6,25 @@ from typing import Any, Callable
 import json
 import os
 import threading
+import time
 
 import shutil
 
 from . import runtime
 from .utils import sanitize_message
+
+
+def _download_diag_log(message: str) -> None:
+    """Append a line to the download diagnostic log. Never raises."""
+    try:
+        log_dir = runtime.app_data_dir()
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "download_diagnostic.log"
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        with log_path.open("a", encoding="utf-8") as fh:
+            fh.write(f"{timestamp} {message}\n")
+    except Exception:
+        pass
 
 MINIMUM_DISK_GB = 10  # Minimum free disk space required for model downloads
 
@@ -294,12 +308,58 @@ def resolve_asr_model(configured: str, cache_dir: Path | None = None) -> str:
     return configured
 
 
+_WEIGHT_BLOB_MIN_BYTES = 100 * 1024  # 100 KB floor: below this, only JSON/txt metadata is there
+
+
+def _snapshot_has_weights(path: Path) -> bool:
+    """True iff the snapshot dir has at least one file >= 100 KB.
+
+    `any(path.iterdir())` returned True as soon as HF wrote `config.json`,
+    even if the multi-GB `model.safetensors` never finished. That falsely
+    flagged a partial cache as 'cached' and confused users when
+    transcription failed later. 100 KB is below every real weight blob
+    (smallest whisper layer is MB-scale) and above every config/tokenizer
+    file (<20 KB), so it discriminates cleanly.
+    """
+    try:
+        for entry in path.rglob("*"):
+            if entry.is_file():
+                try:
+                    if entry.stat().st_size >= _WEIGHT_BLOB_MIN_BYTES:
+                        return True
+                except OSError:
+                    continue
+    except OSError:
+        pass
+    return False
+
+
+def has_partial_cache(cache_dir: Path | None = None, asr_variants: list[str] | None = None) -> bool:
+    """True iff at least one required model has *any* file on disk but no full weight.
+
+    Used by the GUI to distinguish 'never started' (show 'Preparar modelos agora?')
+    from 'interrupted' (show 'Retomar download inconcluso?').
+    """
+    for asset in get_required_models(asr_variants):
+        path = cached_snapshot_path(asset.repo_id, cache_dir)
+        if path is None:
+            continue
+        try:
+            if any(path.iterdir()):
+                # Files present — check if they include actual weights
+                if not _snapshot_has_weights(path):
+                    return True
+        except OSError:
+            continue
+    return False
+
+
 def status(cache_dir: Path | None = None, asr_variants: list[str] | None = None) -> list[ModelStatus]:
     models = get_required_models(asr_variants)
     result: list[ModelStatus] = []
     for asset in models:
         path = cached_snapshot_path(asset.repo_id, cache_dir)
-        cached = bool(path and any(path.iterdir()))
+        cached = bool(path and _snapshot_has_weights(path))
         result.append(ModelStatus(asset=asset, cached=cached, path=path if cached else None))
     return result
 
@@ -356,8 +416,8 @@ def _dir_size(path: Path) -> int:
                     total += entry.stat().st_size
                 except OSError:
                     pass
-    except OSError:
-        pass
+    except OSError as exc:
+        _download_diag_log(f"[_dir_size] rglob error on {path}: {exc}")
     return total
 
 
@@ -540,7 +600,14 @@ def _poll_download_progress(
     """
     peak_pct = 0
     baseline = _dir_size(cache_dir)
+    _download_diag_log(
+        f"[poll:{label}] start cache_dir={cache_dir} baseline={baseline}B "
+        f"estimated={estimated_bytes}B range=[{start_pct},{end_pct}]"
+    )
+    iteration = 0
+    last_logged_current = -1
     while not stop_event.is_set():
+        iteration += 1
         current = _dir_size(cache_dir) - baseline
         if estimated_bytes > 0:
             model_pct = min(100, int((current / estimated_bytes) * 100))
@@ -549,6 +616,22 @@ def _poll_download_progress(
         overall = start_pct + int((end_pct - start_pct) * model_pct / 100)
         overall = max(overall, peak_pct)
         peak_pct = overall
+        # Log first 3 iterations always, then only when current changes
+        # by >= 10 MB or at 10s ticks.
+        if iteration <= 3 or (
+            abs(current - last_logged_current) >= 10 * 1024 * 1024
+        ) or iteration % 10 == 0:
+            try:
+                subdirs = sorted(
+                    p.name for p in cache_dir.iterdir() if p.is_dir()
+                )[:8]
+            except OSError as exc:
+                subdirs = [f"<iterdir error: {exc}>"]
+            _download_diag_log(
+                f"[poll:{label}] iter={iteration} current={current}B "
+                f"model_pct={model_pct} overall={overall} subdirs={subdirs}"
+            )
+            last_logged_current = current
         size_str = _format_size(current)
         total_str = _format_size(estimated_bytes)
         progress_callback(
@@ -559,6 +642,9 @@ def _poll_download_progress(
             }
         )
         stop_event.wait(interval)
+    _download_diag_log(
+        f"[poll:{label}] stopped after iter={iteration} peak_pct={peak_pct}"
+    )
 
 
 def download_required_models(

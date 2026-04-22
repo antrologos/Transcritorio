@@ -61,7 +61,11 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
-Name: "addtopath"; Description: "Adicionar CLI ao PATH do usuario"; GroupDescription: "Opcoes avancadas:"; Flags: unchecked
+; CLI no PATH e opt-out: default checado, usuario que nao quer desmarca.
+; A maioria dos usuarios se beneficia (abrir terminal e digitar
+; transcritorio-cli <comando> funciona direto), e quem nao usa CLI nao
+; sofre com o item checado — so ignora. Reduz atrito inicial.
+Name: "addtopath"; Description: "Adicionar CLI ao PATH do usuario"; GroupDescription: "Opcoes avancadas:"
 
 [Files]
 ; Bundle PyInstaller (CPU-only; aceleracao NVIDIA vem pelo app no 1o launch)
