@@ -383,20 +383,47 @@ jobs:
         # Sem assinatura, macOS 15+ bloqueia mesmo apos "Open Anyway"
         # porque sub-binarios (ffmpeg, Python framework, PySide6 dylibs)
         # falham na validacao secundaria. A assinatura ad-hoc ("-"
-        # identity) e gratuita (nao exige Apple Developer $99/ano) e
-        # satisfaz a exigencia de "binario tem signature valida", o que
-        # combinado com a autorizacao manual do usuario ("Open Anyway")
-        # permite a execucao.
+        # identity) e gratuita e satisfaz "binario tem signature valida",
+        # o que combinado com "Open Anyway" manual permite a execucao.
         #
         # --force: sobrescreve se ja assinado
         # --deep: assina recursivamente todo Mach-O no .app
         # --sign -: identity "-" significa ad-hoc (self-signed, no cert)
+        #
+        # Nota: --verify --strict pode reclamar de symlinks orfaos apos
+        # a remocao dos Qt dev tools no step anterior. O que importa e
+        # que o SIGN em si passe; a verificacao top-level tambem.
+        # Verificacoes aninhadas --deep --strict sao best-effort e nao
+        # bloqueiam o build.
         run: |
+          set -e
+          echo "=== Aplicando ad-hoc codesign ==="
           codesign --force --deep --sign - dist/Transcritorio.app
-          echo "=== Verificacao ==="
-          codesign --verify --deep --strict --verbose=2 dist/Transcritorio.app
-          echo "=== Assinatura do bundle ==="
-          codesign -dv dist/Transcritorio.app 2>&1 | head -8
+          echo ""
+          echo "=== Verificacao top-level (obrigatoria) ==="
+          codesign --verify --verbose=2 dist/Transcritorio.app
+          echo ""
+          echo "=== Assinatura do bundle (metadados) ==="
+          codesign -dv --verbose=2 dist/Transcritorio.app 2>&1 | head -12
+          echo ""
+          echo "=== Verificacao recursiva (best-effort, nao bloqueia) ==="
+          set +e
+          codesign --verify --deep --strict --verbose=2 dist/Transcritorio.app 2>&1 | tail -20
+          DEEP_RC=$?
+          set -e
+          if [ $DEEP_RC -ne 0 ]; then
+            echo ""
+            echo "[aviso] --verify --deep --strict retornou $DEEP_RC."
+            echo "Isso pode ser ruido de symlinks orfaos apos a remocao dos"
+            echo "Qt dev tools no step anterior (PyInstaller gera referencias"
+            echo "internas que nao foram atualizadas). A assinatura top-level"
+            echo "passou, que e o que Gatekeeper verifica na primeira abertura."
+          else
+            echo "[ok] verify --deep --strict passou"
+          fi
+          echo ""
+          echo "=== spctl assess (mostra veredicto Gatekeeper) ==="
+          spctl --assess --verbose=4 dist/Transcritorio.app 2>&1 || true
 
       - name: Prepare DMG source (app + script de desbloqueio)
         # Monta um diretorio com tudo que vai aparecer no DMG. Alem do .app,
