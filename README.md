@@ -104,6 +104,7 @@ Se você quer rodar do código-fonte, contribuir com pull requests ou auditar o 
 - **Instalação a partir do source em Linux:** [`docs/LINUX_INSTALL.md`](docs/LINUX_INSTALL.md)
 - **Aceleração MLX no Apple Silicon:** [`docs/MLX_WHISPER_MACOS.md`](docs/MLX_WHISPER_MACOS.md)
 - **Troubleshooting macOS/Linux (referência consolidada):** [`docs/MAC_LINUX.md`](docs/MAC_LINUX.md)
+- **Code signing no Windows (backlog, opções e passo a passo):** [`docs/WINDOWS_CODE_SIGNING.md`](docs/WINDOWS_CODE_SIGNING.md)
 
 ### Estrutura do repositório
 
