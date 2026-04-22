@@ -89,6 +89,9 @@ ProgressCallback = Callable[[dict[str, Any]], None]
 ShouldCancel = Callable[[], bool]
 
 LOCAL_PYANNOTE_MODEL = "pyannote/speaker-diarization-community-1"
+# Pinned SHA da revisao conhecida-boa do pyannote (auditada 2026-04-22).
+# Compartilhado por _FIXED_MODELS e pela logica de fallback offline.
+LOCAL_PYANNOTE_REVISION = "3533c8cf8e369892e6b79ff1bf80f7b0286a54ee"
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +162,12 @@ class ModelAsset:
     purpose: str
     gated: bool = False
     estimated_gb: float = 1.0
+    # HF revision pinada. None => segue 'main' (comportamento antigo).
+    # Pinar uma SHA especifica (a) evita redirect chains (bug do turbo em
+    # 2026-04-22) e (b) fornece reprodutibilidade + defesa supply-chain:
+    # se o repo publicar v2 maliciosa, o app continua baixando so o hash
+    # conhecido-bom. Upgrade deliberado via commit que altera o SHA.
+    revision: str | None = None
 
 
 @dataclass(frozen=True)
@@ -177,7 +186,13 @@ ASR_VARIANTS: dict[str, dict[str, Any]] = {
     "large-v3-turbo": {
         "label": "Whisper large-v3-turbo",
         "friendly_pt": "Preciso rapido (recomendado, 3,1 GB)",
-        "repo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
+        # O repo original mobiuslabsgmbh/faster-whisper-large-v3-turbo foi
+        # transferido pro org dropbox-dash em 2025-2026. HF API retorna 307
+        # pra ca; apontar direto elimina a cadeia de redirect que estava
+        # travando snapshot_download no bundle frozen (detectado via
+        # download_diagnostic.log do Rogerio em 2026-04-22).
+        "repo": "dropbox-dash/faster-whisper-large-v3-turbo",
+        "revision": "0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf",
         "estimated_gb": 3.1,
         "quality": 8,
         "speed": 8,
@@ -187,6 +202,7 @@ ASR_VARIANTS: dict[str, dict[str, Any]] = {
         "label": "Whisper large-v3",
         "friendly_pt": "Maxima precisao (melhor qualidade, 5,8 GB)",
         "repo": "Systran/faster-whisper-large-v3",
+        "revision": "edaa852ec7e145841d8ffdb056a99866b5f0a478",
         "estimated_gb": 5.8,
         "quality": 10,
         "speed": 4,
@@ -196,6 +212,7 @@ ASR_VARIANTS: dict[str, dict[str, Any]] = {
         "label": "Whisper medium",
         "friendly_pt": "Preciso (alta qualidade, 2,8 GB)",
         "repo": "Systran/faster-whisper-medium",
+        "revision": "08e178d48790749d25932bbc082711ddcfdfbc4f",
         "estimated_gb": 2.8,
         "quality": 7,
         "speed": 7,
@@ -205,6 +222,7 @@ ASR_VARIANTS: dict[str, dict[str, Any]] = {
         "label": "Whisper small",
         "friendly_pt": "Equilibrado (qualidade boa, 900 MB)",
         "repo": "Systran/faster-whisper-small",
+        "revision": "536b0662742c02347bc0e980a01041f333bce120",
         "estimated_gb": 0.9,
         "quality": 5,
         "speed": 8,
@@ -214,6 +232,7 @@ ASR_VARIANTS: dict[str, dict[str, Any]] = {
         "label": "Whisper base",
         "friendly_pt": "Equilibrado leve (qualidade boa, 300 MB)",
         "repo": "Systran/faster-whisper-base",
+        "revision": "ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66",
         "estimated_gb": 0.3,
         "quality": 3,
         "speed": 9,
@@ -223,6 +242,7 @@ ASR_VARIANTS: dict[str, dict[str, Any]] = {
         "label": "Whisper tiny",
         "friendly_pt": "Rapido (qualidade basica, 150 MB)",
         "repo": "Systran/faster-whisper-tiny",
+        "revision": "d90ca5fe260221311c53c58e660288d3deb8d356",
         "estimated_gb": 0.15,
         "quality": 2,
         "speed": 10,
@@ -238,8 +258,23 @@ _FRIENDLY_FIXED_MODELS: dict[str, str] = {
 DEFAULT_ASR_VARIANT = "large-v3-turbo"
 
 _FIXED_MODELS: tuple[ModelAsset, ...] = (
-    ModelAsset("alignment_pt", "Alinhamento portugues", "jonatasgrosman/wav2vec2-large-xlsr-53-portuguese", "timestamps por palavra", estimated_gb=6.9),
-    ModelAsset("diarization", "Separacao de falantes", LOCAL_PYANNOTE_MODEL, "diarizacao local", gated=True, estimated_gb=0.07),
+    ModelAsset(
+        "alignment_pt",
+        "Alinhamento portugues",
+        "jonatasgrosman/wav2vec2-large-xlsr-53-portuguese",
+        "timestamps por palavra",
+        estimated_gb=6.9,
+        revision="634ac655299bcdc46c83bc01da9bab52d2987e4f",
+    ),
+    ModelAsset(
+        "diarization",
+        "Separacao de falantes",
+        LOCAL_PYANNOTE_MODEL,
+        "diarizacao local",
+        gated=True,
+        estimated_gb=0.07,
+        revision=LOCAL_PYANNOTE_REVISION,
+    ),
 )
 
 
@@ -263,6 +298,7 @@ def get_required_models(asr_variants: list[str] | None = None) -> tuple[ModelAss
             repo_id=info["repo"],
             purpose="transcricao",
             estimated_gb=info["estimated_gb"],
+            revision=info.get("revision"),
         ))
     assets.extend(_FIXED_MODELS)
     return tuple(assets)
@@ -297,13 +333,33 @@ def hf_cache_path(repo_id: str, cache_dir: Path | None = None) -> Path:
     return root / ("models--" + repo_id.replace("/", "--"))
 
 
-def cached_snapshot_path(repo_id: str, cache_dir: Path | None = None) -> Path | None:
+def cached_snapshot_path(
+    repo_id: str,
+    cache_dir: Path | None = None,
+    revision: str | None = None,
+) -> Path | None:
+    """Return the snapshot dir for a cached model, or None if absent.
+
+    If *revision* is provided (pinned SHA), resolve that exact snapshot
+    first — the HF hub writes pinned downloads straight to
+    ``snapshots/<sha>/`` without needing a ``refs/main`` pointer. Falls
+    back to ``refs/main`` and most-recently-modified lookup for repos
+    that don't have pinned revisions configured.
+    """
     repo_cache = hf_cache_path(repo_id, cache_dir)
     snapshots = repo_cache / "snapshots"
+    if revision:
+        candidate = snapshots / revision
+        if candidate.exists():
+            return candidate
+        # Pinned revision not yet downloaded — don't silently fall through
+        # to the "main" branch of the cache; caller expects the exact SHA.
+        if not snapshots.exists():
+            return None
     refs_main = repo_cache / "refs" / "main"
     if refs_main.exists():
-        revision = refs_main.read_text(encoding="utf-8").strip()
-        candidate = snapshots / revision
+        ref_rev = refs_main.read_text(encoding="utf-8").strip()
+        candidate = snapshots / ref_rev
         if candidate.exists():
             return candidate
     if not snapshots.exists():
@@ -318,7 +374,7 @@ def installed_asr_variants(cache_dir: Path | None = None) -> list[str]:
     """Return list of ASR variant keys that are cached locally."""
     result: list[str] = []
     for key, info in ASR_VARIANTS.items():
-        path = cached_snapshot_path(info["repo"], cache_dir)
+        path = cached_snapshot_path(info["repo"], cache_dir, revision=info.get("revision"))
         if path and any(path.iterdir()):
             result.append(key)
     return result
@@ -334,8 +390,8 @@ def resolve_asr_model(configured: str, cache_dir: Path | None = None) -> str:
     """
     # Check if configured model is a known variant with a specific repo
     if configured in ASR_VARIANTS:
-        repo = ASR_VARIANTS[configured]["repo"]
-        path = cached_snapshot_path(repo, cache_dir)
+        info = ASR_VARIANTS[configured]
+        path = cached_snapshot_path(info["repo"], cache_dir, revision=info.get("revision"))
         if path and any(path.iterdir()):
             return configured
     else:
@@ -382,7 +438,7 @@ def has_partial_cache(cache_dir: Path | None = None, asr_variants: list[str] | N
     from 'interrupted' (show 'Retomar download inconcluso?').
     """
     for asset in get_required_models(asr_variants):
-        path = cached_snapshot_path(asset.repo_id, cache_dir)
+        path = cached_snapshot_path(asset.repo_id, cache_dir, revision=asset.revision)
         if path is None:
             continue
         try:
@@ -399,7 +455,7 @@ def status(cache_dir: Path | None = None, asr_variants: list[str] | None = None)
     models = get_required_models(asr_variants)
     result: list[ModelStatus] = []
     for asset in models:
-        path = cached_snapshot_path(asset.repo_id, cache_dir)
+        path = cached_snapshot_path(asset.repo_id, cache_dir, revision=asset.revision)
         cached = bool(path and _snapshot_has_weights(path))
         result.append(ModelStatus(asset=asset, cached=cached, path=path if cached else None))
     return result
@@ -761,6 +817,11 @@ def download_required_models(
                 force_download=force,
                 local_files_only=False,
             )
+            # Pin the exact revision SHA when configured, so HF doesn't
+            # follow redirect chains (broken 2026-04-22 for turbo) or
+            # serve newer main that we haven't audited yet.
+            if asset.revision:
+                kwargs["revision"] = asset.revision
             snapshot_download(**kwargs)
         except Exception as exc:  # noqa: BLE001 - keep batch progress visible.
             failures += 1
@@ -838,13 +899,16 @@ def local_pyannote_checkpoint() -> str:
 
         return snapshot_download(
             repo_id=LOCAL_PYANNOTE_MODEL,
+            revision=LOCAL_PYANNOTE_REVISION,
             repo_type="model",
             cache_dir=str(cache_dir),
             local_files_only=True,
             token=None,
         )
     except Exception as exc:  # noqa: BLE001 - fallback preserves a clearer domain error.
-        fallback = cached_snapshot_path(LOCAL_PYANNOTE_MODEL, cache_dir)
+        fallback = cached_snapshot_path(
+            LOCAL_PYANNOTE_MODEL, cache_dir, revision=LOCAL_PYANNOTE_REVISION
+        )
         if fallback is not None:
             return str(fallback)
         raise RuntimeError(

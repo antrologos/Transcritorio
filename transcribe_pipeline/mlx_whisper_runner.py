@@ -46,6 +46,19 @@ MLX_MODEL_MAP: dict[str, str] = {
     "turbo": "mlx-community/whisper-large-v3-turbo",
 }
 
+# Revisions pinadas (SHA) — colhidas via HF API em 2026-04-22.
+# Mesma motivacao de model_manager.ASR_VARIANTS: reprodutibilidade +
+# defesa contra redirect chains e atualizacoes nao-auditadas.
+MLX_MODEL_REVISIONS: dict[str, str] = {
+    "mlx-community/whisper-tiny-mlx": "6caf9c55601caafbe6508a8b0d216bdf4783c4e8",
+    "mlx-community/whisper-base-mlx": "1e3e249fb8d01c655324bd6841b1deadffd6d04c",
+    "mlx-community/whisper-small-mlx": "45f3915923c7a79a5a5b5a7d909d39aeb0e5630e",
+    "mlx-community/whisper-medium-mlx": "7fc08c4eac4c316526498f147dfdee6f6303f975",
+    "mlx-community/whisper-large-v3-mlx": "49e6aa286ad60c14352c404340ded53710378a11",
+    "mlx-community/whisper-large-v2-mlx": "cce86229e2765266197fef869ce9f7e2550067ab",
+    "mlx-community/whisper-large-v3-turbo": "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb",
+}
+
 
 def is_available() -> bool:
     """True if mlx_whisper imports on the current interpreter."""
@@ -72,6 +85,29 @@ def resolve_mlx_model(asr_model: str) -> str:
     if Path(key).exists():
         return key
     return f"mlx-community/whisper-{key}-mlx"
+
+
+def ensure_mlx_model_local(mlx_repo: str) -> str:
+    """Make sure the pinned revision of *mlx_repo* is in cache and return its local path.
+
+    If the repo has no pinned revision in MLX_MODEL_REVISIONS (e.g. user
+    passed a custom HF repo), returns *mlx_repo* unchanged so
+    mlx_whisper.transcribe handles the download itself. Any filesystem
+    path is also passed through.
+    """
+    if "/" not in mlx_repo or Path(mlx_repo).exists():
+        return mlx_repo
+    revision = MLX_MODEL_REVISIONS.get(mlx_repo)
+    if not revision:
+        return mlx_repo
+    from huggingface_hub import snapshot_download
+    local_path = snapshot_download(
+        repo_id=mlx_repo,
+        revision=revision,
+        repo_type="model",
+        cache_dir=str(runtime.model_cache_dir()),
+    )
+    return str(local_path)
 
 
 def run_mlx_whisper(
@@ -136,6 +172,15 @@ def run_mlx_whisper(
 
     failures = 0
     mlx_repo = resolve_mlx_model(str(config.get("asr_model", "")))
+    # Pre-resolve pinned revision to local path so mlx_whisper picks up
+    # the audited SHA, not main. No-op for custom repos or local paths.
+    try:
+        mlx_repo = ensure_mlx_model_local(mlx_repo)
+    except Exception as exc:
+        _emit(progress_callback, "<boot>",
+              {"event": "asr_error", "progress": 0,
+               "message": f"Falha ao preparar modelo MLX: {sanitize_message(str(exc))}"})
+        return max(1, len(rows))
     language = config.get("asr_language") or None
     word_timestamps = bool(config.get("asr_word_timestamps", True))
 
