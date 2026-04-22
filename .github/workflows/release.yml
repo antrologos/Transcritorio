@@ -32,9 +32,29 @@ concurrency:
 
 jobs:
   # =========================================================================
+  # Gate empirico: baixa um modelo real da HF (Systran/faster-whisper-tiny,
+  # 72 MB) via _manual_snapshot_download. Se falhar, nenhum build roda.
+  # Criado em 2026-04-22 apos shipping de .exe com huggingface_hub 0.36.2
+  # que travava em Xet Storage sem erro explicito. Preferivel descobrir aqui
+  # (5 min) que 40 min depois quando o usuario reporta hang.
+  # =========================================================================
+  live-smoke-hf:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install requests
+        run: python -m pip install requests --quiet
+      - name: Download real (tiny, 72 MB) — gate antes dos builds
+        run: python -B tests/live_smoke_hf_download.py
+
+  # =========================================================================
   # Linux AppImage (ubuntu-22.04 para compat com glibc 2.35 de distros antigas)
   # =========================================================================
   build-linux-appimage:
+    needs: live-smoke-hf
     runs-on: ubuntu-22.04
     # Pulado em rebuild parcial quando "linux" nao esta na lista
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.only_platforms == '' || contains(inputs.only_platforms, 'linux') }}
@@ -250,6 +270,7 @@ jobs:
   # macOS .dmg (macos-14 = Apple Silicon arm64)
   # =========================================================================
   build-macos-dmg:
+    needs: live-smoke-hf
     runs-on: macos-14
     # Pulado em rebuild parcial quando "mac" nao esta na lista
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.only_platforms == '' || contains(inputs.only_platforms, 'mac') }}
@@ -641,6 +662,7 @@ jobs:
   # Windows Installer (windows-latest)
   # =========================================================================
   build-windows-installer:
+    needs: live-smoke-hf
     runs-on: windows-latest
     # Pulado em rebuild parcial quando "windows" nao esta na lista
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.only_platforms == '' || contains(inputs.only_platforms, 'windows') }}

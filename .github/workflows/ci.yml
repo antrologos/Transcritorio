@@ -82,6 +82,17 @@ jobs:
             echo "$failures toy(s) falharam"
             exit 1
           fi
+
+      # Live smoke test: bate na HF real pra validar que o _manual_snapshot_
+      # download de fato baixa o tiny (~72 MB). Gate critico contra regressoes
+      # tipo o bug de 2026-04-22 (hub 0.36.2 travando em Xet Storage). So roda
+      # em Ubuntu porque a rede mais estavel + basta um SO pra provar.
+      - name: Live smoke — download real de HF
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python -B tests/live_smoke_hf_download.py
           echo "Todos os toys passaram."
 
       - name: Run smoke tests

@@ -13,6 +13,9 @@ import shutil
 from . import runtime
 from .utils import sanitize_message
 
+HF_ENDPOINT = "https://huggingface.co"
+_DOWNLOAD_CHUNK = 1024 * 1024  # 1 MiB streaming chunk
+
 
 def _download_diag_log(message: str) -> None:
     """Append a line to the download diagnostic log. Never raises."""
@@ -744,6 +747,185 @@ def _poll_download_progress(
     )
 
 
+def _etag_from_headers(headers) -> str | None:
+    """Extract the blob identifier HF hub uses as on-disk filename.
+
+    For LFS/Xet-backed files, X-Linked-ETag is the SHA256 of the blob
+    content (64 hex). For small inline files, plain ETag is the git
+    blob SHA1 (40 hex). Both are stripped of W/ weak marker and quotes.
+    """
+    for key in ("X-Linked-ETag", "ETag"):
+        raw = headers.get(key)
+        if not raw:
+            continue
+        value = raw.strip()
+        if value.startswith("W/"):
+            value = value[2:]
+        return value.strip('"')
+    return None
+
+
+def _place_blob_in_snapshot(blob_path: Path, snapshot_path: Path) -> None:
+    """Mirror blob into snapshot dir. HF cache uses symlinks where the OS
+    allows it (Linux/Mac, Windows with dev mode or admin); falls back to a
+    file copy otherwise. Both layouts load identically via from_pretrained.
+    """
+    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    if snapshot_path.exists() or snapshot_path.is_symlink():
+        try:
+            snapshot_path.unlink()
+        except OSError:
+            pass
+    try:
+        rel = os.path.relpath(blob_path, snapshot_path.parent)
+        snapshot_path.symlink_to(rel)
+        return
+    except (OSError, NotImplementedError):
+        pass
+    shutil.copy2(blob_path, snapshot_path)
+
+
+def _manual_snapshot_download(
+    *,
+    repo_id: str,
+    revision: str,
+    cache_dir: Path,
+    token: str | None,
+    label: str,
+    start_pct: int,
+    end_pct: int,
+    estimated_bytes: int,
+    progress_callback: ProgressCallback | None,
+    should_cancel: ShouldCancel | None,
+) -> Path:
+    """Baixar um repo HF usando requests direto, bypassando huggingface_hub.
+
+    Motivo da existencia: huggingface_hub 0.36.2 (versao que cabia nas outras
+    deps do projeto em abr/2026) nao suporta Xet Storage, o novo backend que
+    a HF migrou grandes blobs em 2025. Ao receber o 302 redirect pro
+    cas-bridge.xethub.hf.co, a lib velha trava indefinidamente. Confirmado
+    empiricamente em maquina Windows do Rogerio via download_diagnostic.log.
+
+    A URL redirect da HF pro CAS ja vem com presigned signature (query
+    param X-Amz-Signature), entao qualquer cliente HTTP que siga redirect
+    baixa o blob direto — nao precisa de cliente Xet-aware. Usamos o
+    proprio requests da stdlib-transitive, que ja e dep do hub.
+
+    Layout do cache gerado e identico ao HF hub (blobs/ + snapshots/ + refs/),
+    para que faster_whisper / transformers consigam carregar sem saber da
+    diferenca.
+    """
+    import requests  # transitive dep de huggingface_hub, sempre presente
+
+    session = requests.Session()
+    session.headers.update({"User-Agent": "transcritorio/hf-manual-downloader"})
+    if token:
+        session.headers["Authorization"] = f"Bearer {token}"
+
+    def _emit_bytes(done: int) -> None:
+        if progress_callback is None:
+            return
+        if estimated_bytes > 0:
+            model_pct = min(100, int(done * 100 / estimated_bytes))
+        else:
+            model_pct = 0
+        overall = start_pct + int((end_pct - start_pct) * model_pct / 100)
+        progress_callback({
+            "event": "model_download_bytes",
+            "progress": overall,
+            "message": f"Baixando {label}: {_format_size(done)}/{_format_size(estimated_bytes)}",
+        })
+
+    def _emit_event(event: str, message: str, pct: int) -> None:
+        if progress_callback is None:
+            return
+        progress_callback({"event": event, "progress": pct, "message": message})
+
+    def _cancelled() -> bool:
+        return should_cancel is not None and should_cancel()
+
+    # 1. Metadata: lista de arquivos desta revision. Se o repo foi
+    #    transferido de org, API responde 307 e requests segue.
+    meta_url = f"{HF_ENDPOINT}/api/models/{repo_id}/revision/{revision}"
+    _download_diag_log(f"[manual:{label}] GET {meta_url}")
+    resp = session.get(meta_url, timeout=30, allow_redirects=True)
+    resp.raise_for_status()
+    meta = resp.json()
+    siblings = meta.get("siblings", [])
+    effective_rev = meta.get("sha", revision)
+    if not siblings:
+        raise RuntimeError(f"API retornou 0 arquivos pra {repo_id}@{revision}")
+
+    cache_model_dir = cache_dir / ("models--" + repo_id.replace("/", "--"))
+    blobs_dir = cache_model_dir / "blobs"
+    snap_dir = cache_model_dir / "snapshots" / effective_rev
+    blobs_dir.mkdir(parents=True, exist_ok=True)
+    snap_dir.mkdir(parents=True, exist_ok=True)
+    _download_diag_log(
+        f"[manual:{label}] {len(siblings)} arquivo(s), effective_rev={effective_rev}"
+    )
+
+    total_downloaded = 0
+    for sibling in siblings:
+        if _cancelled():
+            raise RuntimeError("Cancelado pelo usuario")
+        rfilename = sibling["rfilename"]
+        resolve_url = f"{HF_ENDPOINT}/{repo_id}/resolve/{effective_rev}/{rfilename}"
+        head = session.head(resolve_url, timeout=30, allow_redirects=False)
+        if head.status_code not in (200, 302, 307):
+            raise RuntimeError(
+                f"HEAD {rfilename}: status {head.status_code}"
+            )
+        etag = _etag_from_headers(head.headers)
+        if not etag:
+            raise RuntimeError(f"{rfilename}: resposta sem ETag")
+        expected_size = int(
+            head.headers.get("X-Linked-Size")
+            or head.headers.get("Content-Length")
+            or 0
+        )
+        blob_path = blobs_dir / etag
+        snapshot_path = snap_dir / rfilename
+        if (
+            blob_path.exists()
+            and expected_size > 0
+            and blob_path.stat().st_size == expected_size
+        ):
+            _download_diag_log(
+                f"[manual:{label}] cache hit: {rfilename} ({expected_size}B)"
+            )
+            _place_blob_in_snapshot(blob_path, snapshot_path)
+            continue
+        _download_diag_log(
+            f"[manual:{label}] download: {rfilename} etag={etag[:12]}... "
+            f"size~={expected_size}"
+        )
+        tmp_path = blob_path.with_suffix(".incomplete")
+        with session.get(resolve_url, stream=True, timeout=60, allow_redirects=True) as dl:
+            dl.raise_for_status()
+            bytes_this_file = 0
+            with tmp_path.open("wb") as fh:
+                for chunk in dl.iter_content(chunk_size=_DOWNLOAD_CHUNK):
+                    if _cancelled():
+                        raise RuntimeError("Cancelado pelo usuario")
+                    if not chunk:
+                        continue
+                    fh.write(chunk)
+                    bytes_this_file += len(chunk)
+                    _emit_bytes(total_downloaded + bytes_this_file)
+            total_downloaded += bytes_this_file
+        tmp_path.replace(blob_path)
+        _place_blob_in_snapshot(blob_path, snapshot_path)
+
+    refs_main = cache_model_dir / "refs" / "main"
+    refs_main.parent.mkdir(parents=True, exist_ok=True)
+    refs_main.write_text(effective_rev, encoding="utf-8")
+    _download_diag_log(
+        f"[manual:{label}] done, total_downloaded={total_downloaded}B"
+    )
+    return snap_dir
+
+
 def download_required_models(
     *,
     token: str | None = None,
@@ -765,11 +947,6 @@ def download_required_models(
     # snapshot_download doesn't deadlock. See _clear_stale_hf_locks.
     _clear_stale_hf_locks(cache_dir)
     token_value = token if token is not None else os.environ.get(token_env)
-    try:
-        from huggingface_hub import snapshot_download
-    except ImportError as exc:
-        raise RuntimeError(f"Dependencia ausente: huggingface_hub ({exc})") from exc
-
     models = get_required_models(asr_variants)
     failures = 0
     total = max(1, len(models))
@@ -796,33 +973,31 @@ def download_required_models(
                 }
             )
         estimated_bytes = int(asset.estimated_gb * 1_073_741_824)
-        # Start a background poller to track download progress on disk
-        stop_event: threading.Event | None = None
-        poller: threading.Thread | None = None
-        if progress_callback is not None:
-            stop_event = threading.Event()
-            poller = threading.Thread(
-                target=_poll_download_progress,
-                args=(cache_dir, estimated_bytes, start_pct, end_pct,
-                      asset.label, progress_callback, stop_event),
-                daemon=True,
-            )
-            poller.start()
+        # `_manual_snapshot_download` ja emite model_download_bytes via
+        # progress_callback; nao precisa do poller de disk polling.
         try:
-            kwargs: dict[str, object] = dict(
+            # Exige revision pinada: sem SHA nao temos como garantir que o
+            # /api/models/.../revision/{rev} responde com a lista certa de
+            # arquivos. O pin tambem e defesa supply-chain. Todos os assets
+            # configurados no projeto tem revision.
+            if not asset.revision:
+                raise RuntimeError(
+                    f"Modelo {asset.label} ({asset.repo_id}) sem revision "
+                    "pinada; abortando download. Atualize ASR_VARIANTS / "
+                    "_FIXED_MODELS com a SHA do revision."
+                )
+            _manual_snapshot_download(
                 repo_id=asset.repo_id,
-                repo_type="model",
-                cache_dir=str(cache_dir),
+                revision=asset.revision,
+                cache_dir=cache_dir,
                 token=token_value,
-                force_download=force,
-                local_files_only=False,
+                label=asset.label,
+                start_pct=start_pct,
+                end_pct=end_pct,
+                estimated_bytes=estimated_bytes,
+                progress_callback=progress_callback,
+                should_cancel=should_cancel,
             )
-            # Pin the exact revision SHA when configured, so HF doesn't
-            # follow redirect chains (broken 2026-04-22 for turbo) or
-            # serve newer main that we haven't audited yet.
-            if asset.revision:
-                kwargs["revision"] = asset.revision
-            snapshot_download(**kwargs)
         except Exception as exc:  # noqa: BLE001 - keep batch progress visible.
             failures += 1
             if progress_callback is not None:
@@ -834,11 +1009,6 @@ def download_required_models(
                     }
                 )
             continue
-        finally:
-            if stop_event is not None:
-                stop_event.set()
-            if poller is not None:
-                poller.join(timeout=2)
         if progress_callback is not None:
             progress_callback(
                 {
