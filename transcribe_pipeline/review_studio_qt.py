@@ -2146,6 +2146,7 @@ if QT_IMPORT_ERROR is None:
 
         def validatePage(self) -> bool:
             from . import model_manager
+            from . import token_vault
             token = self.token_edit.text().strip()
             if not token:
                 self.status_label.setText("Cole a chave de acesso no campo acima.")

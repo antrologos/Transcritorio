@@ -886,13 +886,14 @@ def _manual_snapshot_download(
         )
         blob_path = blobs_dir / etag
         snapshot_path = snap_dir / rfilename
-        if (
-            blob_path.exists()
-            and expected_size > 0
-            and blob_path.stat().st_size == expected_size
-        ):
+        # Trust a existencia do blob: o nome dele E o hash do conteudo
+        # (git sha1 pra inline, sha256 pra LFS/Xet). Checar tamanho nao
+        # funciona pra arquivos pequenos — HF devolve X-Linked-Size=300
+        # (tamanho do pointer LFS) em vez do tamanho real, o que fazia
+        # o cache-hit check dar falso-negativo e re-baixar a cada sessao.
+        if blob_path.exists():
             _download_diag_log(
-                f"[manual:{label}] cache hit: {rfilename} ({expected_size}B)"
+                f"[manual:{label}] cache hit: {rfilename} blob={etag[:12]}..."
             )
             _place_blob_in_snapshot(blob_path, snapshot_path)
             continue
@@ -1000,6 +1001,17 @@ def download_required_models(
             )
         except Exception as exc:  # noqa: BLE001 - keep batch progress visible.
             failures += 1
+            # Logar o traceback completo no download_diagnostic.log. Sem isso
+            # o crash do Round 2 do Rogerio (2026-04-22) ficou invisivel —
+            # progress_callback so emite uma mensagem truncada que nao da
+            # pra diagnosticar retrospectivamente.
+            import traceback
+            _download_diag_log(
+                f"[manual:{asset.label}] EXCEPTION: {type(exc).__name__}: {exc}"
+            )
+            for line in traceback.format_exception(type(exc), exc, exc.__traceback__):
+                for subline in line.rstrip().splitlines():
+                    _download_diag_log(f"  {subline}")
             if progress_callback is not None:
                 progress_callback(
                     {
@@ -1024,30 +1036,26 @@ def download_required_models(
 
 
 def verify_required_models(progress_callback: ProgressCallback | None = None) -> int:
-    cache_dir = runtime.model_cache_dir()
-    runtime.apply_secure_hf_environment(offline=True)
-    try:
-        from huggingface_hub import snapshot_download
-    except ImportError as exc:
-        raise RuntimeError(f"Dependencia ausente: huggingface_hub ({exc})") from exc
+    """Verifica se os modelos obrigatorios estao no cache local.
 
+    Antes chamava snapshot_download(local_files_only=True) — caminho que
+    envolve huggingface_hub e pode falhar no bundle PyInstaller frozen
+    (detectado via Xet migration). Agora usa nosso proprio layout-check
+    (cached_snapshot_path + _snapshot_has_weights), identico ao usado em
+    required_models_ready(). Zero dep de hub pra verificar.
+    """
+    cache_dir = runtime.model_cache_dir()
     failures = 0
     total = max(1, len(REQUIRED_MODELS))
     for index, asset in enumerate(REQUIRED_MODELS, start=1):
-        try:
-            snapshot_download(
-                repo_id=asset.repo_id,
-                repo_type="model",
-                cache_dir=str(cache_dir),
-                local_files_only=True,
-                token=None,
-            )
+        path = cached_snapshot_path(asset.repo_id, cache_dir, revision=asset.revision)
+        if path is not None and _snapshot_has_weights(path):
             ok = True
             message = f"{asset.label} pronto para uso local."
-        except Exception as exc:  # noqa: BLE001 - report missing/offline failures as actionable status.
+        else:
             failures += 1
             ok = False
-            message = f"{asset.label} ausente ou incompleto: {exc}"
+            message = f"{asset.label} ausente ou incompleto no cache local."
         if progress_callback is not None:
             progress_callback(
                 {
