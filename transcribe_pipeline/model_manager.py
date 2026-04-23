@@ -1047,15 +1047,24 @@ def verify_required_models(progress_callback: ProgressCallback | None = None) ->
     cache_dir = runtime.model_cache_dir()
     failures = 0
     total = max(1, len(REQUIRED_MODELS))
+    _download_diag_log(f"[verify] start cache_dir={cache_dir} assets={total}")
     for index, asset in enumerate(REQUIRED_MODELS, start=1):
         path = cached_snapshot_path(asset.repo_id, cache_dir, revision=asset.revision)
-        if path is not None and _snapshot_has_weights(path):
+        path_exists = path is not None and path.exists()
+        has_weights = False
+        if path is not None:
+            has_weights = _snapshot_has_weights(path)
+        if path_exists and has_weights:
             ok = True
             message = f"{asset.label} pronto para uso local."
         else:
             failures += 1
             ok = False
             message = f"{asset.label} ausente ou incompleto no cache local."
+        _download_diag_log(
+            f"[verify] {asset.repo_id}@{(asset.revision or 'main')[:12]}: "
+            f"path={path} exists={path_exists} has_weights={has_weights} ok={ok}"
+        )
         if progress_callback is not None:
             progress_callback(
                 {
@@ -1065,6 +1074,7 @@ def verify_required_models(progress_callback: ProgressCallback | None = None) ->
                     "ok": ok,
                 }
             )
+    _download_diag_log(f"[verify] done failures={failures}/{total}")
     return failures
 
 

@@ -2265,6 +2265,7 @@ if QT_IMPORT_ERROR is None:
             self.asr_variants = asr_variants
 
         def run(self) -> None:
+            from .model_manager import _download_diag_log
             try:
                 def on_progress(detail: dict) -> None:
                     msg = detail.get("message", "")
@@ -2275,12 +2276,25 @@ if QT_IMPORT_ERROR is None:
                     progress_callback=on_progress,
                     asr_variants=self.asr_variants,
                 )
-                if getattr(result, "failures", 0):
-                    self.failed.emit(str(getattr(result, "message", "Falha ao baixar um ou mais componentes.")))
+                result_failures = getattr(result, "failures", 0)
+                result_message = getattr(result, "message", "")
+                _download_diag_log(
+                    f"[wizard] download_models returned: failures={result_failures} "
+                    f"message={result_message!r}"
+                )
+                if result_failures:
+                    _download_diag_log("[wizard] emitting failed signal")
+                    self.failed.emit(str(result_message or "Falha ao baixar um ou mais componentes."))
                 else:
+                    _download_diag_log("[wizard] emitting finished_ok signal")
                     self.finished_ok.emit()
             except Exception as exc:
                 from .utils import sanitize_message
+                import traceback
+                _download_diag_log(f"[wizard] UNCAUGHT: {type(exc).__name__}: {exc}")
+                for line in traceback.format_exception(type(exc), exc, exc.__traceback__):
+                    for subline in line.rstrip().splitlines():
+                        _download_diag_log(f"  {subline}")
                 self.failed.emit(sanitize_message(str(exc)))
 
     class ProjectChooserDialog(QDialog):

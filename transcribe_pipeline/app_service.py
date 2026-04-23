@@ -275,7 +275,16 @@ def download_models(
     if failures:
         return JobResult("models", failures, "Falha ao baixar um ou mais modelos.")
     verify_failures = model_manager.verify_required_models(progress_callback=progress_callback)
-    return JobResult("models", verify_failures, "Modelos prontos para uso local.")
+    # Ternario CRITICO: sem isto a mensagem seria "Modelos prontos..."
+    # mesmo em falha, causando UI mostrar sucesso como erro. Bug visto
+    # pelo Rogerio em 2026-04-22 depois do download completar mas verify
+    # retornar > 0 no frozen bundle.
+    return JobResult(
+        "models",
+        verify_failures,
+        "Modelos prontos para uso local." if verify_failures == 0
+        else "Modelos ausentes ou incompletos apos o download.",
+    )
 
 
 def verify_models(progress_callback: ProgressCallback | None = None) -> JobResult:
