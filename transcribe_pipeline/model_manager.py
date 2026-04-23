@@ -777,9 +777,12 @@ def _etag_from_headers(headers) -> str | None:
 
 
 def _place_blob_in_snapshot(blob_path: Path, snapshot_path: Path) -> None:
-    """Mirror blob into snapshot dir. HF cache uses symlinks where the OS
-    allows it (Linux/Mac, Windows with dev mode or admin); falls back to a
-    file copy otherwise. Both layouts load identically via from_pretrained.
+    """Mirror blob into snapshot dir.
+
+    Usa `diagnostics.symlinks_supported()` (cached probe at startup) pra
+    decidir symlink vs copy. Evita tentativa + fallback a cada arquivo
+    no Windows sem Dev Mode (antes gerava 1 OSError por arquivo baixado).
+    Layout resultante carregado identicamente via from_pretrained.
     """
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
     if snapshot_path.exists() or snapshot_path.is_symlink():
@@ -787,12 +790,14 @@ def _place_blob_in_snapshot(blob_path: Path, snapshot_path: Path) -> None:
             snapshot_path.unlink()
         except OSError:
             pass
-    try:
-        rel = os.path.relpath(blob_path, snapshot_path.parent)
-        snapshot_path.symlink_to(rel)
-        return
-    except (OSError, NotImplementedError):
-        pass
+    from . import diagnostics
+    if diagnostics.symlinks_supported():
+        try:
+            rel = os.path.relpath(blob_path, snapshot_path.parent)
+            snapshot_path.symlink_to(rel)
+            return
+        except (OSError, NotImplementedError):
+            pass
     shutil.copy2(blob_path, snapshot_path)
 
 

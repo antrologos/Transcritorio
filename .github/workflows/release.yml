@@ -109,6 +109,34 @@ jobs:
           python -m PyInstaller --distpath dist --workpath build \
             --clean --noconfirm packaging/transcritorio.spec
 
+      - name: Frozen-bundle smoke-test (download+verify+load+transcribe REAL)
+        # Gate critico end-to-end: roda transcritorio-cli FROZEN que:
+        # 1. Baixa Systran/faster-whisper-tiny real da HF (72 MB)
+        # 2. Verifica via cached_snapshot_path + _snapshot_has_weights
+        # 3. Carrega o modelo com faster_whisper
+        # 4. Transcreve 3s de silencio (dry-run)
+        # Se qualquer passo falhar, release PARA antes de publicar.
+        # Pega bugs reais do bundle: Xet download, symlink handling,
+        # verify logic, faster_whisper integration, transcribe pipeline.
+        run: dist/Transcritorio/transcritorio-cli models smoke-test
+
+      - name: Frozen-bundle cache-verify gate (fake cache, 2 variantes)
+        # Complementa o smoke-test: roda verify contra caches fake com
+        # symlink E copy variants, pra validar o check de cache em ambos
+        # cenarios de filesystem (Windows com/sem Developer Mode).
+        run: |
+          set -e
+          FAKE_CACHE="${RUNNER_TEMP:-/tmp}/fake_hf_cache"
+          rm -rf "$FAKE_CACHE"
+          python tests/prepare_fake_hf_cache.py "$FAKE_CACHE"
+          TRANSCRITORIO_MODEL_CACHE="$FAKE_CACHE" \
+            dist/Transcritorio/transcritorio-cli models verify
+          rm -rf "$FAKE_CACHE"
+          python tests/prepare_fake_hf_cache.py "$FAKE_CACHE" --force-copy
+          TRANSCRITORIO_MODEL_CACHE="$FAKE_CACHE" \
+            dist/Transcritorio/transcritorio-cli models verify
+          echo "OK: verify passa em ambas variantes"
+
       - name: Generate PNG icon from SVG
         env:
           QT_QPA_PLATFORM: offscreen
@@ -357,6 +385,22 @@ jobs:
           python -m PyInstaller --distpath dist --workpath build \
             --clean --noconfirm packaging/transcritorio.spec
           ls -la dist/
+
+      - name: Frozen-bundle smoke-test (download+verify+load+transcribe REAL)
+        run: dist/Transcritorio.app/Contents/MacOS/transcritorio-cli models smoke-test
+
+      - name: Frozen-bundle cache-verify gate (fake cache, 2 variantes)
+        run: |
+          set -e
+          FAKE_CACHE="${RUNNER_TEMP:-/tmp}/fake_hf_cache"
+          CLI="dist/Transcritorio.app/Contents/MacOS/transcritorio-cli"
+          rm -rf "$FAKE_CACHE"
+          python tests/prepare_fake_hf_cache.py "$FAKE_CACHE"
+          TRANSCRITORIO_MODEL_CACHE="$FAKE_CACHE" "$CLI" models verify
+          rm -rf "$FAKE_CACHE"
+          python tests/prepare_fake_hf_cache.py "$FAKE_CACHE" --force-copy
+          TRANSCRITORIO_MODEL_CACHE="$FAKE_CACHE" "$CLI" models verify
+          echo "OK: frozen Mac CLI valida ambas variantes"
 
       - name: Remover sub-apps Qt (dev tools) antes do codesign
         # PyInstaller 6.5+ MOVE (nao duplica) os binarios Qt para
@@ -725,6 +769,37 @@ jobs:
           $TorchCuda = Get-ChildItem "dist/Transcritorio/_internal/torch/lib" -Filter "torch_cuda.dll" -ErrorAction SilentlyContinue
           if (-not $TorchCuda) { throw "torch_cuda.dll faltando em variant=full" }
           Write-Host "  torch_cuda.dll: $($TorchCuda.FullName) ($([math]::Round($TorchCuda.Length/1MB, 0)) MB)"
+
+      - name: Frozen-bundle smoke-test (download+verify+load+transcribe REAL)
+        # Gate critico end-to-end: roda transcritorio-cli.exe FROZEN que:
+        # 1. Baixa Systran/faster-whisper-tiny real da HF (72 MB)
+        # 2. Verifica via cached_snapshot_path + _snapshot_has_weights
+        # 3. Carrega o modelo com faster_whisper
+        # 4. Transcreve 3s de silencio (dry-run)
+        # Se qualquer passo falhar, release PARA antes de publicar.
+        shell: pwsh
+        run: |
+          & "dist\Transcritorio\transcritorio-cli.exe" models smoke-test
+          if ($LASTEXITCODE -ne 0) {
+            throw "smoke-test FAIL com exit $LASTEXITCODE"
+          }
+
+      - name: Frozen-bundle cache-verify gate (fake cache, 2 variantes)
+        shell: pwsh
+        run: |
+          $FakeCache = "$env:RUNNER_TEMP\fake_hf_cache"
+          $CLI = "dist\Transcritorio\transcritorio-cli.exe"
+          Remove-Item $FakeCache -Recurse -Force -ErrorAction SilentlyContinue
+          python tests/prepare_fake_hf_cache.py "$FakeCache"
+          $env:TRANSCRITORIO_MODEL_CACHE = $FakeCache
+          & $CLI models verify
+          if ($LASTEXITCODE -ne 0) { throw "verify v1 falhou ($LASTEXITCODE)" }
+          Remove-Item $FakeCache -Recurse -Force
+          python tests/prepare_fake_hf_cache.py "$FakeCache" --force-copy
+          $env:TRANSCRITORIO_MODEL_CACHE = $FakeCache
+          & $CLI models verify
+          if ($LASTEXITCODE -ne 0) { throw "verify v2 falhou ($LASTEXITCODE)" }
+          Write-Host "OK: frozen Windows CLI valida ambas variantes"
 
       - name: Split bundle — extrai CUDA libs para cuda_pack/
         shell: pwsh

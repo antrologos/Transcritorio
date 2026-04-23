@@ -5868,6 +5868,13 @@ def _apply_dark_theme(app) -> None:
 
 
 def main() -> int:
+    # Startup diagnostics: env snapshot + faulthandler + symlink probe.
+    # Idempotente. Cada sessao comeca gravando ambiente no log.
+    try:
+        from . import diagnostics
+        diagnostics.startup_init()
+    except Exception:
+        pass
     if QT_IMPORT_ERROR is not None:
         print(
             "PySide6 nao esta instalado no ambiente Python atual. "

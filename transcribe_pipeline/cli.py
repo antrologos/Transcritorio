@@ -16,6 +16,14 @@ from .whisperx_runner import run_whisperx
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Startup diagnostics: snapshot do ambiente + faulthandler + probe
+    # symlinks. Idempotente — primeira linha do download_diagnostic.log
+    # documenta a sessao inteira pra debug post-mortem.
+    try:
+        from . import diagnostics
+        diagnostics.startup_init()
+    except Exception:
+        pass  # nao bloqueia CLI se diag falhar
     parser = argparse.ArgumentParser(description="Local interview transcription pipeline.")
     parser.add_argument("--project", type=Path, default=None, help="Project root directory or .transcritorio file.")
     parser.add_argument("--config", type=Path, default=None)
@@ -71,6 +79,25 @@ def main(argv: list[str] | None = None) -> int:
     models_verify_parser = models_subparsers.add_parser("verify", help="Verify that required models load from the local cache only.")
     models_verify_parser.add_argument("--json", action="store_true", dest="as_json")
     models_verify_parser.set_defaults(func=cmd_models_verify)
+
+    # Smoke test: download real + verify + load + transcribe silence usando
+    # um modelo pequeno (Systran/faster-whisper-tiny, 72 MB, nao-gated).
+    # Usado como gate no release.yml: se esse comando sai com exit 0 no
+    # FROZEN binary, sabemos que o fluxo inteiro funciona. Ver Fase A+B
+    # do pacote de defesas em depth (2026-04-23).
+    models_smoke_parser = models_subparsers.add_parser(
+        "smoke-test",
+        help="E2E: download de um modelo pequeno + verify + load + transcribe silencio.",
+    )
+    models_smoke_parser.add_argument(
+        "--cache-dir", type=Path, default=None,
+        help="Opcional: onde gravar o cache. Default: diretorio temp novo.",
+    )
+    models_smoke_parser.add_argument(
+        "--skip-transcribe", action="store_true",
+        help="Pula o transcribe de silencio (util se faster_whisper indisp.)",
+    )
+    models_smoke_parser.set_defaults(func=cmd_models_smoke_test)
 
     st_parser = subparsers.add_parser("self-test", help="Run installation diagnostics.")
     st_parser.set_defaults(func=cmd_self_test)
@@ -247,6 +274,126 @@ def cmd_models_verify(args: argparse.Namespace) -> int:
         payload["verified"] = failures == 0
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0 if failures == 0 else 1
+
+
+def cmd_models_smoke_test(args: argparse.Namespace) -> int:
+    """E2E smoke: download + verify + load + dry-run transcribe.
+
+    Gate critico do release.yml: se o FROZEN binary completa este comando
+    com exit 0, sabemos que a cadeia inteira funciona (download HF via
+    Xet, layout de cache, symlink/copy, verify, faster_whisper load,
+    transcribe call). Cobre as camadas A e B do pacote de defesas de
+    2026-04-23.
+
+    Usa `Systran/faster-whisper-tiny` (72 MB, nao-gated) pra rodar em
+    ~60s em CI sem precisar de token HF.
+    """
+    import tempfile
+    import time
+
+    from .model_manager import (
+        _manual_snapshot_download,
+        _snapshot_has_weights,
+        cached_snapshot_path,
+    )
+
+    TINY_REPO = "Systran/faster-whisper-tiny"
+    TINY_REV = "d90ca5fe260221311c53c58e660288d3deb8d356"
+    TINY_ESTIMATED = 150 * 1024 * 1024
+
+    if args.cache_dir is None:
+        tmp = tempfile.TemporaryDirectory(prefix="transcritorio-smoke-")
+        cache_dir = Path(tmp.name)
+        cleanup = tmp
+    else:
+        cache_dir = Path(args.cache_dir).resolve()
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cleanup = None
+
+    start = time.monotonic()
+    try:
+        # FASE A.1: download real contra HF
+        print(f"[smoke] 1/4 download {TINY_REPO}@{TINY_REV[:8]}... -> {cache_dir}")
+
+        def _tick(msg: str, pct: int) -> None:
+            if pct and pct % 25 == 0:
+                print(f"[smoke]      {pct}% {msg}")
+
+        snap = _manual_snapshot_download(
+            repo_id=TINY_REPO,
+            revision=TINY_REV,
+            cache_dir=cache_dir,
+            token=None,
+            label="tiny",
+            start_pct=0,
+            end_pct=100,
+            estimated_bytes=TINY_ESTIMATED,
+            progress_callback=lambda d: _tick(d.get("message", ""), int(d.get("progress", 0))),
+            should_cancel=None,
+        )
+        dt_dl = time.monotonic() - start
+        print(f"[smoke]      download ok em {dt_dl:.1f}s")
+
+        # FASE A.2: verify via nossas proprias funcoes
+        print(f"[smoke] 2/4 verify via cached_snapshot_path + _snapshot_has_weights")
+        resolved = cached_snapshot_path(TINY_REPO, cache_dir, revision=TINY_REV)
+        if resolved != snap:
+            print(f"[smoke] ERRO: cached_snapshot_path={resolved!r} != download path {snap!r}",
+                  file=sys.stderr)
+            return 1
+        if not _snapshot_has_weights(snap):
+            print(f"[smoke] ERRO: _snapshot_has_weights=False mesmo com cache completo em {snap}",
+                  file=sys.stderr)
+            return 2
+        print(f"[smoke]      verify ok")
+
+        # FASE B.1: load do modelo com faster_whisper (usando local_files_only)
+        print(f"[smoke] 3/4 load faster_whisper.WhisperModel (local_files_only)")
+        try:
+            from faster_whisper import WhisperModel
+        except ImportError as exc:
+            print(f"[smoke] ERRO: faster_whisper nao importa: {exc}", file=sys.stderr)
+            return 3
+        t_load = time.monotonic()
+        model = WhisperModel(
+            TINY_REPO,
+            device="cpu",
+            compute_type="int8",
+            download_root=str(cache_dir),
+            local_files_only=True,
+        )
+        print(f"[smoke]      modelo carregado em {time.monotonic()-t_load:.1f}s")
+
+        # FASE B.2: transcribe dry-run (3s de silencio). Valida que a
+        # inferencia roda end-to-end; se segfault ou qualquer erro, pega
+        # aqui antes de publicar release.
+        if args.skip_transcribe:
+            print(f"[smoke] 4/4 SKIP transcribe (por --skip-transcribe)")
+        else:
+            print(f"[smoke] 4/4 transcribe 3s de silencio (dry-run)")
+            try:
+                import numpy as np
+            except ImportError as exc:
+                print(f"[smoke] ERRO: numpy nao importa: {exc}", file=sys.stderr)
+                return 4
+            silence = np.zeros(16000 * 3, dtype=np.float32)
+            t_tx = time.monotonic()
+            segments, info = model.transcribe(silence, language="pt", beam_size=1)
+            _ = list(segments)  # consumir gerador
+            print(f"[smoke]      transcribe ok em {time.monotonic()-t_tx:.1f}s "
+                  f"(lang={getattr(info, 'language', '?')})")
+
+        total = time.monotonic() - start
+        print(f"[smoke] OK — pipeline end-to-end em {total:.1f}s")
+        return 0
+    except Exception as exc:
+        import traceback
+        print(f"[smoke] FAIL: {type(exc).__name__}: {exc}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        return 10
+    finally:
+        if cleanup is not None:
+            cleanup.cleanup()
 
 
 def cmd_self_test(args: argparse.Namespace) -> int:
