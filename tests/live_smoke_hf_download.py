@@ -1,22 +1,24 @@
-"""LIVE smoke test: baixa um modelo real da HuggingFace via _manual_snapshot_download.
+"""LIVE smoke test: baixa um modelo real da HuggingFace + valida cache-check.
 
 **Este teste bate na rede real**. Propósito: gate empírico antes do rebuild
-do .exe pra garantir que o fluxo de download de fato funciona contra a HF
-(Xet Storage incluso). Sem este teste, bugs como o do 2026-04-22 (huggingface_hub
-0.36.2 travando em cas-bridge.xethub.hf.co) voltam a passar despercebidos.
+do .exe pra garantir QUE O FLUXO INTEIRO funciona contra a HF:
 
-Modelo testado: Systran/faster-whisper-tiny (150 MB — suficiente pra validar
-fluxo de LFS/Xet sem fazer o CI levar 40 min). SHA pinada.
+1. Download do tiny (~72 MB via Xet Storage) via _manual_snapshot_download
+2. Validação via _snapshot_has_weights contra o cache resultante
 
-Watchdog de 120s: se travar, o teste falha explicitamente em vez de fazer o
-runner do CI ficar 6 horas parado.
+Sem isto, bugs passam despercebidos:
+- 2026-04-22: huggingface_hub 0.36.2 travando em cas-bridge.xethub.hf.co
+- 2026-04-23: _snapshot_has_weights não vendo blobs atrás de symlinks em
+  frozen bundle PyInstaller no Windows
+
+Watchdog de 120s: se travar, falha explicitamente em vez do runner CI
+ficar parado.
 
 Run: python -B tests/live_smoke_hf_download.py
 """
 from __future__ import annotations
 
 import os
-import signal
 import sys
 import tempfile
 import threading
@@ -26,7 +28,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from transcribe_pipeline.model_manager import _manual_snapshot_download  # noqa: E402
+from transcribe_pipeline.model_manager import (  # noqa: E402
+    _manual_snapshot_download,
+    _snapshot_has_weights,
+    cached_snapshot_path,
+)
 
 # Um modelo pequeno, publico, nao-gated, estavel.
 REPO_ID = "Systran/faster-whisper-tiny"
@@ -101,9 +107,26 @@ def test_live_download_tiny() -> None:
         # 5. Tempo total razoavel (permite ate 120s pra rodar em CI lento)
         assert elapsed < TIMEOUT_S, f"download levou {elapsed:.0f}s (>{TIMEOUT_S}s)"
 
+        # 6. cached_snapshot_path encontra o snapshot via revision pinada
+        resolved_snap = cached_snapshot_path(REPO_ID, cache, revision=REVISION)
+        assert resolved_snap == snap, (
+            f"cached_snapshot_path divergiu: {resolved_snap} vs {snap}"
+        )
+
+        # 7. _snapshot_has_weights retorna True contra o cache real — o gate
+        # critico que protege contra o bug do 2026-04-23 (verify false-negative
+        # por causa de symlink em frozen PyInstaller Windows)
+        assert _snapshot_has_weights(snap) is True, (
+            "_snapshot_has_weights retornou False apesar do model.bin de "
+            f"{size} bytes estar no cache. Este e O bug — significa que "
+            "verify_required_models retornaria failures > 0 e a UI mostraria "
+            "'Modelos ausentes ou incompletos' mesmo com download OK."
+        )
+
     print(
         f"PASS: {REPO_ID}@{REVISION[:8]}... baixado em {elapsed:.1f}s, "
-        f"model.bin={size / (1024 * 1024):.1f}MB, {len(events)} progress events"
+        f"model.bin={size / (1024 * 1024):.1f}MB, "
+        f"has_weights=OK, {len(events)} progress events"
     )
 
 

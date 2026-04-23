@@ -412,23 +412,34 @@ _WEIGHT_BLOB_MIN_BYTES = 100 * 1024  # 100 KB floor: below this, only JSON/txt m
 
 
 def _snapshot_has_weights(path: Path) -> bool:
-    """True iff the snapshot dir has at least one file >= 100 KB.
+    """True iff the repo has at least one blob >= 100 KB on disk.
 
-    `any(path.iterdir())` returned True as soon as HF wrote `config.json`,
-    even if the multi-GB `model.safetensors` never finished. That falsely
-    flagged a partial cache as 'cached' and confused users when
-    transcription failed later. 100 KB is below every real weight blob
-    (smallest whisper layer is MB-scale) and above every config/tokenizer
-    file (<20 KB), so it discriminates cleanly.
+    Checa diretamente `{repo}/blobs/`, que sao arquivos regulares (nunca
+    symlinks), em vez de `{repo}/snapshots/{sha}/` que usa symlinks. No
+    Windows bundled com PyInstaller, `Path.rglob` aparentemente nao
+    enumera/segue symlinks Windows nativos corretamente: com os
+    multi-GB blobs na pasta blobs/, o rglob sobre snapshots/{sha}/ nao
+    retornava nenhum arquivo, fazendo has_weights virar False e UI
+    mostrar 'Modelos ausentes ou incompletos'.
+
+    Blobs/ nunca tem symlinks — HF hub escreve arquivos raw la, com
+    nome = hash do conteudo. Enumerar direto resolve o problema.
+
+    `path` eh o snapshot dir (`.../models--org--repo/snapshots/<sha>/`);
+    os blobs vivem no diretorio irmao `.../models--org--repo/blobs/`.
     """
+    if path is None:
+        return False
+    blobs_dir = path.parent.parent / "blobs"
+    if not blobs_dir.is_dir():
+        return False
     try:
-        for entry in path.rglob("*"):
-            if entry.is_file():
-                try:
-                    if entry.stat().st_size >= _WEIGHT_BLOB_MIN_BYTES:
-                        return True
-                except OSError:
-                    continue
+        for entry in blobs_dir.iterdir():
+            try:
+                if entry.is_file() and entry.stat().st_size >= _WEIGHT_BLOB_MIN_BYTES:
+                    return True
+            except OSError:
+                continue
     except OSError:
         pass
     return False
