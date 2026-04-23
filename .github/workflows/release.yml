@@ -319,7 +319,12 @@ jobs:
 
       - name: Install Python deps
         run: |
-          python -m pip install --upgrade pip wheel setuptools
+          python -m pip install --upgrade pip wheel
+          # setuptools<81: versoes >=81 removeram pkg_resources.NullProvider,
+          # quebrando PyInstaller runtime hook pyi_rth_pkgres (AttributeError
+          # no startup do .app). Gate de smoke-test em 2026-04-23 pegou isso
+          # no CI Mac; pin explicito ate PyInstaller releases fix.
+          python -m pip install "setuptools<81"
           # macOS: wheels oficiais do pytorch sao arm64+CPU/MPS (nao tem CUDA)
           python -m pip install torch==2.8.0 torchaudio==2.8.0
           python -m pip install torchcodec==0.7.0
@@ -770,37 +775,6 @@ jobs:
           if (-not $TorchCuda) { throw "torch_cuda.dll faltando em variant=full" }
           Write-Host "  torch_cuda.dll: $($TorchCuda.FullName) ($([math]::Round($TorchCuda.Length/1MB, 0)) MB)"
 
-      - name: Frozen-bundle smoke-test (download+verify+load+transcribe REAL)
-        # Gate critico end-to-end: roda transcritorio-cli.exe FROZEN que:
-        # 1. Baixa Systran/faster-whisper-tiny real da HF (72 MB)
-        # 2. Verifica via cached_snapshot_path + _snapshot_has_weights
-        # 3. Carrega o modelo com faster_whisper
-        # 4. Transcreve 3s de silencio (dry-run)
-        # Se qualquer passo falhar, release PARA antes de publicar.
-        shell: pwsh
-        run: |
-          & "dist\Transcritorio\transcritorio-cli.exe" models smoke-test
-          if ($LASTEXITCODE -ne 0) {
-            throw "smoke-test FAIL com exit $LASTEXITCODE"
-          }
-
-      - name: Frozen-bundle cache-verify gate (fake cache, 2 variantes)
-        shell: pwsh
-        run: |
-          $FakeCache = "$env:RUNNER_TEMP\fake_hf_cache"
-          $CLI = "dist\Transcritorio\transcritorio-cli.exe"
-          Remove-Item $FakeCache -Recurse -Force -ErrorAction SilentlyContinue
-          python tests/prepare_fake_hf_cache.py "$FakeCache"
-          $env:TRANSCRITORIO_MODEL_CACHE = $FakeCache
-          & $CLI models verify
-          if ($LASTEXITCODE -ne 0) { throw "verify v1 falhou ($LASTEXITCODE)" }
-          Remove-Item $FakeCache -Recurse -Force
-          python tests/prepare_fake_hf_cache.py "$FakeCache" --force-copy
-          $env:TRANSCRITORIO_MODEL_CACHE = $FakeCache
-          & $CLI models verify
-          if ($LASTEXITCODE -ne 0) { throw "verify v2 falhou ($LASTEXITCODE)" }
-          Write-Host "OK: frozen Windows CLI valida ambas variantes"
-
       - name: Split bundle — extrai CUDA libs para cuda_pack/
         shell: pwsh
         run: |
@@ -823,6 +797,39 @@ jobs:
           $PackSize = [math]::Round(((Get-ChildItem cuda_pack -Recurse -File | Measure-Object Length -Sum).Sum / 1GB), 2)
           Write-Host "  Base bundle (CPU): $DistSize GB"
           Write-Host "  CUDA pack:         $PackSize GB"
+
+      - name: Frozen-bundle smoke-test (POS-split, CPU-only)
+        # Gate critico end-to-end: roda transcritorio-cli.exe FROZEN contra
+        # o bundle CPU-only (pos split_bundle). Faz download real (72 MB),
+        # verify, load, transcribe silencio. Se qualquer passo falhar,
+        # release PARA.
+        #
+        # Importante: roda APOS split_bundle porque o bundle CPU-only nao
+        # tenta carregar CUDA DLLs. Os runners Windows do GitHub Actions
+        # nao tem NVIDIA driver, entao torch faria load fail em cusolver64
+        # se CUDA libs ainda estivessem em dist/. Split move-as pra
+        # cuda_pack/ (usuario baixa depois).
+        shell: pwsh
+        run: |
+          & "dist\Transcritorio\transcritorio-cli.exe" models smoke-test
+          if ($LASTEXITCODE -ne 0) { throw "smoke-test FAIL $LASTEXITCODE" }
+
+      - name: Frozen-bundle cache-verify gate (fake cache, 2 variantes)
+        shell: pwsh
+        run: |
+          $FakeCache = "$env:RUNNER_TEMP\fake_hf_cache"
+          $CLI = "dist\Transcritorio\transcritorio-cli.exe"
+          Remove-Item $FakeCache -Recurse -Force -ErrorAction SilentlyContinue
+          python tests/prepare_fake_hf_cache.py "$FakeCache"
+          $env:TRANSCRITORIO_MODEL_CACHE = $FakeCache
+          & $CLI models verify
+          if ($LASTEXITCODE -ne 0) { throw "verify v1 falhou ($LASTEXITCODE)" }
+          Remove-Item $FakeCache -Recurse -Force
+          python tests/prepare_fake_hf_cache.py "$FakeCache" --force-copy
+          $env:TRANSCRITORIO_MODEL_CACHE = $FakeCache
+          & $CLI models verify
+          if ($LASTEXITCODE -ne 0) { throw "verify v2 falhou ($LASTEXITCODE)" }
+          Write-Host "OK: frozen Windows CLI valida ambas variantes"
 
       - name: Zip cuda_pack
         shell: pwsh
