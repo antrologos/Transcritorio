@@ -76,8 +76,12 @@ except Exception:
     pass
 
 # collect_submodules for heavy packages whose internal structure is complex
-# NOTE: torchvision excluded – not imported by any code in the pipeline
-for pkg in ("torch", "torchaudio"):
+# torchvision is NOT used by Transcritorio code, but pyannote.audio ->
+# lightning -> torchmetrics imports torchmetrics.functional.image.arniqa
+# eagerly, which requires torchvision. Excluding torchvision breaks the
+# whisperx import chain at runtime (CI gate "Frozen-bundle whisperx
+# import chain" caught this in v0.1.3).
+for pkg in ("torch", "torchaudio", "torchvision"):
     hidden_imports += collect_submodules(pkg)
 
 # transformers: only collect core + models actually used by whisperx/pyannote
@@ -255,8 +259,10 @@ excludes = [
     # Torch: not needed for local inference
     "caffe2",
     "triton",
-    # torchvision: not used by any code in the pipeline (verified by grep)
-    "torchvision",
+    # NB: torchvision was previously excluded — but torchmetrics.functional.image.arniqa
+    # (loaded transitively by lightning -> torchmetrics on whisperx import) imports
+    # torchvision eagerly at module load. Excluding it breaks the whole frozen chain
+    # with `ModuleNotFoundError: No module named 'torchvision'`. v0.1.3 CI gate caught.
     # PySide6: modules not used by Transcritorio (Widgets + Multimedia only)
     "PySide6.QtWebEngineCore",
     "PySide6.QtWebEngineWidgets",
@@ -439,8 +445,8 @@ if sys.platform == "darwin":
         bundle_identifier="com.antrologos.transcritorio",
         info_plist={
             "CFBundleDisplayName": "Transcritorio",
-            "CFBundleShortVersionString": "0.1.3",
-            "CFBundleVersion": "0.1.3",
+            "CFBundleShortVersionString": "0.1.4",
+            "CFBundleVersion": "0.1.4",
             "NSHighResolutionCapable": True,
             "NSMicrophoneUsageDescription": (
                 "O Transcritorio nao captura audio diretamente — trabalha com "

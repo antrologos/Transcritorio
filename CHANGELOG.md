@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.1.4 — 2026-04-24
+
+Segundo bug latente pego pelo gate CI introduzido em v0.1.3: apos resolver
+o `PackageNotFoundError: torchcodec`, o gate revelou que `whisperx` tambem
+quebrava com `ModuleNotFoundError: No module named 'torchvision'` antes de
+qualquer transcribe.
+
+### Root cause
+
+`torchmetrics.functional.image.arniqa.py:31` importa `torchvision` no topo
+do modulo. Esse arquivo e carregado eagerly via:
+```
+whisperx -> asr -> vads/pyannote -> pyannote.audio -> lightning -> torchmetrics
+```
+O spec.py de v0.1.x explicitamente excluia `torchvision` do bundle por
+ele "nao ser usado" — comentario incorreto, ele e usado transitivamente.
+
+### Fix
+
+- `packaging/transcritorio.spec`:
+  - Removido `"torchvision"` do `excludes`.
+  - Adicionado `torchvision` ao loop de `collect_submodules`.
+- `.github/workflows/release.yml`:
+  - Linux job instala `torchvision==0.23.0 --index-url whl/cpu`.
+  - Mac job instala `torchvision==0.23.0` (default arm64+CPU/MPS wheel).
+  - Windows ja tinha `torchvision==0.23.0` no install com `whl/cu128`.
+
+### Como o bug nao apareceu antes
+
+Mesmo padrao do bug torchcodec da v0.1.3: o CI nunca invocava `whisperx.exe`
+contra audio real. v0.1.3 introduziu o gate que executa o binario contra
+3s de silencio offline; foi ele que pegou os DOIS bugs em sequencia.
+
 ## 0.1.3 — 2026-04-24
 
 Correcao de bug critico em **todas as plataformas**: `whisperx.exe` crashava
