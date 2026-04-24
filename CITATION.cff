@@ -6,7 +6,7 @@ authors:
     given-names: "Rogério Jerônimo"
     affiliation: "IESP-UERJ / CERES"
     orcid: "https://orcid.org/0000-0002-6796-4547"
-version: "0.1.2"
+version: "0.1.3"
 date-released: "2026-04-24"
 license: "MIT"
 repository-code: "https://github.com/antrologos/Transcritorio"

@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.1.3 — 2026-04-24
+
+Correcao de bug critico em **todas as plataformas**: `whisperx.exe` crashava
+no primeiro transcribe com `PackageNotFoundError: torchcodec`. Bug existia
+silenciosamente desde v0.1.1 porque o CI nunca exercitou o caminho
+`whisperx.exe audio.wav` — so testava `Test-Path` do binario.
+
+### Root cause
+
+`transformers==5.5.1` em `audio_utils.py:55` faz:
+```python
+if is_torchcodec_available():
+    TORCHCODEC_VERSION = version.parse(importlib.metadata.version("torchcodec"))
+```
+
+`is_torchcodec_available()` usa `find_spec("torchcodec")` que retorna
+truthy pois o pacote Python esta no bundle. Mas o PyInstaller empacota
+os arquivos `.py` sem empacotar o `torchcodec-0.7.0.dist-info/`, entao
+`version("torchcodec")` levanta `PackageNotFoundError`. Esse caminho
+dispara assim que `whisperx` importa `alignment` (toda invocacao do
+whisperx.exe com audio real).
+
+### Fix
+
+- `packaging/transcritorio.spec` — `copy_metadata()` para 13 pacotes
+  (torchcodec + torch/torchaudio/transformers/huggingface_hub/tokenizers/
+  tqdm/regex/requests/packaging/filelock/pyyaml/numpy). Defensivo — qualquer
+  outro pacote que chame `importlib.metadata.version("<self>")` em runtime
+  estava sujeito ao mesmo bug.
+- `packaging/transcritorio.spec` — `hidden_imports` ganhou `torchcodec` +
+  `collect_submodules("torchcodec")`. Complementa o `copy_metadata`.
+- `.github/workflows/release.yml` — novo gate "Frozen-bundle whisperx
+  import chain" em Windows, Linux e Mac. Roda `whisperx` contra audio
+  real (3s silencio, modelo tiny offline). Pega este tipo de bug antes
+  da release publicar.
+
+### Como o bug passou despercebido
+
+- `transcritorio-cli.exe models smoke-test` usa `faster_whisper.WhisperModel`
+  diretamente, nao carrega `whisperx.alignment` nem `transformers.audio_utils`.
+- `whisperx.exe --help` passa porque argparse carrega antes dos imports lazy.
+- CI sempre usou `Test-Path whisperx.exe` como validacao — existe o binario,
+  mas nunca foi invocado.
+- O usuario de v0.1.1 que tenha `torchcodec` instalado via pip no sistema
+  (fora do bundle) nao via o bug, porque `find_spec` resolveria via PATH
+  do Python externo. Apenas bundles PyInstaller frozen quebravam.
+
 ## 0.1.2 — 2026-04-24
 
 Bundle Windows agora funciona **standalone** em PCs sem CUDA Toolkit.

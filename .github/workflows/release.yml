@@ -120,6 +120,19 @@ jobs:
         # verify logic, faster_whisper integration, transcribe pipeline.
         run: dist/Transcritorio/transcritorio-cli models smoke-test
 
+      - name: Frozen-bundle whisperx import chain gate
+        # Gate contra bugs de copy_metadata/hiddenimports em transformers/whisperx.
+        # `whisperx --help` passa antes dos imports lazy, entao precisamos de
+        # audio real para exercitar audio_utils.py:55 (version("torchcodec")) e
+        # toda a cadeia transformers.Wav2Vec2ForCTC -> torchaudio.
+        # Bug historico v0.1.1/v0.1.2: PackageNotFoundError: torchcodec.
+        run: |
+          set -e
+          python -c "import wave; w=wave.open('silence.wav','wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000); w.writeframes(b'\0' * (16000 * 3 * 2)); w.close()"
+          TINY_CACHE="$HOME/.local/share/Transcritorio/models/huggingface"
+          mkdir -p "$TINY_CACHE"
+          dist/Transcritorio/whisperx silence.wav --model tiny --device cpu --compute_type int8 --no_align --language pt --output_dir wx_out --model_dir "$TINY_CACHE" --model_cache_only True
+
       - name: Frozen-bundle cache-verify gate (fake cache, 2 variantes)
         # Complementa o smoke-test: roda verify contra caches fake com
         # symlink E copy variants, pra validar o check de cache em ambos
@@ -393,6 +406,16 @@ jobs:
 
       - name: Frozen-bundle smoke-test (download+verify+load+transcribe REAL)
         run: dist/Transcritorio.app/Contents/MacOS/transcritorio-cli models smoke-test
+
+      - name: Frozen-bundle whisperx import chain gate
+        # Gate contra bugs de copy_metadata/hiddenimports em transformers/whisperx.
+        # Bug historico v0.1.1/v0.1.2: PackageNotFoundError: torchcodec.
+        run: |
+          set -e
+          python -c "import wave; w=wave.open('silence.wav','wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000); w.writeframes(b'\0' * (16000 * 3 * 2)); w.close()"
+          TINY_CACHE="$HOME/Library/Application Support/Transcritorio/models/huggingface"
+          mkdir -p "$TINY_CACHE"
+          dist/Transcritorio.app/Contents/MacOS/whisperx silence.wav --model tiny --device cpu --compute_type int8 --no_align --language pt --output_dir wx_out --model_dir "$TINY_CACHE" --model_cache_only True
 
       - name: Frozen-bundle cache-verify gate (fake cache, 2 variantes)
         run: |
@@ -817,6 +840,19 @@ jobs:
         run: |
           & "dist\Transcritorio\transcritorio-cli.exe" models smoke-test
           if ($LASTEXITCODE -ne 0) { throw "smoke-test FAIL $LASTEXITCODE" }
+
+      - name: Frozen-bundle whisperx.exe import chain gate
+        # Gate contra bugs de copy_metadata/hiddenimports em transformers/whisperx.
+        # `whisperx.exe --help` passa antes dos imports lazy, entao precisamos
+        # de audio real para exercitar audio_utils.py:55 (version("torchcodec"))
+        # e toda a cadeia transformers.Wav2Vec2ForCTC -> torchaudio.
+        # Bug historico v0.1.1/v0.1.2: PackageNotFoundError: torchcodec.
+        shell: pwsh
+        run: |
+          python -c "import wave; w=wave.open('silence.wav','wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000); w.writeframes(b'\0' * (16000 * 3 * 2)); w.close()"
+          $TinyCache = "$env:LOCALAPPDATA\Transcritorio\models\huggingface"
+          & "dist\Transcritorio\whisperx.exe" silence.wav --model tiny --device cpu --compute_type int8 --no_align --language pt --output_dir wx_out --model_dir $TinyCache --model_cache_only True
+          if ($LASTEXITCODE -ne 0) { throw "whisperx.exe FAIL exit $LASTEXITCODE — provavel PackageNotFoundError ou import error" }
 
       - name: Frozen-bundle cache-verify gate (fake cache, 2 variantes)
         shell: pwsh

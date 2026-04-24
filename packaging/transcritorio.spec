@@ -14,7 +14,7 @@ import os
 import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
 
 # ---------------------------------------------------------------------------
 # Paths — use env var if set by build.ps1 (avoids SPECPATH ambiguity)
@@ -67,7 +67,13 @@ hidden_imports = [
     # Other pyannote dependencies
     "asteroid_filterbanks",
     "speechbrain",
+    # torchcodec: importado lazy por pyannote.audio.core.io e transformers
+    "torchcodec",
 ]
+try:
+    hidden_imports += collect_submodules("torchcodec")
+except Exception:
+    pass
 
 # collect_submodules for heavy packages whose internal structure is complex
 # NOTE: torchvision excluded – not imported by any code in the pipeline
@@ -115,6 +121,34 @@ datas = [
     # Application assets (icon SVG, etc.)
     (str(ASSETS_DIR), "assets"),
 ]
+
+# copy_metadata: forca a inclusao de <pkg>-*.dist-info no bundle.
+# Necessario porque transformers/audio_utils.py faz
+# importlib.metadata.version("torchcodec") na hora de importar o modulo
+# quando is_torchcodec_available() retorna True. Sem dist-info, o frozen
+# bundle crasha com PackageNotFoundError antes de qualquer fallback.
+# Outros pacotes listados aqui tambem consultam a propria versao via
+# importlib.metadata.version("<pkg>") — defensivo para evitar o mesmo
+# PackageNotFoundError em caminhos menos testados.
+for _meta_pkg in (
+    "torchcodec",        # transformers.audio_utils:55 queries it unconditionally
+    "torch",
+    "torchaudio",
+    "transformers",
+    "huggingface_hub",
+    "tokenizers",
+    "tqdm",
+    "regex",
+    "requests",
+    "packaging",
+    "filelock",
+    "pyyaml",
+    "numpy",
+):
+    try:
+        datas += copy_metadata(_meta_pkg)
+    except Exception as _exc:
+        print(f"WARNING: copy_metadata({_meta_pkg!r}) falhou: {_exc}")
 
 # Collect data files that packages need at runtime (configs, YAML, etc.)
 # NOTE: "torch" is NOT listed here — the pyinstaller-hooks-contrib hook-torch.py
@@ -405,8 +439,8 @@ if sys.platform == "darwin":
         bundle_identifier="com.antrologos.transcritorio",
         info_plist={
             "CFBundleDisplayName": "Transcritorio",
-            "CFBundleShortVersionString": "0.1.2",
-            "CFBundleVersion": "0.1.2",
+            "CFBundleShortVersionString": "0.1.3",
+            "CFBundleVersion": "0.1.3",
             "NSHighResolutionCapable": True,
             "NSMicrophoneUsageDescription": (
                 "O Transcritorio nao captura audio diretamente — trabalha com "
