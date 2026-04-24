@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.1.2 — 2026-04-24
+
+Bundle Windows agora funciona **standalone** em PCs sem CUDA Toolkit.
+Plataformas Mac e Linux inalteradas no comportamento (torch+cpu wheel
+ja resolvia). Tamanho do Windows installer subiu de 596 MB para 1.63 GB
+como trade-off pela robustez — v0.1.1 dependia silenciosamente do
+CUDA Toolkit instalado pelo usuario e falhava em PCs sem ele.
+
+### Split CPU/CUDA preciso
+
+- `packaging/bundle_filter.py` — lista `CPU_EXTRA` agora mapeia
+  **exatamente** as 14 DLLs CUDA que o torch cu128 carrega sob demanda
+  via dlopen (cudnn_ops/adv/cnn/engines_*/graph/heuristic, nvrtc*,
+  curand, cusolverMg, cufftw, caffe2_nvrtc). A lista `MINIMAL` e vazia
+  — `variant=full` preserva todas as 25 CUDA DLLs para o split_bundle
+  ter o que rotear ao `cuda_pack`.
+- `packaging/transcritorio.spec` — coleta **explicita** das 14 DLLs
+  lazy-load via `binaries`. O hook-torch do PyInstaller so pega
+  imports IAT; sem essa adicao as lazy-load nunca chegam ao bundle.
+- `transcribe_pipeline/runtime.py` — `cuda_libs_present()` usa
+  `cudnn_ops64_9.dll` como canario do cuda_pack instalado (antes era
+  `torch_cuda.dll`, que agora fica sempre no bundle base por ser IAT).
+  `detect_device()` em Windows exige `cuda_libs_present()` alem de
+  `torch.cuda.is_available()` — evita crash `cudnn_graph64_9.dll not
+  found` em Conv/LSTM quando o usuario NVIDIA ainda nao baixou o
+  cuda_pack.
+
+### Por que o bundle Windows cresceu
+
+Versoes 0.1.x anteriores strippavam `cufft64`, `cusparse64` e
+`nvJitLink` do bundle — essas 3 sao **imports IAT** de
+`torch_cpu.dll`/`torch.dll` em torch cu128. `import torch` falha com
+`OSError [WinError 126]` sem elas. v0.1.1 "funcionava" so em PCs que
+tinham CUDA Toolkit instalado em `C:\Program Files\NVIDIA GPU
+Computing Toolkit` resolvendo via PATH. Em PCs sem CUDA Toolkit o
+bundle crashava silenciosamente no primeiro `import torch`.
+
+v0.1.2 preserva as 11 CUDA DLLs IAT obrigatorias no bundle base. As
+14 lazy-load vao para o `cuda_pack` separado (download-on-demand a
+partir do dialog "Detectamos placa NVIDIA" no primeiro launch).
+
+### Artefatos
+
+| Sistema | Arquivo | Tamanho |
+|---|---|---|
+| Windows 10/11 | `Transcritorio-0.1.2-Setup.exe` | ~1.63 GB |
+| Windows CUDA pack | `transcritorio-cuda-pack-0.1.2-win64.zip` | ~890 MB |
+| macOS arm64 | `Transcritorio.dmg` | ~600 MB |
+| Linux x86_64 | `Transcritorio-x86_64.AppImage` | ~771 MB |
+
 ## 0.1.1 — 2026-04-20
 
 Primeira versao com distribuicao cross-plataforma automatica via GitHub
