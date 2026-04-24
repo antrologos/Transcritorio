@@ -55,16 +55,21 @@ def _install_fake_torch(cuda: bool, mps: bool) -> None:
         mps=types.SimpleNamespace(is_available=lambda: mps)
     )
     sys.modules["torch"] = fake
+    # 2026-04-23: detect_device() no Windows exige cuda_libs_present()
+    # alem de cuda.is_available(). Seta o cache diretamente aqui.
+    runtime._cuda_libs_detected = cuda
 
 
 def _clear_torch() -> None:
     sys.modules.pop("torch", None)
+    runtime._cuda_libs_detected = None
 
 
 from transcribe_pipeline import runtime  # noqa: E402
 
 # Cuda branch
 runtime._detected_device = None
+runtime._cuda_libs_detected = None
 _install_fake_torch(cuda=True, mps=False)
 try:
     assert runtime.detect_device() == "cuda"
@@ -121,6 +126,7 @@ fake.backends = types.SimpleNamespace(
 )
 sys.modules["torch"] = fake
 runtime._detected_device = None
+runtime._cuda_libs_detected = True  # guard Win32 em detect_device()
 try:
     runtime.detect_device()
     runtime.detect_device()
