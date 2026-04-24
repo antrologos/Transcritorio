@@ -171,6 +171,40 @@ if VENDOR_FFMPEG_BIN.exists():
         if f.is_file():
             binaries.append((str(f), "vendor/ffmpeg/bin"))
 
+# -----------------------------------------------------------------------
+# Lazy-load CUDA DLLs (Windows cu128 only) — 2026-04-23
+# PyInstaller hook-torch collects only IAT imports; the 14 DLLs that
+# torch loads via dlopen (cudnn engines, nvrtc, caffe2_nvrtc, curand,
+# cufftw, cusolverMg) are invisible to static analysis. Add them
+# explicitly so:
+#   1. variant=full bundle is complete (GPU Conv/LSTM work)
+#   2. variant=cpu + split_bundle moves them to cuda_pack for on-demand
+#      download (keeps base bundle small while GPU users still get them)
+# -----------------------------------------------------------------------
+if sys.platform == "win32":
+    _LAZY_CUDA_DLLS = [
+        "cudnn_adv64_9.dll", "cudnn_cnn64_9.dll",
+        "cudnn_engines_precompiled64_9.dll",
+        "cudnn_engines_runtime_compiled64_9.dll",
+        "cudnn_graph64_9.dll", "cudnn_heuristic64_9.dll",
+        "cudnn_ops64_9.dll",
+        "caffe2_nvrtc.dll",
+        "cufftw64_11.dll", "curand64_10.dll", "cusolverMg64_11.dll",
+        "nvrtc-builtins64_128.dll", "nvrtc64_120_0.alt.dll", "nvrtc64_120_0.dll",
+    ]
+    try:
+        import torch as _torch_probe
+        _torch_lib = Path(_torch_probe.__file__).resolve().parent / "lib"
+        _found = 0
+        for _name in _LAZY_CUDA_DLLS:
+            _p = _torch_lib / _name
+            if _p.exists():
+                binaries.append((str(_p), "torch/lib"))
+                _found += 1
+        print(f"=== Lazy-load CUDA DLLs collected: {_found}/{len(_LAZY_CUDA_DLLS)} ===")
+    except Exception as _exc:
+        print(f"WARNING: lazy-load CUDA DLLs collection failed: {_exc}")
+
 # ---------------------------------------------------------------------------
 # Excludes  (reduce bundle size)
 # ---------------------------------------------------------------------------

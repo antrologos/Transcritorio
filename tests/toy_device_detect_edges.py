@@ -119,6 +119,8 @@ def test_detect_device_cache_consistent_across_calls() -> None:
         mps=types.SimpleNamespace(is_available=lambda: False)
     )
     sys.modules["torch"] = fake
+    # 2026-04-23: no Windows detect_device exige cuda_libs_present tambem.
+    runtime._cuda_libs_detected = True
     try:
         first = runtime.detect_device()
         assert first == "cuda"

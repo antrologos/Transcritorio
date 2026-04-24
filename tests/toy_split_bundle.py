@@ -32,75 +32,82 @@ def _make_file(path: Path, size: int = 1024) -> None:
 
 
 def test_split_windows_bundle() -> None:
+    """2026-04-23: split separa APENAS as 14 DLLs CUDA lazy-load.
+    torch_cuda/cudnn64/cublas/c10_cuda sao IAT obrigatorias, ficam no base."""
     with tempfile.TemporaryDirectory() as tmp:
         dist = Path(tmp) / "Transcritorio"
-        # Bundle files (variant=full produz isso)
         _make_file(dist / "Transcritorio.exe", 1_000_000)
         _make_file(dist / "transcritorio-cli.exe", 500_000)
-        _make_file(dist / "_internal" / "torch" / "lib" / "torch_cuda.dll", 1_000_000_000)  # 1 GB
+        # 11 IAT obrigatorias — ficam no base
+        _make_file(dist / "_internal" / "torch" / "lib" / "torch_cuda.dll", 1_000_000_000)
         _make_file(dist / "_internal" / "torch" / "lib" / "torch_cpu.dll", 245_000_000)
-        _make_file(dist / "_internal" / "torch" / "lib" / "cudnn64_9.dll", 50_000_000)
-        _make_file(dist / "_internal" / "torch" / "lib" / "cudnn_ops64_9.dll", 120_000_000)
+        _make_file(dist / "_internal" / "torch" / "lib" / "cudnn64_9.dll", 300_000)  # loader, pequeno
         _make_file(dist / "_internal" / "torch" / "lib" / "cublas64_12.dll", 109_000_000)
-        _make_file(dist / "_internal" / "torch" / "lib" / "c10.dll", 5_000)  # NAO e _cuda
-        _make_file(dist / "_internal" / "torch" / "lib" / "c10_cuda.dll", 5_000)  # E
+        _make_file(dist / "_internal" / "torch" / "lib" / "c10.dll", 5_000)
+        _make_file(dist / "_internal" / "torch" / "lib" / "c10_cuda.dll", 5_000)  # IAT obrig
+        # 3 lazy-load exclusivas de 'cpu' (MINIMAL ja removeria curand em full,
+        # split_bundle pula essas — elas nunca chegam ao bundle full pra splitar)
+        _make_file(dist / "_internal" / "torch" / "lib" / "cudnn_ops64_9.dll", 120_000_000)
+        _make_file(dist / "_internal" / "torch" / "lib" / "cudnn_adv64_9.dll", 270_000_000)
+        _make_file(dist / "_internal" / "torch" / "lib" / "cudnn_graph64_9.dll", 2_500_000)
         _make_file(dist / "_internal" / "config.json", 100)
 
         pack = Path(tmp) / "cuda_pack"
         count, total = split_bundle(dist, pack)
 
-        # Deve ter movido: torch_cuda, cudnn64, cudnn_ops64, cublas64, c10_cuda = 5 arquivos
-        assert count == 5, f"esperado 5 arquivos, got {count}"
-        # Total aproximado: 1G + 50M + 120M + 109M + 5K = ~1.28 GB
-        assert total > 1_200_000_000, f"total muito baixo: {total} bytes"
+        # Deve ter movido as 3 lazy-load (exclusivas variant=cpu)
+        assert count == 3, f"esperado 3 arquivos (lazy-load), got {count}"
+        assert total > 380_000_000, f"total muito baixo: {total} bytes"
 
-        # Arquivos que DEVEM estar em dist/ (nao movidos)
+        # IAT obrigatorias continuam em dist/
         assert (dist / "Transcritorio.exe").exists()
-        assert (dist / "transcritorio-cli.exe").exists()
+        assert (dist / "_internal" / "torch" / "lib" / "torch_cuda.dll").exists()
         assert (dist / "_internal" / "torch" / "lib" / "torch_cpu.dll").exists()
-        assert (dist / "_internal" / "torch" / "lib" / "c10.dll").exists()  # sem _cuda
+        assert (dist / "_internal" / "torch" / "lib" / "cudnn64_9.dll").exists()
+        assert (dist / "_internal" / "torch" / "lib" / "cublas64_12.dll").exists()
+        assert (dist / "_internal" / "torch" / "lib" / "c10_cuda.dll").exists()
+        assert (dist / "_internal" / "torch" / "lib" / "c10.dll").exists()
         assert (dist / "_internal" / "config.json").exists()
 
-        # Arquivos que DEVEM estar em pack/ (movidos)
-        assert (pack / "_internal" / "torch" / "lib" / "torch_cuda.dll").exists()
-        assert (pack / "_internal" / "torch" / "lib" / "cudnn64_9.dll").exists()
+        # Lazy-load movidas pro pack
         assert (pack / "_internal" / "torch" / "lib" / "cudnn_ops64_9.dll").exists()
-        assert (pack / "_internal" / "torch" / "lib" / "cublas64_12.dll").exists()
-        assert (pack / "_internal" / "torch" / "lib" / "c10_cuda.dll").exists()
+        assert (pack / "_internal" / "torch" / "lib" / "cudnn_adv64_9.dll").exists()
+        assert (pack / "_internal" / "torch" / "lib" / "cudnn_graph64_9.dll").exists()
+        assert not (dist / "_internal" / "torch" / "lib" / "cudnn_ops64_9.dll").exists()
 
-        # Os originais nao devem mais estar em dist/
-        assert not (dist / "_internal" / "torch" / "lib" / "torch_cuda.dll").exists()
-        assert not (dist / "_internal" / "torch" / "lib" / "cudnn64_9.dll").exists()
-
-        # Manifest existe e tem os 5 paths
         manifest = (pack / "FILES.manifest").read_text(encoding="utf-8").strip().split("\n")
-        assert len(manifest) == 5, f"manifest deveria ter 5 linhas, got {len(manifest)}: {manifest}"
-        # Usa forward slashes
+        assert len(manifest) == 3, f"manifest deveria ter 3 linhas, got {len(manifest)}: {manifest}"
         assert all("/" in line for line in manifest), f"manifest deveria usar /, got: {manifest}"
-        assert "_internal/torch/lib/torch_cuda.dll" in manifest
+        assert "_internal/torch/lib/cudnn_ops64_9.dll" in manifest
 
-        print(f"PASS split_bundle: {count} arquivos ({total/1024/1024:.0f} MB) -> cuda_pack/")
+        print(f"PASS split_bundle: {count} lazy-load movidas ({total/1024/1024:.0f} MB) -> cuda_pack/")
 
 
 def test_split_linux_bundle() -> None:
-    """Bundle Linux (PyInstaller produz libtorch_cuda.so no lugar de .dll)."""
+    """Bundle Linux: PyInstaller produz libtorch_cuda.so + libcudnn_ops.so.
+    2026-04-23: libtorch_cuda.so e IAT obrigatoria; split so libcudnn_ops.so."""
     with tempfile.TemporaryDirectory() as tmp:
         dist = Path(tmp) / "Transcritorio"
-        _make_file(dist / "Transcritorio", 1_000_000)  # exec Linux sem .exe
+        _make_file(dist / "Transcritorio", 1_000_000)
+        # IAT obrigatorias — ficam no base
         _make_file(dist / "_internal" / "torch" / "lib" / "libtorch_cuda.so", 980_000_000)
         _make_file(dist / "_internal" / "torch" / "lib" / "libtorch_cpu.so", 245_000_000)
-        _make_file(dist / "_internal" / "torch" / "lib" / "libcudnn.so.9", 180_000_000)
+        _make_file(dist / "_internal" / "torch" / "lib" / "libcudnn.so.9", 300_000)
         _make_file(dist / "_internal" / "torch" / "lib" / "libc10.so", 5_000)
+        # lazy-load — vai pro pack
+        _make_file(dist / "_internal" / "torch" / "lib" / "libcudnn_ops.so.9", 120_000_000)
 
         pack = Path(tmp) / "cuda_pack"
         count, total = split_bundle(dist, pack)
 
-        assert count == 2, f"esperado 2 arquivos Linux CUDA, got {count}"
-        assert (pack / "_internal" / "torch" / "lib" / "libtorch_cuda.so").exists()
-        assert (pack / "_internal" / "torch" / "lib" / "libcudnn.so.9").exists()
+        assert count == 1, f"esperado 1 arquivo Linux lazy-load, got {count}"
+        assert (pack / "_internal" / "torch" / "lib" / "libcudnn_ops.so.9").exists()
+        # IAT obrigatorias preservadas
+        assert (dist / "_internal" / "torch" / "lib" / "libtorch_cuda.so").exists()
+        assert (dist / "_internal" / "torch" / "lib" / "libcudnn.so.9").exists()
         assert (dist / "_internal" / "torch" / "lib" / "libtorch_cpu.so").exists()
         assert (dist / "_internal" / "torch" / "lib" / "libc10.so").exists()
-        print(f"PASS split_bundle Linux: {count} arquivos .so movidos")
+        print(f"PASS split_bundle Linux: {count} arquivo lazy-load movido")
 
 
 def test_split_empty_bundle() -> None:
@@ -126,15 +133,18 @@ def test_split_empty_bundle() -> None:
 
 def test_round_trip_via_overlay() -> None:
     """Apos split + copiar pack_dir sobre dist/, o bundle deve ser
-    identico ao original (round-trip)."""
+    identico ao original (round-trip). 2026-04-23: precisa ter pelo menos
+    uma lazy-load DLL no exemplo (so essas sao splittadas)."""
     import shutil
     with tempfile.TemporaryDirectory() as tmp:
         dist = Path(tmp) / "Transcritorio"
         original_files = {
             "Transcritorio.exe": b"A" * 1000,
-            "_internal/torch/lib/torch_cuda.dll": b"B" * 2000,
-            "_internal/torch/lib/torch_cpu.dll": b"C" * 3000,
-            "_internal/torch/lib/cudnn64_9.dll": b"D" * 1500,
+            "_internal/torch/lib/torch_cuda.dll": b"B" * 2000,      # IAT — fica
+            "_internal/torch/lib/torch_cpu.dll": b"C" * 3000,        # fica
+            "_internal/torch/lib/cudnn64_9.dll": b"D" * 1500,        # IAT — fica
+            "_internal/torch/lib/cudnn_ops64_9.dll": b"E" * 2500,    # lazy — vai pro pack
+            "_internal/torch/lib/cudnn_adv64_9.dll": b"F" * 2000,    # lazy — vai pro pack
             "_internal/config.json": b"{}",
         }
         for rel, content in original_files.items():

@@ -1,9 +1,11 @@
 """Toy test: runtime.cuda_libs_present()
 
 Valida:
-- Retorna True quando torch_cuda.dll (Windows) / libtorch_cuda.so (Linux) /
-  libtorch_cuda.dylib (Mac) existe em torch.lib/
-- Retorna False quando a lib esta ausente (simulando bundle CPU-only)
+- Retorna True quando cudnn_ops64_9.dll (canario do cuda_pack) esta presente
+  no torch.lib/ — Windows (2026-04-23: canario trocado de torch_cuda para
+  cudnn_ops pois torch_cuda fica no bundle base por ser IAT obrigatoria).
+  Linux usa libcudnn_ops.so e Mac libcudnn_ops.dylib para consistencia.
+- Retorna False quando a lib esta ausente (bundle base sem cuda_pack)
 - Retorna False se torch nao importa (sem crash)
 - Cacheia o resultado (chamadas subsequentes nao reavaliam)
 """
@@ -37,22 +39,23 @@ def _clear_fake_torch() -> None:
     sys.modules.pop("torch", None)
 
 
-def test_present_when_torch_cuda_dll_exists() -> None:
+def test_present_when_cudnn_ops_exists() -> None:
     _reset_cache()
     with tempfile.TemporaryDirectory() as tmp:
         libdir = Path(tmp) / "torch" / "lib"
         libdir.mkdir(parents=True)
-        # Cria um stub de torch_cuda com nome do OS corrente
+        # Canario: cudnn_ops e uma das 14 DLLs lazy-load que ficam no
+        # cuda_pack; presenca indica cuda_pack instalado.
         if sys.platform == "win32":
-            (libdir / "torch_cuda.dll").write_bytes(b"fake")
+            (libdir / "cudnn_ops64_9.dll").write_bytes(b"fake")
         elif sys.platform == "darwin":
-            (libdir / "libtorch_cuda.dylib").write_bytes(b"fake")
+            (libdir / "libcudnn_ops.dylib").write_bytes(b"fake")
         else:
-            (libdir / "libtorch_cuda.so").write_bytes(b"fake")
+            (libdir / "libcudnn_ops.so").write_bytes(b"fake")
         _install_fake_torch_with_libdir(libdir)
         try:
             assert runtime.cuda_libs_present() is True
-            print("PASS cuda_libs_present: True quando torch_cuda.* existe")
+            print("PASS cuda_libs_present: True quando cudnn_ops canario existe")
         finally:
             _clear_fake_torch()
             _reset_cache()
@@ -63,15 +66,19 @@ def test_absent_when_lib_missing() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         libdir = Path(tmp) / "torch" / "lib"
         libdir.mkdir(parents=True)
-        # Cria so o torch_cpu, sem torch_cuda
+        # Bundle base: tem torch_cpu e as 11 CUDA IAT obrigatorias, mas NAO
+        # tem cudnn_ops (canario do cuda_pack). Deve retornar False.
         if sys.platform == "win32":
             (libdir / "torch_cpu.dll").write_bytes(b"fake")
+            (libdir / "torch_cuda.dll").write_bytes(b"fake")  # IAT obrig, presente
+            (libdir / "cudnn64_9.dll").write_bytes(b"fake")   # IAT obrig, loader
         else:
             (libdir / "libtorch_cpu.so").write_bytes(b"fake")
+            (libdir / "libtorch_cuda.so").write_bytes(b"fake")
         _install_fake_torch_with_libdir(libdir)
         try:
             assert runtime.cuda_libs_present() is False
-            print("PASS cuda_libs_present: False quando torch_cuda.* ausente (bundle CPU)")
+            print("PASS cuda_libs_present: False quando cudnn_ops ausente (bundle base, sem cuda_pack)")
         finally:
             _clear_fake_torch()
             _reset_cache()
@@ -119,11 +126,11 @@ def test_cache() -> None:
         libdir = Path(tmp) / "torch" / "lib"
         libdir.mkdir(parents=True)
         if sys.platform == "win32":
-            (libdir / "torch_cuda.dll").write_bytes(b"fake")
+            (libdir / "cudnn_ops64_9.dll").write_bytes(b"fake")
         elif sys.platform == "darwin":
-            (libdir / "libtorch_cuda.dylib").write_bytes(b"fake")
+            (libdir / "libcudnn_ops.dylib").write_bytes(b"fake")
         else:
-            (libdir / "libtorch_cuda.so").write_bytes(b"fake")
+            (libdir / "libcudnn_ops.so").write_bytes(b"fake")
         _install_fake_torch_with_libdir(libdir)
         try:
             first = runtime.cuda_libs_present()
@@ -139,7 +146,7 @@ def test_cache() -> None:
 
 
 if __name__ == "__main__":
-    test_present_when_torch_cuda_dll_exists()
+    test_present_when_cudnn_ops_exists()
     test_absent_when_lib_missing()
     test_absent_when_torch_not_importable()
     test_absent_when_torch_import_fails()

@@ -25,34 +25,56 @@ FILE_EXCLUDE_PATTERNS = frozenset({"*.lib", "*.h", "*.hpp", "*.cuh", "*.cpp", "*
 # CUDA DLLs: duas listas segundo o variant.
 # ---------------------------------------------------------------------------
 
-# MINIMAL (variant='full' — comportamento atual): remove DLLs CUDA
-# redundantes/desnecessarias para inference-only. Preserva torch_cuda,
-# cudnn e cublas que sao usados pela aceleracao real.
-CUDA_DLL_EXCLUDES_MINIMAL = [
-    "cusolverMg64",     # multi-GPU solver — laptop tem 1 GPU
-    "cusparse64",       # sparse linalg — Whisper/pyannote usam dense
-    "cufft64",          # FFT — feito pelo FFmpeg, nao pelo CUDA
-    "cufftw64",
-    "curand64",         # random nums — deterministico em inference
-    "nvrtc64_120_0.alt",  # runtime compiler alternativo — torch.compile nao usado
-    "nvJitLink",        # JIT linker — sem kernels customizados
-]
-
-# CPU-ONLY (variant='cpu'): remove TODO o stack CUDA — torch_cuda
-# (~982 MB Windows, ~similar Linux), cudnn* (~180 MB), cublas*,
-# c10_cuda, cudart, nvrtc. Total removido: ~3 GB.
+# MINIMAL (variant='full'): vazia em 2026-04-23.
 #
-# Prefixos sao cross-plataforma: _shared_lib_stem() strippa o 'lib'
-# prefix do Linux e o sufixo versionado (.so, .so.N, .dylib, .dll),
-# entao 'cudnn' matches Windows 'cudnn64_9.dll' E Linux 'libcudnn.so.9'.
+# Antes listava cusolverMg64/cufftw64/curand64/nvrtc64.alt para strippar
+# sempre. Mas o spec.py agora adiciona explicitamente as 14 DLLs lazy-load
+# para o bundle (via binaries list) de modo que split_bundle possa rotear
+# TODAS para cuda_pack. Se MINIMAL strippar 4 dessas 14 em variant=full,
+# o cuda_pack fica incompleto e GPU inference quebra parcialmente.
+#
+# Semantica: variant=full produz bundle completo (nada CUDA removido);
+# variant=cpu remove as 14 lazy-load (CPU_EXTRA); split_bundle em CI
+# assume que build foi variant=full e usa `_exclude(variant=cpu)` para
+# decidir o que mover pro cuda_pack.
+CUDA_DLL_EXCLUDES_MINIMAL: list[str] = []
+
+# CPU-ONLY (variant='cpu'): remove APENAS as 14 DLLs CUDA que o torch
+# cu128 carrega sob demanda via dlopen (nao via IAT). Descoberto
+# empiricamente em 2026-04-23 analisando os imports PE com pefile:
+# `torch_cpu.dll`, `torch.dll` e `shm.dll` tem 11 DLLs CUDA no IAT
+# (torch_cuda, cublas, cublasLt, cusparse, cufft, cusolver, cudnn64,
+# cupti, cudart, c10_cuda, nvJitLink). Elas SAO obrigatorias — sem
+# elas `import torch` falha com OSError [WinError 126].
+#
+# As 14 listadas aqui sao lazy-loaded: cudnn_ops/cnn/adv/engines_*/
+# heuristic/graph (pelo cudnn64_9.dll quando chamam conv/lstm),
+# nvrtc/nvrtc-builtins (torch.compile), curand (CUDA RNG),
+# cusolverMg (multi-GPU), cufftw (FFTW wrapper), caffe2_nvrtc.
+# Remover so essas economiza ~1.3 GB e mantem `import torch` funcional.
+# cuda_pack on-demand traz essas 14 de volta quando o usuario ativa GPU.
+#
+# IMPORTANTE: os prefixos sao exatos pra evitar colisoes. "cudnn" puro
+# casaria com cudnn64_9.dll (obrigatoria) — por isso listamos cudnn_*
+# com underscore. "cublas" puro casaria com cublas64_12 (obrigatoria).
+# cross-plataforma: _shared_lib_stem() strippa prefixo 'lib' do Linux.
 CUDA_DLL_EXCLUDES_CPU_EXTRA = [
-    "torch_cuda",        # Win: torch_cuda.dll  Linux: libtorch_cuda.so
-    "cudnn",             # cudnn*, cudnn_adv*, cudnn_ops*, cudnn_graph*, etc.
-    "cublas",            # cublas*, cublasLt*  (cublaslt via lowercase)
-    "caffe2_nvrtc",
-    "c10_cuda",
-    "cudart",
-    "nvrtc",             # nvrtc*, nvrtc-builtins* (era em MINIMAL tambem)
+    # cuDNN engines (dlopen pelo cudnn64_9.dll — ~960 MB juntos)
+    "cudnn_adv",              # advanced ops
+    "cudnn_cnn",              # CNN kernels
+    "cudnn_engines_precompiled",  # 490 MB — maior single file
+    "cudnn_engines_runtime_compiled",
+    "cudnn_graph",
+    "cudnn_heuristic",
+    "cudnn_ops",              # CANARIO do cuda_pack instalado (120 MB)
+    # Outras dlopen
+    "caffe2_nvrtc",           # CTranslate2 NVRTC wrapper
+    "cufftw",                 # FFTW wrapper (cufft puro e obrigatoria)
+    "curand",                 # CUDA RNG (CPU RNG usa CPU; nao obrigatorio)
+    "cusolvermg",             # multi-GPU solver (laptop so tem 1 GPU)
+    "nvrtc-builtins",         # NVRTC builtins
+    "nvrtc64_120_0.alt",      # NVRTC alt compiler (prefixo mais especifico primeiro)
+    "nvrtc64_120_0",          # NVRTC compiler (~82 MB, torch.compile only)
 ]
 
 # ---------------------------------------------------------------------------

@@ -783,13 +783,17 @@ jobs:
           # base resultante roda em CPU; os arquivos em cuda_pack/ podem
           # ser redundantemente copiados para restaurar a aceleracao.
           python packaging/split_bundle.py dist/Transcritorio cuda_pack
-          # Validacao rapida
+          # Validacao rapida — 2026-04-23: torch_cuda.dll e IAT obrigatoria,
+          # fica no base. Canario do split e cudnn_ops64_9.dll (lazy-load).
           if (-not (Test-Path "cuda_pack/FILES.manifest")) { throw "split: manifest nao gerado" }
-          if (Test-Path "dist/Transcritorio/_internal/torch/lib/torch_cuda.dll") {
-            throw "split: torch_cuda.dll ainda no dist/ (deveria ter movido)"
+          if (-not (Test-Path "dist/Transcritorio/_internal/torch/lib/torch_cuda.dll")) {
+            throw "split: torch_cuda.dll sumiu do dist/ (e IAT, deveria ter ficado)"
           }
-          if (-not (Test-Path "cuda_pack/_internal/torch/lib/torch_cuda.dll")) {
-            throw "split: torch_cuda.dll NAO apareceu em cuda_pack/"
+          if (Test-Path "dist/Transcritorio/_internal/torch/lib/cudnn_ops64_9.dll") {
+            throw "split: cudnn_ops64_9.dll ainda no dist/ (deveria ter movido)"
+          }
+          if (-not (Test-Path "cuda_pack/_internal/torch/lib/cudnn_ops64_9.dll")) {
+            throw "split: cudnn_ops64_9.dll NAO apareceu em cuda_pack/"
           }
           $ManifestLines = (Get-Content "cuda_pack/FILES.manifest" | Measure-Object -Line).Lines
           Write-Host "  split: $ManifestLines arquivos movidos"

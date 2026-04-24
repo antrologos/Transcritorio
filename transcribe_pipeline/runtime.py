@@ -182,13 +182,16 @@ def has_nvidia_gpu() -> bool:
 
 
 def cuda_libs_present() -> bool:
-    """Check if the CUDA runtime libraries are bundled alongside torch.
+    """Check if the cuda_pack (GPU acceleration pack) is installed.
 
-    Returns True when torch/lib/ has torch_cuda.* (the ~1 GB shared lib
-    providing CUDA kernels). In the 'cpu' bundle variant this file is
-    stripped and the app is CPU-only even on NVIDIA machines; callers
-    can use this to decide whether to offer a "download CUDA pack" flow
-    in the first-run dialog.
+    Uses `cudnn_ops64_9.dll` (Windows) as a canary: it is one of the 14
+    CUDA DLLs that the 'cpu' bundle variant strips and the cuda_pack
+    ships back. Presence = cuda_pack was extracted over the bundle;
+    absence = base bundle only, GPU inference will crash on Conv/LSTM.
+
+    2026-04-23: switched from torch_cuda.dll to cudnn_ops64_9.dll because
+    torch_cuda.dll IS an IAT dependency of torch core and must stay in
+    the base bundle (removing it breaks `import torch`).
 
     Returns False if torch is not importable or torch.__file__ is missing.
     Result is cached on the first call.
@@ -204,11 +207,11 @@ def cuda_libs_present() -> bool:
             return _cuda_libs_detected
         lib_dir = Path(torch_file).parent / "lib"
         if sys.platform == "win32":
-            candidates = [lib_dir / "torch_cuda.dll"]
+            candidates = [lib_dir / "cudnn_ops64_9.dll"]
         elif sys.platform == "darwin":
-            candidates = [lib_dir / "libtorch_cuda.dylib"]
+            candidates = [lib_dir / "libcudnn_ops.dylib"]
         else:
-            candidates = [lib_dir / "libtorch_cuda.so"]
+            candidates = [lib_dir / "libcudnn_ops.so"]
         _cuda_libs_detected = any(c.exists() for c in candidates)
     except Exception:
         _cuda_libs_detected = False
@@ -221,6 +224,13 @@ def detect_device() -> str:
     MPS (Apple Silicon) is detected but not accepted by CTranslate2/faster-whisper
     for ASR — resolve_device() will fall back mps -> cpu for the ASR path.
     pyannote supports MPS partially.
+
+    2026-04-23: Windows guard — torch.cuda.is_available() can return True on
+    the base bundle (11 CUDA IAT DLLs present, torch_cuda.dll loadable) even
+    when cuda_pack is NOT installed. In that state Conv/LSTM crash with
+    "Could not locate cudnn_graph64_9.dll". Require cuda_libs_present() on
+    Windows to actually choose cuda; otherwise fall through to cpu so the
+    GUI first-run flow offers cuda_pack and meanwhile CPU inference works.
     """
     global _detected_device
     if _detected_device is not None:
@@ -228,8 +238,13 @@ def detect_device() -> str:
     try:
         import torch
         if torch.cuda.is_available():
-            _detected_device = "cuda"
-            return _detected_device
+            if sys.platform == "win32" and not cuda_libs_present():
+                # Base bundle without cuda_pack — cudnn engines missing.
+                # Fall through to mps/cpu branches.
+                pass
+            else:
+                _detected_device = "cuda"
+                return _detected_device
     except Exception:
         pass
     try:

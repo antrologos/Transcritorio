@@ -22,16 +22,23 @@ from transcribe_pipeline import runtime
 
 def _reset_cache() -> None:
     runtime._detected_device = None
+    runtime._cuda_libs_detected = None
 
 
-def _install_fake_torch(cuda: bool, mps: bool) -> None:
-    """Monkey-patch sys.modules com um fake torch."""
+def _install_fake_torch(cuda: bool, mps: bool, cuda_libs: bool | None = None) -> None:
+    """Monkey-patch sys.modules com um fake torch.
+
+    cuda_libs: 2026-04-23 — em Windows, detect_device() exige cuda_libs_present()
+    ALEM de cuda.is_available() para escolher cuda. Default segue cuda.
+    """
     fake = types.ModuleType("torch")
     fake.cuda = types.SimpleNamespace(is_available=lambda: cuda)
     fake.backends = types.SimpleNamespace(
         mps=types.SimpleNamespace(is_available=lambda: mps)
     )
     sys.modules["torch"] = fake
+    # Seta cache de cuda_libs_present diretamente — simula cuda_pack instalado.
+    runtime._cuda_libs_detected = cuda if cuda_libs is None else cuda_libs
 
 
 def _clear_fake_torch() -> None:

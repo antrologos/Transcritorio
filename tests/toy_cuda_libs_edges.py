@@ -42,9 +42,10 @@ def test_torch_file_points_to_nonexistent_path() -> None:
         _reset_cache()
 
 
-def test_broken_symlink_torch_cuda() -> None:
-    """torch_cuda e um symlink para um arquivo que nao existe — cuda_libs_present
-    deve retornar False (Path.exists() retorna False para symlink quebrado)."""
+def test_broken_symlink_cudnn_ops() -> None:
+    """cudnn_ops canario e um symlink para um arquivo que nao existe —
+    cuda_libs_present deve retornar False (Path.exists() retorna False
+    para symlink quebrado)."""
     _reset_cache()
     if sys.platform == "win32":
         print("SKIP: symlinks em Windows precisam de privilegio especial")
@@ -54,9 +55,9 @@ def test_broken_symlink_torch_cuda() -> None:
         libdir.mkdir(parents=True)
         # Symlink quebrado pra /nonexistent
         if sys.platform == "darwin":
-            target_name = "libtorch_cuda.dylib"
+            target_name = "libcudnn_ops.dylib"
         else:
-            target_name = "libtorch_cuda.so"
+            target_name = "libcudnn_ops.so"
         try:
             os.symlink("/path/que/nao/existe", libdir / target_name)
         except OSError:
@@ -68,7 +69,7 @@ def test_broken_symlink_torch_cuda() -> None:
         try:
             result = runtime.cuda_libs_present()
             assert result is False, f"esperado False (symlink quebrado), got {result}"
-            print("PASS: symlink quebrado torch_cuda -> False")
+            print("PASS: symlink quebrado cudnn_ops -> False")
         finally:
             _clear_fake_torch()
             _reset_cache()
@@ -119,7 +120,7 @@ def test_lib_dir_missing_entirely() -> None:
 
 if __name__ == "__main__":
     test_torch_file_points_to_nonexistent_path()
-    test_broken_symlink_torch_cuda()
+    test_broken_symlink_cudnn_ops()
     test_lib_dir_is_file_not_dir()
     test_lib_dir_missing_entirely()
     print()
