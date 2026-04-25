@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.5 — 2026-04-25
+
+Fix do gate CI introduzido em v0.1.3. v0.1.4 falhou nos 3 SOs com
+`LocalEntryNotFoundError` no whisperx — o gate pedia `--model_cache_only
+True` mas o cache do tiny estava em tempdir do smoke-test (ja deletado).
+Removido `--model_cache_only`: o whisperx baixa o tiny online (~10s) se
+necessario, e em troca o gate fica independente de coordenacao de cache
+entre steps. Bug do bundle nao mudou — torchvision e torchcodec ja foram
+resolvidos em v0.1.3 e v0.1.4.
+
 ## 0.1.4 — 2026-04-24
 
 Segundo bug latente pego pelo gate CI introduzido em v0.1.3: apos resolver

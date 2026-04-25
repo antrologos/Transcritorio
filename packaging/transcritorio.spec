@@ -445,8 +445,8 @@ if sys.platform == "darwin":
         bundle_identifier="com.antrologos.transcritorio",
         info_plist={
             "CFBundleDisplayName": "Transcritorio",
-            "CFBundleShortVersionString": "0.1.4",
-            "CFBundleVersion": "0.1.4",
+            "CFBundleShortVersionString": "0.1.5",
+            "CFBundleVersion": "0.1.5",
             "NSHighResolutionCapable": True,
             "NSMicrophoneUsageDescription": (
                 "O Transcritorio nao captura audio diretamente — trabalha com "

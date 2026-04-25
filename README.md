@@ -17,7 +17,7 @@ Baixar: **[Releases](https://github.com/antrologos/Transcritorio/releases/latest
 
 | Sistema | Arquivo | Instrução rápida |
 |---|---|---|
-| **Windows 10/11** | `Transcritorio-0.1.4-Setup.exe` | Clique duas vezes no `.exe`. Se tiver placa NVIDIA, o app detecta e oferece a aceleração CUDA opcional (+1 GB). |
+| **Windows 10/11** | `Transcritorio-0.1.5-Setup.exe` | Clique duas vezes no `.exe`. Se tiver placa NVIDIA, o app detecta e oferece a aceleração CUDA opcional (+1 GB). |
 | **macOS** (Apple Silicon M1–M4) | `Transcritorio.dmg` | Arraste para Aplicativos. Primeira vez: botão direito no ícone → **Abrir** (Gatekeeper). Aceleração Metal automática. |
 | **Linux** (Ubuntu 22.04+, Fedora 40+) | `Transcritorio-x86_64.AppImage` | `chmod +x` e execute. Requer apenas libs X11 do sistema (veja [`docs/LINUX_INSTALL.md`](docs/LINUX_INSTALL.md)). |
 
@@ -69,14 +69,14 @@ Baixar: **[Releases](https://github.com/antrologos/Transcritorio/releases/latest
 
 ### Como citar
 
-Barbosa, R. J. (2026). *Transcritório: transcrição local de entrevistas em português brasileiro* (v0.1.4) [Software]. IESP-UERJ/CERES. https://github.com/antrologos/Transcritorio
+Barbosa, R. J. (2026). *Transcritório: transcrição local de entrevistas em português brasileiro* (v0.1.5) [Software]. IESP-UERJ/CERES. https://github.com/antrologos/Transcritorio
 
 ```bibtex
 @software{barbosa2026transcritorio,
   author    = {Barbosa, Rog{\'e}rio Jer{\^o}nimo},
   title     = {Transcrit{\'o}rio: transcri{\c{c}}{\~a}o local de entrevistas em portugu{\^e}s brasileiro},
   year      = {2026},
-  version   = {0.1.4},
+  version   = {0.1.5},
   publisher = {IESP-UERJ/CERES},
   license   = {MIT},
   url       = {https://github.com/antrologos/Transcritorio}

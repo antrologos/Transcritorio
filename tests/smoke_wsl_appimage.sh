@@ -17,7 +17,7 @@ TEST_DIR="$HOME/transcritorio-test"
 mkdir -p "$TEST_DIR"
 cd "$TEST_DIR"
 
-VERSION="${TRANSCRITORIO_VERSION:-0.1.4}"
+VERSION="${TRANSCRITORIO_VERSION:-0.1.5}"
 APPIMAGE="${1:-}"
 
 pass() { printf '\n[PASS] %s\n' "$1"; }
