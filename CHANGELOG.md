@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.1.7 — 2026-04-25
+
+Duas mudancas combinadas: integracao do cuda_pack no instalador Windows
++ correcao de UI no header `Motor:`.
+
+### Setup.exe baixa cuda_pack durante o install (request do user)
+
+Antes: bundle base instalava em `C:\Program Files\Transcritorio\` (admin),
+e o cuda_pack era baixado no first-launch via dialog Python. Mas se user
+escolhia "Para todos", o dialog batia em "Permissao insuficiente" pra
+escrever em Program Files (precisa elevar de novo). Pior UX.
+
+Agora: o proprio Setup.exe (que ja tem admin se elevado) detecta NVIDIA
+durante a instalacao via `nvidia-smi -L` e oferece um checkbox no wizard
+("Acelerar transcricoes com minha placa NVIDIA, baixa ~890 MB"). Se
+marcado, o installer baixa o `transcritorio-cuda-pack-{VERSION}-win64.zip`
+da release do GitHub via `DownloadTemporaryFile` (Inno 6.4+) e extrai
+com `tar.exe` (Win10 1803+).
+
+Vantagens:
+- Sem erro de permissao em "Para todos" (admin do install cobre).
+- Auto-detect: pagina pula se nao tem NVIDIA (user CPU-only nao percebe).
+- Default DESMARCADO: nao baixa 890 MB sem consent explicito.
+- Fallback duplo: se download falha (offline, timeout), MsgBox amigavel
+  e o app oferece de novo no first-launch via cuda_installer.py.
+- `[InstallDelete]` apaga DLLs CUDA antigas antes do `[Files]` — evita
+  ABI mismatch no upgrade v0.1.6 -> v0.1.7+.
+- `[Setup] CloseApplications=force`: fecha app rodando sem prompt.
+
+Gates CI novos em `.github/workflows/release.yml`:
+- "Verify tag matches AppVersion": valida que push de tag v0.1.7 casa com
+  `AppVersion="0.1.7"` no .iss. Sem isso, URL do cuda_pack apontaria pra
+  release errada (404 silencioso).
+- "Setup.exe smoke (silent install)": roda Setup.exe pos-compile com
+  `/VERYSILENT /SKIPCUDA=1 /CURRENTUSER` em `$RUNNER_TEMP`. Pega erro
+  Pascal silencioso. Runner do GitHub nao tem GPU, entao `/SKIPCUDA=1`
+  forca o branch CPU; caminho do download real e validado manualmente
+  antes de cada tag publica.
+
+### Header `Motor:` respeita `asr_device=cpu` forcado
+
+Bug: ao mudar Motor para CPU em "Configurar transcricao", header continuava
+mostrando "Motor: CUDA (NVIDIA)" porque `runtime.describe_backend()` chamava
+`detect_device()` que cacheia o resultado e ignora a config do user. O
+pipeline real ja usava CPU corretamente (via `resolve_device`), so o header
+mentia.
+
+Fix cirurgico: `describe_backend()` aceita `configured_device` opcional.
+Override SO quando `cfg == "cpu"` (user forcou). Outros valores (auto, cuda,
+mps, None) caem em `detect_device()`, preservando branch MLX em Apple
+Silicon (chamar `resolve_device("mps")` coage para cpu e mataria MLX).
+
+`review_studio_qt::project_header_text` passa `config["asr_device"]` ao
+chamar `describe_backend`.
+
+Toy tests: 3 casos novos validando override CPU + preservacao auto-detect.
+
 ## 0.1.6 — 2026-04-25
 
 Quarto bug pre-existente da serie, exposto agora que v0.1.5 chega ao

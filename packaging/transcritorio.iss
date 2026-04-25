@@ -21,7 +21,7 @@
 #endif
 
 #define AppName      "Transcritorio"
-#define AppVersion   "0.1.6"
+#define AppVersion   "0.1.7"
 #define AppPublisher "Rogerio Jeronimo Barbosa"
 #define AppURL       "https://github.com/antrologos/Transcritorio"
 #define AppExeName   "Transcritorio.exe"
