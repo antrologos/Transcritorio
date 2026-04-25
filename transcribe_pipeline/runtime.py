@@ -273,12 +273,22 @@ def resolve_device(configured: str | None) -> tuple[str, bool]:
     return "cpu", True
 
 
-def describe_backend() -> str:
+def describe_backend(configured_device: str | None = None) -> str:
     """Short human-readable label of the active ASR backend.
 
     Used by the GUI header so the user can confirm at a glance whether GPU
     acceleration is in use.
+
+    When ``configured_device == "cpu"`` (user forced CPU explicitly via
+    "Configurar transcricao"), returns "CPU" regardless of detected hardware.
+    Other values ("auto"/"cuda"/"mps"/None/"") fall through to ``detect_device()``,
+    preserving auto-detection (including MLX on Apple Silicon). Avoids passing
+    the value through ``resolve_device()`` because ``resolve_device("mps")``
+    coerces to "cpu" (CT2 incompatibility) and would erase the MLX label.
     """
+    cfg = (configured_device or "").strip().lower()
+    if cfg == "cpu":
+        return "CPU"
     device = detect_device()
     if device == "cuda":
         return "CUDA (NVIDIA)"

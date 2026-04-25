@@ -3346,7 +3346,8 @@ if QT_IMPORT_ERROR is None:
             from . import model_manager
             from . import runtime as _runtime_local
             model = model_manager.resolve_asr_model(str(self.context.config.get("asr_model", "?")))
-            backend = _runtime_local.describe_backend()
+            asr_device = self.context.config.get("asr_device") if self.context else None
+            backend = _runtime_local.describe_backend(asr_device)
             # Color the backend badge: green for GPU acceleration, amber when
             # only CPU is available so the user sees it at a glance.
             is_accel = "CUDA" in backend or "MLX" in backend
