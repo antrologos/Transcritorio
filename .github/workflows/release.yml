@@ -898,6 +898,22 @@ jobs:
           Write-Host "ISCC: $($Iscc.FullName)"
           "$($Iscc.DirectoryName)" | Out-File -FilePath $env:GITHUB_PATH -Append
 
+      - name: Verify tag matches AppVersion in .iss
+        # Em push de tag v*, valida que iss tem AppVersion igual a tag, senao
+        # o [Code] do installer monta URL do cuda_pack apontando pra release
+        # errada (404). Skip em workflow_dispatch (sem tag).
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $TagVer = "${{ github.ref_name }}".TrimStart('v')
+          $IssLine = (Get-Content packaging\transcritorio.iss | Select-String '#define AppVersion').Line
+          if ($IssLine -notmatch '"([^"]+)"') { throw "AppVersion nao encontrado em iss" }
+          $IssVer = $matches[1]
+          Write-Host "Tag: v$TagVer  AppVersion: $IssVer"
+          if ($TagVer -ne $IssVer) {
+            throw "MISMATCH: tag=v$TagVer mas iss=$IssVer. Bumpe AppVersion antes do tag."
+          }
+
       - name: Run Inno Setup compiler
         shell: pwsh
         run: |
@@ -907,6 +923,26 @@ jobs:
                    /O"$OutDir" `
                    packaging\transcritorio.iss
           Get-ChildItem $OutDir | ForEach-Object { Write-Host "  $_ ($([math]::Round($_.Length/1MB, 0)) MB)" }
+
+      - name: Setup.exe smoke (silent install)
+        # Gate contra erro Pascal silencioso no [Code] do installer. Sem GPU
+        # no runner do GitHub, /SKIPCUDA=1 pula o branch de download — testa
+        # so a copia do bundle base e a sintaxe do Pascal. Se Pascal explode,
+        # /VERYSILENT retorna != 0 e o gate falha.
+        shell: pwsh
+        run: |
+          $Setup = (Get-ChildItem "$env:GITHUB_WORKSPACE\installer-out\*.exe" | Select-Object -First 1).FullName
+          $InstDir = "$env:RUNNER_TEMP\smoke-install"
+          $LogFile = "$env:RUNNER_TEMP\smoke-install.log"
+          Remove-Item $InstDir -Recurse -Force -EA 0
+          & $Setup /VERYSILENT /SUPPRESSMSGBOXES /SKIPCUDA=1 /DIR="$InstDir" /LOG="$LogFile" /CURRENTUSER
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "--- install log tail ---"
+            if (Test-Path $LogFile) { Get-Content $LogFile -Tail 80 }
+            throw "Setup.exe falhou exit=$LASTEXITCODE"
+          }
+          if (-not (Test-Path "$InstDir\Transcritorio.exe")) { throw "Transcritorio.exe ausente apos install" }
+          Write-Host "OK: Setup.exe smoke install passou ($InstDir)"
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
