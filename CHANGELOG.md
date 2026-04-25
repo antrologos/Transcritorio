@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.1.6 — 2026-04-25
+
+Quarto bug pre-existente da serie, exposto agora que v0.1.5 chega ao
+ponto de transcribe real do usuario:
+
+```
+LocalEntryNotFoundError: Cannot find an appropriate cached snapshot
+folder for the specified revision on the local disk
+```
+
+### Root cause
+
+`faster_whisper==1.2.1` em `utils.py:11` define o registro `_MODELS`:
+```python
+"large-v3-turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo"
+```
+
+Mas Transcritorio em `model_manager.ASR_VARIANTS["large-v3-turbo"]["repo"]`
+usa `dropbox-dash/faster-whisper-large-v3-turbo` (mudanca em 2026-04-22
+para eliminar redirect HTTP 307 que travava `snapshot_download` no bundle
+frozen).
+
+O wizard baixa em `models--dropbox-dash--faster-whisper-large-v3-turbo/`,
+mas `whisperx --model large-v3-turbo --model_cache_only True` chama
+`faster_whisper.WhisperModel(model_size_or_path="large-v3-turbo", ...)`
+que resolve via `_MODELS` para `mobiuslabsgmbh/...` e procura no diretorio
+errado.
+
+### Fix
+
+- `transcribe_pipeline/model_manager.py`: nova funcao `resolve_asr_repo()`
+  que retorna o repo_id completo (e.g. `dropbox-dash/...`) em vez do
+  shortcut. Faster_whisper aceita repo_id direto e procura no path certo
+  do cache.
+- `transcribe_pipeline/whisperx_runner.py`: passa `effective_repo` em
+  `--model` em vez de `effective_model` (shortcut).
+
+Ambas mudancas usam apenas o repo_id que o proprio wizard ja salvou no
+cache, entao nao requer redownload e nao depende de internet em runtime.
+
+### Bug latente analogo
+
+`mlx_whisper_runner.py:45-46` tem seu proprio mapeamento:
+```python
+"large-v3-turbo": "mlx-community/whisper-large-v3-turbo"
+```
+
+Esse caminho e usado so em Mac com mlx-whisper instalado, e o repo
+mlx-community e diferente (modelo MLX, nao faster-whisper). Mantido
+como esta — bug nao se aplica ao path MLX.
+
 ## 0.1.5 — 2026-04-25
 
 Fix do gate CI introduzido em v0.1.3. v0.1.4 falhou nos 3 SOs com

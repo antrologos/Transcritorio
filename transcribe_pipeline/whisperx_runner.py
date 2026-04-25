@@ -65,11 +65,15 @@ def run_whisperx(
             else:
                 print(f"[Transcritorio] CUDA indisponivel. Usando CPU para transcrever {row['interview_id']}.")
         effective_model = model_manager.resolve_asr_model(str(config["asr_model"]))
+        # Pass the full repo_id (not the shortcut) so faster_whisper looks in
+        # the cache dir we actually downloaded to. faster_whisper hardcodes
+        # "large-v3-turbo" -> "mobiuslabsgmbh/..." but we use "dropbox-dash/...".
+        effective_repo = model_manager.resolve_asr_repo(effective_model)
         command = [
             runtime.resolve_executable("whisperx"),
             str(wav),
             "--model",
-            effective_model,
+            effective_repo,
             "--model_dir",
             model_cache_dir,
             "--device",

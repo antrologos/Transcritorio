@@ -408,6 +408,27 @@ def resolve_asr_model(configured: str, cache_dir: Path | None = None) -> str:
     return configured
 
 
+def resolve_asr_repo(configured: str) -> str:
+    """Return the full HF repo_id for an ASR variant.
+
+    Used by whisperx_runner to pass the correct repo to faster_whisper.
+    Necessary because faster_whisper hardcodes its own shortcut table
+    (e.g. faster_whisper.utils._MODELS maps "large-v3-turbo" to
+    "mobiuslabsgmbh/faster-whisper-large-v3-turbo"), but Transcritorio
+    downloads turbo from "dropbox-dash/faster-whisper-large-v3-turbo"
+    (different SHA, no redirect chain). Passing the shortcut would cause
+    faster_whisper to look in the wrong cache directory and raise
+    LocalEntryNotFoundError under --model_cache_only True.
+
+    Returns the variant's repo_id when configured is a known variant
+    name; otherwise returns configured unchanged (already a repo_id or
+    a path to a local model).
+    """
+    if configured in ASR_VARIANTS:
+        return ASR_VARIANTS[configured]["repo"]
+    return configured
+
+
 _WEIGHT_BLOB_MIN_BYTES = 100 * 1024  # 100 KB floor: below this, only JSON/txt metadata is there
 
 
