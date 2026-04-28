@@ -838,7 +838,7 @@ if QT_IMPORT_ERROR is None:
                 percent = start_percent + int(((end_percent - start_percent) * inner_percent) / 100)
                 event = detail.get("event", "")
                 detail_message = detail.get("message")
-                if detail_message and event in ("model_download_bytes", "model_download_start", "model_download_done", "model_download_error"):
+                if detail_message and event in ("model_download_bytes", "model_download_start", "model_download_done", "model_download_error", "model_download_retry"):
                     label = str(detail_message)
                 elif detail_message and event == "diarize_progress":
                     label = str(detail_message)

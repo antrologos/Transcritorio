@@ -16,6 +16,14 @@ from .utils import sanitize_message
 HF_ENDPOINT = "https://huggingface.co"
 _DOWNLOAD_CHUNK = 1024 * 1024  # 1 MiB streaming chunk
 
+# Retry per-blob no `_manual_snapshot_download`. Conexao flaky (caso da
+# Denise em 2026-04-25) deixava UI exibir erro fatal e exigir clique manual
+# em "Voltar"+"Proximo" ate completar. Aqui retentamos automatico ate 5
+# vezes, total de ~30s extras no pior caso. Cache hit no blob (etag) garante
+# que retentativas nao re-baixam arquivos ja completos.
+_DOWNLOAD_MAX_ATTEMPTS = 5
+_DOWNLOAD_BACKOFF = (0, 2, 4, 8, 16)  # segundos antes de cada tentativa (index = attempt)
+
 
 def _download_diag_log(message: str) -> None:
     """Append a line to the download diagnostic log. Never raises."""
@@ -939,19 +947,52 @@ def _manual_snapshot_download(
             f"size~={expected_size}"
         )
         tmp_path = blob_path.with_suffix(".incomplete")
-        with session.get(resolve_url, stream=True, timeout=60, allow_redirects=True) as dl:
-            dl.raise_for_status()
-            bytes_this_file = 0
-            with tmp_path.open("wb") as fh:
-                for chunk in dl.iter_content(chunk_size=_DOWNLOAD_CHUNK):
-                    if _cancelled():
-                        raise RuntimeError("Cancelado pelo usuario")
-                    if not chunk:
-                        continue
-                    fh.write(chunk)
-                    bytes_this_file += len(chunk)
-                    _emit_bytes(total_downloaded + bytes_this_file)
-            total_downloaded += bytes_this_file
+        # Retry per-file com backoff exponencial. Em conexao flaky (caso da
+        # Denise em 2026-04-25, log no feedback), o download de um blob de
+        # ~3 GB falha aos ~40% e a UI atual exige clique manual em "Voltar".
+        # Aqui retentamos automaticamente ate 5 vezes (delays 0/2/4/8/16s);
+        # se 5 falhas, levanta a ultima excecao pra UI mostrar erro fatal.
+        last_exc: Exception | None = None
+        for _attempt in range(_DOWNLOAD_MAX_ATTEMPTS):
+            if _attempt > 0:
+                wait = _DOWNLOAD_BACKOFF[_attempt]
+                _emit_event(
+                    "model_download_retry",
+                    f"Reconectando em {wait}s ({_attempt + 1}/{_DOWNLOAD_MAX_ATTEMPTS}) "
+                    f"— falha: {type(last_exc).__name__ if last_exc else '?'}",
+                    start_pct + int((end_pct - start_pct) * total_downloaded / max(estimated_bytes, 1)),
+                )
+                _download_diag_log(
+                    f"[manual:{label}] retry {_attempt + 1}/{_DOWNLOAD_MAX_ATTEMPTS} "
+                    f"after {type(last_exc).__name__}: {last_exc}"
+                )
+                time.sleep(wait)
+                if _cancelled():
+                    raise RuntimeError("Cancelado pelo usuario")
+                if tmp_path.exists():
+                    try:
+                        tmp_path.unlink()
+                    except OSError:
+                        pass
+            try:
+                with session.get(resolve_url, stream=True, timeout=60, allow_redirects=True) as dl:
+                    dl.raise_for_status()
+                    bytes_this_file = 0
+                    with tmp_path.open("wb") as fh:
+                        for chunk in dl.iter_content(chunk_size=_DOWNLOAD_CHUNK):
+                            if _cancelled():
+                                raise RuntimeError("Cancelado pelo usuario")
+                            if not chunk:
+                                continue
+                            fh.write(chunk)
+                            bytes_this_file += len(chunk)
+                            _emit_bytes(total_downloaded + bytes_this_file)
+                    total_downloaded += bytes_this_file
+                break  # sucesso, sai do retry loop
+            except (requests.RequestException, OSError) as exc:
+                last_exc = exc
+                if _attempt == _DOWNLOAD_MAX_ATTEMPTS - 1:
+                    raise
         tmp_path.replace(blob_path)
         _place_blob_in_snapshot(blob_path, snapshot_path)
 

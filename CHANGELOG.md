@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.1.8 — 2026-04-27
+
+UX baseada em feedback da Denise (1ª usuária externa, instalou v0.1.7 e
+transcreveu sua primeira entrevista de 1h36 em ~10 min com aceleração CUDA).
+Três pequenos atritos identificados, todos corrigidos:
+
+### 1. Auto-retry no download dos modelos HF
+
+`_manual_snapshot_download` em `transcribe_pipeline/model_manager.py` agora
+faz retry automático per-blob com backoff exponencial (5 tentativas, esperas
+0/2/4/8/16s). Em conexão flaky (caso reportado: erro a ~40% do download
+recorrente), o sistema retenta sozinho até concluir; só levanta exception
+para a UI se as 5 tentativas falharem. Antes, cada falha exigia clique
+manual em "Voltar"+"Próximo" — Denise teve que repetir 4-5 vezes.
+
+UI (`review_studio_qt.py`) reconhece o evento novo `model_download_retry`
+e mostra na label do wizard: `"Reconectando em 4s (3/5) — falha: ConnectionError"`.
+
+Toy test novo: `tests/toy_manual_snapshot_retry.py` (3 cenários:
+3-falhas+sucesso, 5-falhas+desiste, caminho-feliz).
+
+### 2. Label informativa durante extração lzma2
+
+`packaging/transcritorio.iss` ganha `CurStepChanged(ssInstall)` que escreve
+no `WizardForm.StatusLabel.Caption`:
+
+> Extraindo arquivos do Transcritório (~1.6 GB) — pode levar 5 a 15 minutos.
+> NÃO cancele se a barra parecer travada em 99% — é normal nesta fase.
+
+Caso real: Denise cancelou achando que o install pendurou em 99% (o que
+pareceu inativo na realidade era a fase final de descompressão lzma2/ultra64).
+A label é estática (Inno não emite callback granular durante extração),
+mas previne pânico.
+
+### 3. README seção "Avisos de antivírus / SmartScreen"
+
+Adicionada seção em `README.md` explicando que o Transcritório é unsigned
+(code signing está em backlog em `docs/WINDOWS_CODE_SIGNING.md`) e que
+avisos de AVAST/Norton/Kaspersky/SmartScreen são **falsos positivos
+genéricos de unsigned binary**, não malware. Inclui instruções práticas:
+"Mais informações → Executar assim mesmo", adicionar exceção AV pra
+`Transcritorio.exe` e `whisperx.exe`, link pro doc de code signing.
+
+Mantém também a nota sobre instalação ficar em "99%" por minutos.
+
 ## 0.1.7 — 2026-04-25
 
 Duas mudancas combinadas: integracao do cuda_pack no instalador Windows

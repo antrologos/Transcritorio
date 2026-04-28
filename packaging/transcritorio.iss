@@ -21,7 +21,7 @@
 #endif
 
 #define AppName      "Transcritorio"
-#define AppVersion   "0.1.7"
+#define AppVersion   "0.1.8"
 #define AppPublisher "Rogerio Jeronimo Barbosa"
 #define AppURL       "https://github.com/antrologos/Transcritorio"
 #define AppExeName   "Transcritorio.exe"
@@ -246,6 +246,17 @@ procedure CurStepChanged(CurStep: TSetupStep);
 var
   SkipCuda: String;
 begin
+  // ssInstall = comeco da fase de copia. lzma2/ultra64 e MUITO lento na fase
+  // final (Inno barra fica em 99% por 5-15 min sem feedback granular).
+  // Caso real (Denise, 2026-04-25): user cancelou o install achando que
+  // tinha pendurado. Label estatica abaixo previne panico.
+  if CurStep = ssInstall then
+  begin
+    WizardForm.StatusLabel.Caption :=
+      'Extraindo arquivos do Transcritorio (~1.6 GB) — pode levar 5 a 15 minutos.' + #13#10 +
+      'NAO cancele se a barra parecer travada em 99% — e normal nesta fase.';
+  end;
+
   // ssPostInstall = depois do [Files] copiar bundle base. cuda_pack mescla
   // suas 14 DLLs em {app}\_internal\torch\lib\ que ja existe.
   if CurStep = ssPostInstall then

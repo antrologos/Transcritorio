@@ -21,6 +21,16 @@ Baixar: **[Releases](https://github.com/antrologos/Transcritorio/releases/latest
 | **macOS** (Apple Silicon M1–M4) | `Transcritorio.dmg` | Arraste para Aplicativos. Primeira vez: botão direito no ícone → **Abrir** (Gatekeeper). Aceleração Metal automática. |
 | **Linux** (Ubuntu 22.04+, Fedora 40+) | `Transcritorio-x86_64.AppImage` | `chmod +x` e execute. Requer apenas libs X11 do sistema (veja [`docs/LINUX_INSTALL.md`](docs/LINUX_INSTALL.md)). |
 
+### Avisos de antivírus / SmartScreen (Windows)
+
+O Transcritório é distribuído sem assinatura digital (code signing custa €69/ano e ainda não fizemos esse investimento). Antivírus como **AVAST**, **Norton**, **Kaspersky** e o **SmartScreen do Windows** podem mostrar avisos genéricos de "fornecedor desconhecido" ou "ameaça" — **é falso positivo, não há malware**.
+
+- Como verificar autenticidade: o código-fonte está [aqui no GitHub](https://github.com/antrologos/Transcritorio), é auditável.
+- **SmartScreen** ("o Windows protegeu seu computador"): clique em **"Mais informações"** → **"Executar assim mesmo"**.
+- **AVAST/Norton/Kaspersky**: pode pedir para adicionar exceção para `Transcritorio.exe` e `whisperx.exe` (ambos em `C:\Program Files\Transcritorio\` ou `%LOCALAPPDATA%\Programs\Transcritorio\`).
+- A instalação do bundle (~1.6 GB) usa compressão lzma2/ultra64 — **a barra pode ficar parada em 99% por 5–15 minutos** durante a fase final de extração. **Não cancele**; é normal.
+- Plano de longo prazo (code signing, eliminação dos avisos): ver [`docs/WINDOWS_CODE_SIGNING.md`](docs/WINDOWS_CODE_SIGNING.md).
+
 ---
 
 ## Para pesquisadores

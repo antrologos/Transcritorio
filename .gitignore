@@ -65,6 +65,9 @@ scripts/capture_screenshots.py
 # Screenshots and temp images
 image.png
 
+# Diagnostic dumps with sensitive interview metadata (per-user logs)
+diagnosticos/
+
 # OS noise
 .DS_Store
 Thumbs.db
