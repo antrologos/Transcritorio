@@ -11,14 +11,15 @@ com base no AppImage. Testado em Ubuntu 22.04 e 24.04.
 
 ## Instalar pre-requisitos do sistema
 
-O AppImage **nao inclui o FFmpeg nem as libs graficas do Qt** —
+O AppImage **ja inclui o FFmpeg** (ffmpeg + ffprobe embutidos). O que
+ele **nao inclui** sao as libs graficas do sistema que o Qt exige —
 instale uma vez via gerenciador de pacotes.
 
 ### Ubuntu/Debian
 
 ```sh
 sudo apt update
-sudo apt install -y ffmpeg \
+sudo apt install -y \
     libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
     libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-sync1 \
     libxcb-util1 libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1 \
@@ -33,11 +34,8 @@ plataforma X11 carregar corretamente. Se esquecer alguma, o app mostra
 ### Fedora
 
 ```sh
-sudo dnf install -y ffmpeg libxcb libxkbcommon
+sudo dnf install -y libxcb libxkbcommon
 ```
-
-(Para FFmpeg no Fedora pode ser necessario habilitar o RPM Fusion;
-veja https://rpmfusion.org/Configuration)
 
 ## Executar
 
@@ -67,18 +65,13 @@ sudo apt install appimagelauncher
 
 ## Desempenho no Linux
 
-**Em maquina com NVIDIA + drivers CUDA 12.x instalados**: a
-transcricao acelera 3-9x. O Transcritorio detecta a placa
-automaticamente.
+**O AppImage atual roda em CPU** (o pacote Linux embute o PyTorch
+CPU-only; o suporte a CUDA no Linux esta no backlog). Audio de 1 hora
+leva ~3-5 horas, dependendo do processador.
 
-**Em maquina sem NVIDIA** (Intel/AMD integrado): roda em CPU. Audio de
-1 hora leva ~3-5 horas.
-
-Verificar se o CUDA esta disponivel:
-
-```sh
-nvidia-smi    # se imprime tabela: OK, CUDA disponivel
-```
+Se voce tem placa NVIDIA e precisa da aceleracao 3-9x hoje, use a
+versao Windows (nativa ou via dual-boot), que baixa o pacote CUDA
+automaticamente quando detecta a placa.
 
 ## Desinstalar
 

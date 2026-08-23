@@ -909,9 +909,13 @@ jobs:
           $IssLine = (Get-Content packaging\transcritorio.iss | Select-String '#define AppVersion').Line
           if ($IssLine -notmatch '"([^"]+)"') { throw "AppVersion nao encontrado em iss" }
           $IssVer = $matches[1]
-          Write-Host "Tag: v$TagVer  AppVersion: $IssVer"
+          $PyVer = (Select-String 'version = "([^"]+)"' pyproject.toml).Matches.Groups[1].Value
+          Write-Host "Tag: v$TagVer  AppVersion: $IssVer  pyproject: $PyVer"
           if ($TagVer -ne $IssVer) {
             throw "MISMATCH: tag=v$TagVer mas iss=$IssVer. Bumpe AppVersion antes do tag."
+          }
+          if ($TagVer -ne $PyVer) {
+            throw "MISMATCH: tag=v$TagVer mas pyproject=$PyVer. O cuda_pack zip e nomeado pela versao do pyproject e o installer baixa pela AppVersion do iss - as tres precisam ser iguais."
           }
 
       - name: Run Inno Setup compiler
@@ -986,10 +990,12 @@ jobs:
   #   artefatos antigos dessas plataformas na Release.
   # =========================================================================
   publish-release:
-    # always() para rodar mesmo com jobs pulados (skipped). Abaixo filtramos
-    # por sucesso dos jobs que efetivamente rodaram.
-    if: ${{ always() && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.only_platforms != '')) }}
-    needs: [build-linux-appimage, build-macos-dmg, build-windows-installer]
+    # always() tolera jobs PULADOS (skipped, rebuild parcial), mas qualquer
+    # job FALHADO ou cancelado bloqueia a publicacao — nunca publicar release
+    # incompleta. Em workflow_dispatch, target_tag e obrigatorio (sem ele a
+    # release seria criada com tag espuria "main").
+    if: ${{ always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.only_platforms != '' && inputs.target_tag != '')) }}
+    needs: [build-linux-appimage, smoke-linux-appimage, build-macos-dmg, build-windows-installer]
     runs-on: ubuntu-latest
     permissions:
       contents: write

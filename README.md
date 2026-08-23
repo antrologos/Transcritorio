@@ -10,7 +10,7 @@ Aplicativo desktop gratuito para transcrição automática e separação de fala
 
 - **100% local** — o áudio nunca sai da sua máquina; compatível com LGPD e com qualquer TCLE razoável.
 - **Português brasileiro nativo** — baseado no Whisper (modelo de transcrição de fala da OpenAI) treinado com ampla variação dialetal.
-- **Gratuito e código aberto** — licença MIT, desenvolvido no IESP-UERJ / CERES. Sem cadastro, sem assinatura, sem telemetria.
+- **Gratuito e código aberto** — licença MIT, desenvolvido no IESP-UERJ / CERES. Sem assinatura, sem telemetria (o primeiro uso pede apenas uma conta gratuita da Hugging Face para baixar o modelo de separação de falantes).
 
 Site do projeto: **[antrologos.github.io/Transcritorio](https://antrologos.github.io/Transcritorio/pt/)** (passo a passo com imagens)
 Baixar: **[Releases](https://github.com/antrologos/Transcritorio/releases/latest)**
@@ -64,12 +64,12 @@ O Transcritório é distribuído sem assinatura digital (code signing custa €6
 
 **4. Clique em Transcrever e revise no Estúdio.** O botão **Transcrever** faz o fluxo completo: prepara o áudio, transcreve, separa os falantes e monta o texto editável. Tempos realistas para 1 hora de entrevista: **~5–10 min** em máquina com GPU NVIDIA ou Apple Silicon, **~20–30 min** em notebook recente sem GPU, **~40–60 min** em máquina modesta. Ao final, abra o **Estúdio de Revisão** para ouvir o áudio sincronizado com o texto, ajustar trechos com a forma de onda e exportar. Guia visual completo no [site do projeto](https://antrologos.github.io/Transcritorio/pt/#how).
 
-> **Modelos de IA no primeiro uso:** o Transcritório baixa cerca de 3 GB de modelos de IA uma única vez; depois roda offline. No fluxo padrão isso acontece sem cadastro. Só é necessário um *token* da [Hugging Face](https://huggingface.co/) (plataforma que hospeda os modelos, gratuita) em cenários avançados. Wizard em português em **Configurações → Configurar modelos…**
+> **Modelos de IA no primeiro uso:** o Transcritório baixa os modelos de IA uma única vez (~7 GB de download no fluxo padrão); depois roda offline. O modelo de separação de falantes (pyannote) tem acesso *gated* na [Hugging Face](https://huggingface.co/): o assistente de primeiro uso orienta a criar uma conta gratuita, aceitar os termos do modelo e colar um *token* de leitura — tudo em português, em **Configurações → Configurar modelos…**
 
 ### Privacidade e ética
 
 - **Processamento 100% local:** o áudio da entrevista nunca é enviado a servidores externos.
-- **Sem coleta de dados, sem telemetria:** nenhum cadastro ou login é exigido para usar o aplicativo.
+- **Sem coleta de dados, sem telemetria:** nenhum dado sai do seu computador. O único cadastro externo é a conta gratuita da Hugging Face, usada apenas uma vez para baixar o modelo de separação de falantes.
 - **Código-fonte aberto sob licença MIT:** auditável por qualquer pessoa, incluindo o setor de TI da sua instituição.
 - **Compatível com LGPD e TCLE:** você mantém controle integral sobre o áudio do informante e pode demonstrar a cadeia de custódia dos dados.
 
