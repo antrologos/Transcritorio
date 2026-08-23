@@ -174,6 +174,26 @@ def relative_to(path: Path, root: Path) -> str:
         return str(path.resolve())
 
 
+PROGRESS_JSON_PREFIX = "@PROGRESS "
+
+
+def parse_progress_json_line(line: str) -> dict[str, Any] | None:
+    """Parse uma linha '@PROGRESS {json}' emitida pelo CLI (--progress-json).
+
+    Retorna o dict do evento ({event, progress, message}) ou None para
+    qualquer outra linha (logs humanos, vazio, JSON invalido). Usado pela GUI
+    para acompanhar a diarizacao rodando em subprocesso (v0.2).
+    """
+    stripped = (line or "").strip()
+    if not stripped.startswith(PROGRESS_JSON_PREFIX):
+        return None
+    try:
+        payload = json.loads(stripped[len(PROGRESS_JSON_PREFIX):])
+    except (ValueError, TypeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 def is_interview_artifact(name: str, interview_id: str) -> bool:
     """True se o nome de arquivo pertence a esta entrevista.
 

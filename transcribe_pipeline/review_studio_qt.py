@@ -84,6 +84,7 @@ try:
         QPushButton,
         QProgressBar,
         QProgressDialog,
+        QRadioButton,
         QSlider,
         QSpinBox,
         QSplitter,
@@ -1658,20 +1659,28 @@ if QT_IMPORT_ERROR is None:
             # the default "cuda") both route through mlx_whisper_runner at
             # runtime when MPS is detected.
             from . import runtime as _runtime_dev
-            device_options: list[tuple[str, str]] = [("cuda", "GPU NVIDIA (CUDA)")]
+            device_options: list[tuple[str, str]] = [
+                ("auto", "Automático (recomendado)"),
+                ("cuda", "GPU NVIDIA (CUDA)"),
+            ]
             if _runtime_dev.detect_device() == "mps":
                 device_options.append(("mps", "GPU Apple Silicon (MLX/Metal)"))
             device_options.append(("cpu", "CPU"))
             for value, label in device_options:
                 self.device_combo.addItem(label, value)
-            self.device_combo.setCurrentIndex(max(0, self.device_combo.findData(str(config.get("asr_device") or "cuda"))))
+            self.device_combo.setCurrentIndex(max(0, self.device_combo.findData(str(config.get("asr_device") or "auto"))))
             grid.addWidget(QLabel("Dispositivo:"), 1, 0)
             grid.addWidget(self.device_combo, 1, 1)
 
             self.compute_combo = QComboBox()
-            for value, label in [("float16", "float16 (GPU)"), ("int8", "int8 (menor memoria)"), ("float32", "float32 (CPU/GPU, mais pesado)")]:
+            for value, label in [
+                ("auto", "Automático (recomendado)"),
+                ("float16", "float16 (GPU)"),
+                ("int8", "int8 (menor memoria)"),
+                ("float32", "float32 (CPU/GPU, mais pesado)"),
+            ]:
                 self.compute_combo.addItem(label, value)
-            self.compute_combo.setCurrentIndex(max(0, self.compute_combo.findData(str(config.get("asr_compute_type") or "float16"))))
+            self.compute_combo.setCurrentIndex(max(0, self.compute_combo.findData(str(config.get("asr_compute_type") or "auto"))))
             grid.addWidget(QLabel("Precisao:"), 2, 0)
             grid.addWidget(self.compute_combo, 2, 1)
 
@@ -1705,8 +1714,14 @@ if QT_IMPORT_ERROR is None:
             grid.addLayout(speakers_row, 4, 1)
 
             self.batch_spin = QSpinBox()
-            self.batch_spin.setRange(1, 32)
-            self.batch_spin.setValue(int(config.get("asr_batch_size") or 4))
+            # 0 = "Automático" (resolve_compute_settings decide: cuda 8, cpu 2)
+            self.batch_spin.setRange(0, 32)
+            self.batch_spin.setSpecialValueText("Automático")
+            try:
+                _batch_cfg = int(config.get("asr_batch_size") or 0)
+            except (TypeError, ValueError):
+                _batch_cfg = 0  # "auto" ou valor invalido
+            self.batch_spin.setValue(max(0, _batch_cfg))
 
             layout.addLayout(grid)
             advanced_group = QGroupBox("Avancado")
@@ -1769,7 +1784,7 @@ if QT_IMPORT_ERROR is None:
                 "asr_model": str(self.model_combo.currentData() or self.model_combo.currentText() or "large-v3-turbo"),
                 "asr_device": device,
                 "asr_compute_type": compute_type,
-                "asr_batch_size": int(self.batch_spin.value()),
+                "asr_batch_size": int(self.batch_spin.value()) or "auto",
                 "asr_language": None if language == "auto" else language,
                 "diarization_num_speakers": min_spk if min_spk == max_spk else None,
                 "min_speakers": min_spk,
@@ -1839,11 +1854,15 @@ if QT_IMPORT_ERROR is None:
         PAGE_TOKEN = 4
         PAGE_DOWNLOAD = 5
         PAGE_DONE = 6
+        PAGE_SPEAKERS = 7  # id novo (v0.2); a ORDEM e controlada por nextId()
 
         def __init__(self, parent: QWidget | None = None) -> None:
             super().__init__(parent)
             from . import model_manager
             self.download_completed = False
+            # Diarizacao e OPCIONAL (v0.2): quem so quer transcrever pula
+            # conta/termos/token do pyannote gated. Escolha na PAGE_SPEAKERS.
+            self.wants_diarization = True
             self.selected_asr_variants: list[str] = [model_manager.DEFAULT_ASR_VARIANT]
             self.setWindowTitle(f"{APP_NAME} — Configuração inicial")
             self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
@@ -1856,12 +1875,35 @@ if QT_IMPORT_ERROR is None:
             self.setButtonText(QWizard.WizardButton.FinishButton, "Começar a usar")
 
             self.setPage(self.PAGE_WELCOME, self._make_welcome_page())
+            self.setPage(self.PAGE_SPEAKERS, self._make_speakers_page())
             self.setPage(self.PAGE_ACCOUNT, self._make_account_page())
             self.setPage(self.PAGE_TERMS, self._make_terms_page())
             self.setPage(self.PAGE_MODEL_SELECT, _ModelSelectWizardPage(self))
             self.setPage(self.PAGE_TOKEN, self._make_token_page())
             self.setPage(self.PAGE_DOWNLOAD, self._make_download_page())
             self.setPage(self.PAGE_DONE, self._make_done_page())
+            self.setStartId(self.PAGE_WELCOME)
+
+        def nextId(self) -> int:
+            # Ordem explicita: sem diarizacao, conta/termos/token sao pulados
+            # (modelos ASR/alinhamento sao publicos — nao exigem token).
+            if self.wants_diarization:
+                seq = [
+                    self.PAGE_WELCOME, self.PAGE_SPEAKERS, self.PAGE_ACCOUNT,
+                    self.PAGE_TERMS, self.PAGE_MODEL_SELECT, self.PAGE_TOKEN,
+                    self.PAGE_DOWNLOAD, self.PAGE_DONE,
+                ]
+            else:
+                seq = [
+                    self.PAGE_WELCOME, self.PAGE_SPEAKERS,
+                    self.PAGE_MODEL_SELECT, self.PAGE_DOWNLOAD, self.PAGE_DONE,
+                ]
+            cid = self.currentId()
+            try:
+                idx = seq.index(cid)
+            except ValueError:
+                return super().nextId()
+            return seq[idx + 1] if idx + 1 < len(seq) else -1
 
         def done(self, result: int) -> None:
             # Fechar o wizard (X, Pular, Concluir) com download em andamento
@@ -1872,7 +1914,39 @@ if QT_IMPORT_ERROR is None:
             if worker is not None and worker.isRunning():
                 worker.request_cancel()
                 worker.wait()  # bloqueante: should_cancel corta entre blobs/chunks
+            if result == QDialog.DialogCode.Accepted:
+                # Persistir a escolha como default de projetos novos
+                try:
+                    from . import app_settings
+                    app_settings.save({"diarize_default": bool(self.wants_diarization)})
+                except Exception as exc:
+                    _logger.warning("nao foi possivel salvar app_settings: %s", exc)
             super().done(result)
+
+        def _make_speakers_page(self) -> QWizardPage:
+            page = QWizardPage()
+            page.setTitle("Identificação de falantes")
+            layout = QVBoxLayout(page)
+            intro = QLabel(
+                "Além de transcrever, o Transcritório pode identificar "
+                "automaticamente quem está falando em cada trecho "
+                "(ex.: Entrevistador / Entrevistado).\n\n"
+                "Esse recurso usa um modelo com acesso controlado no Hugging Face "
+                "e por isso pede uma conta gratuita e um token. Se preferir pular "
+                "agora, você poderá ativá-lo depois sem repetir as transcrições."
+            )
+            intro.setWordWrap(True)
+            layout.addWidget(intro)
+            yes_radio = QRadioButton("Sim, separar os falantes (recomendado para entrevistas)")
+            no_radio = QRadioButton("Não, apenas transcrever (sem conta e sem token)")
+            yes_radio.setChecked(True)
+            yes_radio.toggled.connect(
+                lambda checked: setattr(self, "wants_diarization", bool(checked))
+            )
+            layout.addWidget(yes_radio)
+            layout.addWidget(no_radio)
+            layout.addStretch()
+            return page
 
         # -- Page factories --
 
@@ -2238,7 +2312,11 @@ if QT_IMPORT_ERROR is None:
             asr_variants = getattr(self._wizard, "selected_asr_variants", None)
             self.progress_label.setText("Conectando ao HuggingFace...")
             self._bar_ctrl.start(self.progress_bar)
-            self._worker = _SetupDownloadThread(token, asr_variants=asr_variants)
+            self._worker = _SetupDownloadThread(
+                token,
+                asr_variants=asr_variants,
+                include_diarization=bool(getattr(self._wizard, "wants_diarization", True)),
+            )
             self._worker.progress.connect(self._on_progress)
             self._worker.finished_ok.connect(self._on_done)
             self._worker.failed.connect(self._on_failed)
@@ -2272,10 +2350,11 @@ if QT_IMPORT_ERROR is None:
         finished_ok = Signal()
         failed = Signal(str)
 
-        def __init__(self, token: str, asr_variants: list[str] | None = None) -> None:
+        def __init__(self, token: str, asr_variants: list[str] | None = None, include_diarization: bool = True) -> None:
             super().__init__()
             self.token = token
             self.asr_variants = asr_variants
+            self.include_diarization = include_diarization
             self._cancel_requested = False
 
         def request_cancel(self) -> None:
@@ -2293,6 +2372,7 @@ if QT_IMPORT_ERROR is None:
                     progress_callback=on_progress,
                     should_cancel=lambda: self._cancel_requested,
                     asr_variants=self.asr_variants,
+                    include_diarization=self.include_diarization,
                 )
                 result_failures = getattr(result, "failures", 0)
                 result_message = getattr(result, "message", "")
@@ -3066,8 +3146,15 @@ if QT_IMPORT_ERROR is None:
                     )
 
         def show_startup_dialog(self) -> None:
-            # Tela A: Setup wizard when AI components are missing
-            if not app_service.required_models_ready():
+            # Tela A: Setup wizard when AI components are missing.
+            # Gate respeita a escolha persistida (diarizacao opcional, v0.2):
+            # quem pulou o token nao ve o wizard reaparecer a cada inicio.
+            def _models_ready() -> bool:
+                return app_service.required_models_ready(
+                    self._configured_asr_variants(),
+                    include_diarization=self._configured_diarize(),
+                )
+            if not _models_ready():
                 wizard = FirstRunWizard(self)
                 result = wizard.exec()
                 if result == QDialog.DialogCode.Accepted and wizard.download_completed:
@@ -3075,7 +3162,7 @@ if QT_IMPORT_ERROR is None:
                     self.progress_label.setText("Componentes de IA instalados.")
                 else:
                     # Skipped or cancelled — show warning
-                    if not app_service.required_models_ready():
+                    if not _models_ready():
                         self.progress_label.setText(
                             "⚠ Componentes de IA não instalados. "
                             "Use o menu Transcrever > Gerenciar modelos..."
@@ -3084,7 +3171,7 @@ if QT_IMPORT_ERROR is None:
                         self.refresh_interviews()
                         return
                 # Fall through to project chooser if models are now ready
-                if not app_service.required_models_ready():
+                if not _models_ready():
                     self.refresh_interviews()
                     return
 
@@ -3129,11 +3216,12 @@ if QT_IMPORT_ERROR is None:
                 [
                     (
                         "Baixando e verificando modelos locais...",
-                        lambda progress, should_cancel, hf_token=token, variants=self._configured_asr_variants(): app_service.download_models(
+                        lambda progress, should_cancel, hf_token=token, variants=self._configured_asr_variants(), include_dia=self._configured_diarize(): app_service.download_models(
                             token=hf_token,
                             progress_callback=progress,
                             should_cancel=should_cancel,
                             asr_variants=variants,
+                            include_diarization=include_dia,
                         ),
                         True,
                     )
@@ -3151,14 +3239,29 @@ if QT_IMPORT_ERROR is None:
             model = (self.context.config or {}).get("asr_model")
             return [model] if model else None
 
-        def ensure_models_ready(self) -> bool:
+        def _configured_diarize(self) -> bool:
+            """Se a diarizacao entra nos gates de modelos.
+
+            Com projeto aberto: o 'diarize' do projeto. Sem projeto (startup):
+            a escolha persistida do wizard — senao quem pulou o token veria o
+            wizard reaparecer a cada inicio."""
+            if self.context is not None:
+                return bool((self.context.config or {}).get("diarize", True))
+            from . import app_settings
+            return app_settings.diarize_default()
+
+        def ensure_models_ready(self, require_diarization: bool | None = None) -> bool:
             variants = self._configured_asr_variants()
-            if app_service.required_models_ready(variants):
+            # require_diarization=True: acoes explicitas de falantes (Identificar
+            # falantes / Melhorar falantes) exigem pyannote mesmo com o projeto
+            # configurado sem diarizacao.
+            include_dia = self._configured_diarize() if require_diarization is None else require_diarization
+            if app_service.required_models_ready(variants, include_diarization=include_dia):
                 return True
             from . import model_manager as _mm
             partial = False
             try:
-                partial = _mm.has_partial_cache(asr_variants=variants)
+                partial = _mm.has_partial_cache(asr_variants=variants, include_diarization=include_dia)
             except Exception:
                 partial = False
             if partial:
@@ -5548,7 +5651,10 @@ if QT_IMPORT_ERROR is None:
             weights: list[int] = []
             # Dynamic weights from benchmark data (tests/benchmark_exhaustive_2026-04-19.csv)
             asr_model = str(self.context.config.get("asr_model", "large-v3-turbo"))
-            asr_device = str(self.context.config.get("asr_device", "cuda"))
+            # _pipeline_weights espera o device EFETIVO ("cuda"/"cpu") — com o
+            # default "auto" (v0.2+) e preciso resolver antes do lookup.
+            from . import runtime as _runtime_w
+            asr_device = _runtime_w.resolve_device(str(self.context.config.get("asr_device") or "auto"))[0]
             do_diarize = bool(self.context.config.get("diarize", True))
             w = _pipeline_weights(asr_model, asr_device)
             if not do_diarize:
@@ -5598,17 +5704,20 @@ if QT_IMPORT_ERROR is None:
                             "identificar falantes",
                             r[2],
                             r[3],
-                            lambda progress, should_cancel, item=interview_id: app_service.diarize_interviews(
-                                self.context,
-                                ids=[item],
-                                progress_callback=progress,
-                                should_cancel=should_cancel,
+                            lambda progress, should_cancel, item=interview_id: self._diarize_via_subprocess(
+                                item, progress, should_cancel,
                             ),
                             accepts_progress=True,
+                            # Falha na diarizacao nao derruba a transcricao:
+                            # o render cai para o modo sem falantes (v0.2).
+                            optional=True,
                         ),
                     )
                 file_steps.extend([
-                    self.job_step(f"{prefix}: montando transcricao editavel...", interview_id, "montar transcricao", r[3], r[4], lambda item=interview_id: app_service.render_interviews(self.context, ids=[item], overrides=render_overrides)),
+                    # overrides decididos NA HORA do render: se a diarizacao
+                    # (opcional) falhou, o exclusive.json nao existe e o render
+                    # cai para o modo sem falantes em vez de falhar o lote.
+                    self.job_step(f"{prefix}: montando transcricao editavel...", interview_id, "montar transcricao", r[3], r[4], lambda item=interview_id: app_service.render_interviews(self.context, ids=[item], overrides=(render_overrides if self._exclusive_diarization_exists(item) else {}))),
                     self.job_step(f"{prefix}: verificando arquivos gerados...", interview_id, "verificar arquivos", r[4], r[5], lambda item=interview_id: app_service.qc_interviews(self.context, ids=[item])),
                 ])
                 steps.extend(file_steps)
@@ -5629,7 +5738,11 @@ if QT_IMPORT_ERROR is None:
             end_progress: int,
             func: Callable,
             accepts_progress: bool = False,
+            optional: bool = False,
         ) -> tuple:
+            # optional=True (v0.2): falha desta etapa NAO derruba o lote —
+            # usado pela diarizacao dentro da transcricao completa ("transcricao
+            # concluida, falantes pendentes" em vez de falha total).
             def run(
                 progress_callback: Callable[[dict[str, Any]], None] | None = None,
                 should_cancel: Callable[[], bool] | None = None,
@@ -5676,10 +5789,28 @@ if QT_IMPORT_ERROR is None:
                         forwarded["progress"] = inner
                         progress_callback(forwarded)
 
+                PENDING_SPEAKERS_NOTE = "Identificacao de falantes nao concluida (transcricao segue sem separar falantes)."
+
+                def _mark_optional_failure() -> object:
+                    app_service.update_job(
+                        self.context,
+                        interview_id,
+                        {
+                            "status": "Rodando",
+                            "stage": stage,
+                            "progress": end_progress,
+                            "last_error": PENDING_SPEAKERS_NOTE,
+                            "estimated_finish_at": "",
+                        },
+                    )
+                    return app_service.JobResult(stage, 0, PENDING_SPEAKERS_NOTE)
+
                 try:
                     result = func(relay, should_cancel or (lambda: False)) if accepts_progress else func()
                     failures = getattr(result, "failures", 0)
                     if failures:
+                        if optional:
+                            return _mark_optional_failure()
                         app_service.update_job(
                             self.context,
                             interview_id,
@@ -5694,6 +5825,11 @@ if QT_IMPORT_ERROR is None:
                         )
                     else:
                         updates = {"status": "Rodando", "stage": stage, "progress": end_progress, "last_error": "", "estimated_finish_at": ""}
+                        # Preservar o aviso "falantes pendentes" de um step
+                        # opcional anterior — sem isto o render/QC o apagariam.
+                        prev_err = str(((self.context.jobs.get(interview_id) or {}).get("last_error")) or "")
+                        if prev_err.startswith("Identificacao de falantes nao concluida"):
+                            updates["last_error"] = prev_err
                         if end_progress >= 100:
                             updates["status"] = "Concluido"
                             updates["finished_at"] = datetime.now().isoformat(timespec="seconds")
@@ -5704,6 +5840,9 @@ if QT_IMPORT_ERROR is None:
                         )
                     return result
                 except Exception as exc:
+                    if optional:
+                        _logger.warning("Etapa opcional '%s' de %s falhou: %s", stage, interview_id, exc)
+                        return _mark_optional_failure()
                     app_service.update_job(
                         self.context,
                         interview_id,
@@ -5720,16 +5859,70 @@ if QT_IMPORT_ERROR is None:
 
             return (message, run, accepts_progress)
 
+        def _exclusive_diarization_exists(self, interview_id: str) -> bool:
+            try:
+                return (self.context.paths.diarization_dir / "json" / f"{interview_id}.exclusive.json").exists()
+            except Exception:
+                return False
+
+        def _diarize_via_subprocess(
+            self,
+            ids: str | list[str],
+            progress_callback: Callable[[dict[str, Any]], None] | None = None,
+            should_cancel: Callable[[], bool] | None = None,
+        ) -> app_service.JobResult:
+            """Diarizacao via transcritorio-cli em SUBPROCESSO (v0.2).
+
+            Crash de pyannote/torch/CUDA derruba o processo filho, nunca a
+            GUI; cancelamento mata o subprocesso (terminate/kill do
+            run_command_stream). Progresso chega por linhas '@PROGRESS {json}'
+            no mesmo contrato de eventos do caminho in-process antigo."""
+            from . import runtime as _rt
+            from .utils import parse_progress_json_line, run_command_stream
+            id_list = [ids] if isinstance(ids, str) else list(ids)
+            failures = 0
+            for iid in id_list:
+                if should_cancel is not None and should_cancel():
+                    break
+
+                def on_output(line: str) -> None:
+                    detail = parse_progress_json_line(line)
+                    if detail is not None and progress_callback is not None:
+                        progress_callback(detail)
+
+                command = _rt.cli_command(
+                    "--project", str(self.context.paths.project_root),
+                    "diarize", "--ids", iid, "--progress-json",
+                )
+                completed = run_command_stream(command, on_output=on_output, should_cancel=should_cancel)
+                if completed.returncode != 0:
+                    failures += 1
+                    _logger.warning(
+                        "diarizacao em subprocesso de %s saiu com codigo %s",
+                        iid, completed.returncode,
+                    )
+            return app_service.JobResult(
+                "diarize", failures,
+                "" if failures == 0 else f"{failures} arquivo(s) com falha na diarizacao.",
+            )
+
         def run_diarization_job(self) -> None:
             if not self.save_current_turn():
                 return
-            if not self.ensure_models_ready():
+            if not self.ensure_models_ready(require_diarization=True):
                 return
             ids = self.selected_ids_for_job()
             if not ids:
                 QMessageBox.information(self, "Selecione uma entrevista", "Selecione uma entrevista para identificar falantes.")
                 return
-            self.start_worker("Identificar falantes", [("Identificando falantes...", lambda: app_service.diarize_interviews(self.context, ids=ids))])
+            self.start_worker(
+                "Identificar falantes",
+                [(
+                    "Identificando falantes...",
+                    lambda progress, should_cancel: self._diarize_via_subprocess(ids, progress, should_cancel),
+                    True,
+                )],
+            )
 
         def improve_speakers_current_file(self, *_args: Any) -> None:
             if not self.current_interview_id:
@@ -5737,7 +5930,7 @@ if QT_IMPORT_ERROR is None:
                 return
             if not self.save_current_turn(force=True):
                 return
-            if not self.ensure_models_ready():
+            if not self.ensure_models_ready(require_diarization=True):
                 return
             interview_id = self.current_interview_id
             answer = QMessageBox.question(
@@ -5754,8 +5947,8 @@ if QT_IMPORT_ERROR is None:
                     "identificar falantes",
                     0,
                     70,
-                    lambda progress, should_cancel, item=interview_id: app_service.diarize_interviews(
-                        self.context, ids=[item], progress_callback=progress, should_cancel=should_cancel,
+                    lambda progress, should_cancel, item=interview_id: self._diarize_via_subprocess(
+                        item, progress, should_cancel,
                     ),
                     accepts_progress=True,
                 ),

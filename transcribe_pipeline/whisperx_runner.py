@@ -64,6 +64,14 @@ def run_whisperx(
                 print(f"[Transcritorio] Apple Silicon (MPS) detectado mas mlx-whisper nao esta instalado. Transcrevendo {row['interview_id']} em CPU (~3x tempo real). Instale 'mlx-whisper' para usar Metal.")
             else:
                 print(f"[Transcritorio] CUDA indisponivel. Usando CPU para transcrever {row['interview_id']}.")
+        compute_type, batch_size = runtime.resolve_compute_settings(
+            device, config.get("asr_compute_type"), config.get("asr_batch_size")
+        )
+        configured_ct = str(config.get("asr_compute_type") or "auto").strip().lower()
+        if device == "cpu" and configured_ct not in ("auto", "", compute_type):
+            # Coercao de seguranca: float16 em CPU viraria float32 no CT2
+            # (~2x RAM). Informar para o usuario entender a troca.
+            print(f"[Transcritorio] Precisao '{configured_ct}' nao e adequada para CPU; usando '{compute_type}'.")
         effective_model = model_manager.resolve_asr_model(str(config["asr_model"]))
         # Pass the full repo_id (not the shortcut) so faster_whisper looks in
         # the cache dir we actually downloaded to. faster_whisper hardcodes
@@ -79,9 +87,9 @@ def run_whisperx(
             "--device",
             device,
             "--compute_type",
-            str(config["asr_compute_type"]),
+            compute_type,
             "--batch_size",
-            str(config["asr_batch_size"]),
+            str(batch_size),
             "--output_format",
             "all",
             "--output_dir",
@@ -131,8 +139,10 @@ def run_whisperx(
                 # "backend" distinguishes whisperx CLI runs from mlx-whisper
                 # runs on Apple Silicon. Both write to the same jobs.jsonl.
                 "backend": "whisperx",
-                "compute_type": config["asr_compute_type"],
-                "batch_size": config["asr_batch_size"],
+                # Valores EFETIVOS (pos resolve_compute_settings), nao os
+                # configurados — o log deve registrar o que realmente rodou.
+                "compute_type": compute_type,
+                "batch_size": batch_size,
                 "variant": config.get("asr_variant") or "",
                 "output_dir": str(output_dir),
                 "command": redacted,

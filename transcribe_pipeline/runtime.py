@@ -264,13 +264,66 @@ def resolve_device(configured: str | None) -> tuple[str, bool]:
     CT2/faster-whisper does not support MPS, so mps is coerced to cpu here.
     Callers that want the raw detection should use detect_device() instead.
     """
-    wanted = (configured or "cuda").lower()
+    wanted = (configured or "auto").lower()
     if wanted == "cpu":
         return "cpu", False
     detected = detect_device()
     if detected == "cuda":
         return "cuda", False
-    return "cpu", True
+    # Com "auto" (default v0.2+), cair em CPU e o comportamento esperado,
+    # nao um fallback — fell_back=True fica reservado para "cuda" explicito
+    # em maquina sem CUDA (warning legitimo na GUI).
+    return "cpu", wanted not in ("auto", "")
+
+
+def resolve_compute_settings(
+    device: str,
+    compute_type: object,
+    batch_size: object,
+) -> tuple[str, int]:
+    """Resolve compute_type/batch_size efetivos para o device JA resolvido.
+
+    "auto" (default v0.2+) escolhe o perfil do dispositivo: cuda -> float16 /
+    batch 8; cpu -> int8 / batch 2. Coercao de seguranca: float16 e
+    int8_float16 em CPU viram int8 — o CTranslate2 converteria float16 para
+    float32 em CPU (~2x RAM, muito mais lento), combinacao que travava
+    maquinas sem GPU com o default antigo. Batch em CPU e limitado a 4.
+    Escolhas explicitas validas em CPU (int8, int8_float32, float32) sao
+    respeitadas; em CUDA tudo explicito passa intacto.
+    """
+    ct = str(compute_type or "auto").strip().lower()
+    try:
+        bs = int(batch_size)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        bs = 0
+    if device == "cuda":
+        if ct in ("auto", ""):
+            ct = "float16"
+        if bs <= 0:
+            bs = 8
+        return ct, bs
+    if ct in ("auto", "", "float16", "int8_float16"):
+        ct = "int8"
+    if bs <= 0:
+        bs = 2
+    else:
+        bs = min(bs, 4)
+    return ct, bs
+
+
+def cli_command(*cli_args: str) -> list[str]:
+    """Comando para invocar o CLI do Transcritorio como SUBPROCESSO.
+
+    Bundle frozen: transcritorio-cli(.exe) mora ao lado do executavel da GUI.
+    Dev/pip: usa o proprio interpretador com -m (o pacote ja esta importavel
+    no ambiente que lancou a GUI; -B evita __pycache__ no Dropbox).
+    Usado para isolar a diarizacao em processo filho (v0.2): crash de
+    pyannote/torch derruba o filho, nunca a GUI.
+    """
+    if getattr(sys, "frozen", False):
+        exe_name = "transcritorio-cli.exe" if sys.platform == "win32" else "transcritorio-cli"
+        return [str(Path(sys.executable).with_name(exe_name)), *cli_args]
+    return [sys.executable, "-B", "-m", "transcribe_pipeline", *cli_args]
 
 
 def describe_backend(configured_device: str | None = None) -> str:

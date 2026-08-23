@@ -290,10 +290,16 @@ _FIXED_MODELS: tuple[ModelAsset, ...] = (
 )
 
 
-def get_required_models(asr_variants: list[str] | None = None) -> tuple[ModelAsset, ...]:
+def get_required_models(
+    asr_variants: list[str] | None = None,
+    include_diarization: bool = True,
+) -> tuple[ModelAsset, ...]:
     """Build the list of required models based on selected ASR variants.
 
-    Always includes alignment and diarization models.
+    Always includes the alignment model (timestamps por palavra). O modelo
+    de diarizacao (pyannote, gated — exige conta HF + token) so entra quando
+    ``include_diarization=True``: quem so quer transcrever nao pode ser
+    obrigado a criar conta/token (v0.2, diarizacao opcional).
     """
     if asr_variants is None:
         asr_variants = [DEFAULT_ASR_VARIANT]
@@ -312,7 +318,10 @@ def get_required_models(asr_variants: list[str] | None = None) -> tuple[ModelAss
             estimated_gb=info["estimated_gb"],
             revision=info.get("revision"),
         ))
-    assets.extend(_FIXED_MODELS)
+    if include_diarization:
+        assets.extend(_FIXED_MODELS)
+    else:
+        assets.extend(a for a in _FIXED_MODELS if a.key != "diarization")
     return tuple(assets)
 
 
@@ -488,13 +497,17 @@ def _snapshot_has_weights(path: Path) -> bool:
     return False
 
 
-def has_partial_cache(cache_dir: Path | None = None, asr_variants: list[str] | None = None) -> bool:
+def has_partial_cache(
+    cache_dir: Path | None = None,
+    asr_variants: list[str] | None = None,
+    include_diarization: bool = True,
+) -> bool:
     """True iff at least one required model has *any* file on disk but no full weight.
 
     Used by the GUI to distinguish 'never started' (show 'Preparar modelos agora?')
     from 'interrupted' (show 'Retomar download inconcluso?').
     """
-    for asset in get_required_models(asr_variants):
+    for asset in get_required_models(asr_variants, include_diarization=include_diarization):
         path = cached_snapshot_path(asset.repo_id, cache_dir, revision=asset.revision)
         if path is None:
             continue
@@ -508,8 +521,12 @@ def has_partial_cache(cache_dir: Path | None = None, asr_variants: list[str] | N
     return False
 
 
-def status(cache_dir: Path | None = None, asr_variants: list[str] | None = None) -> list[ModelStatus]:
-    models = get_required_models(asr_variants)
+def status(
+    cache_dir: Path | None = None,
+    asr_variants: list[str] | None = None,
+    include_diarization: bool = True,
+) -> list[ModelStatus]:
+    models = get_required_models(asr_variants, include_diarization=include_diarization)
     result: list[ModelStatus] = []
     for asset in models:
         path = cached_snapshot_path(asset.repo_id, cache_dir, revision=asset.revision)
@@ -518,8 +535,12 @@ def status(cache_dir: Path | None = None, asr_variants: list[str] | None = None)
     return result
 
 
-def all_required_models_cached(cache_dir: Path | None = None, asr_variants: list[str] | None = None) -> bool:
-    return all(item.cached for item in status(cache_dir, asr_variants=asr_variants))
+def all_required_models_cached(
+    cache_dir: Path | None = None,
+    asr_variants: list[str] | None = None,
+    include_diarization: bool = True,
+) -> bool:
+    return all(item.cached for item in status(cache_dir, asr_variants=asr_variants, include_diarization=include_diarization))
 
 
 def status_as_dict(cache_dir: Path | None = None) -> dict[str, Any]:
@@ -1034,6 +1055,7 @@ def download_required_models(
     progress_callback: ProgressCallback | None = None,
     should_cancel: ShouldCancel | None = None,
     asr_variants: list[str] | None = None,
+    include_diarization: bool = True,
 ) -> int:
     cache_dir = runtime.model_cache_dir()
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -1047,7 +1069,7 @@ def download_required_models(
     # snapshot_download doesn't deadlock. See _clear_stale_hf_locks.
     _clear_stale_hf_locks(cache_dir)
     token_value = token if token is not None else os.environ.get(token_env)
-    models = get_required_models(asr_variants)
+    models = get_required_models(asr_variants, include_diarization=include_diarization)
     failures = 0
     total = max(1, len(models))
     # Compute per-model progress ranges weighted by estimated size
@@ -1138,6 +1160,7 @@ def download_required_models(
 def verify_required_models(
     progress_callback: ProgressCallback | None = None,
     asr_variants: list[str] | None = None,
+    include_diarization: bool = True,
 ) -> int:
     """Verifica se os modelos obrigatorios estao no cache local.
 
@@ -1152,7 +1175,7 @@ def verify_required_models(
     # get_required_models(asr_variants): verificar os variants que o chamador
     # baixou/configurou — verificar sempre REQUIRED_MODELS (default) gerava
     # falha falsa apos download bem-sucedido de outra variante.
-    assets = get_required_models(asr_variants)
+    assets = get_required_models(asr_variants, include_diarization=include_diarization)
     total = max(1, len(assets))
     _download_diag_log(f"[verify] start cache_dir={cache_dir} assets={total}")
     for index, asset in enumerate(assets, start=1):

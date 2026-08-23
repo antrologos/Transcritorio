@@ -92,6 +92,13 @@ def create_project(project_root: Path, project_name: str | None = None) -> Proje
     config["audio_globs"] = []
     config["audio_files"] = []
     config["audio_roots"] = []
+    # Projetos novos herdam a escolha do wizard (diarizacao opcional, v0.2):
+    # quem optou por "apenas transcrever" nao pode nascer exigindo pyannote.
+    try:
+        from . import app_settings
+        config["diarize"] = app_settings.diarize_default()
+    except Exception:
+        pass
     write_config(config_path, config, header=["# Local transcription pipeline configuration."])
     paths = make_paths(config, base_dir=project_root)
     ensure_directories(paths)
@@ -261,8 +268,8 @@ def models_status_text() -> str:
     return model_manager.status_text()
 
 
-def required_models_ready(asr_variants: list[str] | None = None) -> bool:
-    return model_manager.all_required_models_cached(asr_variants=asr_variants)
+def required_models_ready(asr_variants: list[str] | None = None, include_diarization: bool = True) -> bool:
+    return model_manager.all_required_models_cached(asr_variants=asr_variants, include_diarization=include_diarization)
 
 
 def download_models(
@@ -270,11 +277,12 @@ def download_models(
     progress_callback: ProgressCallback | None = None,
     should_cancel: Callable[[], bool] | None = None,
     asr_variants: list[str] | None = None,
+    include_diarization: bool = True,
 ) -> JobResult:
-    failures = model_manager.download_required_models(token=token, progress_callback=progress_callback, should_cancel=should_cancel, asr_variants=asr_variants)
+    failures = model_manager.download_required_models(token=token, progress_callback=progress_callback, should_cancel=should_cancel, asr_variants=asr_variants, include_diarization=include_diarization)
     if failures:
         return JobResult("models", failures, "Falha ao baixar um ou mais modelos.")
-    verify_failures = model_manager.verify_required_models(progress_callback=progress_callback, asr_variants=asr_variants)
+    verify_failures = model_manager.verify_required_models(progress_callback=progress_callback, asr_variants=asr_variants, include_diarization=include_diarization)
     # Ternario CRITICO: sem isto a mensagem seria "Modelos prontos..."
     # mesmo em falha, causando UI mostrar sucesso como erro. Bug visto
     # pelo Rogerio em 2026-04-22 depois do download completar mas verify
@@ -287,8 +295,8 @@ def download_models(
     )
 
 
-def verify_models(progress_callback: ProgressCallback | None = None, asr_variants: list[str] | None = None) -> JobResult:
-    failures = model_manager.verify_required_models(progress_callback=progress_callback, asr_variants=asr_variants)
+def verify_models(progress_callback: ProgressCallback | None = None, asr_variants: list[str] | None = None, include_diarization: bool = True) -> JobResult:
+    failures = model_manager.verify_required_models(progress_callback=progress_callback, asr_variants=asr_variants, include_diarization=include_diarization)
     return JobResult("models", failures, "Modelos prontos para uso local." if failures == 0 else "Modelos ausentes ou incompletos.")
 
 

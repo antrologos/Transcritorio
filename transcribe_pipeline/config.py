@@ -20,9 +20,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "wav_channels": 1,
     "asr_model": "large-v3-turbo",
     "asr_language": "pt",
-    "asr_device": "cuda",
-    "asr_compute_type": "float16",
-    "asr_batch_size": 8,
+    # "auto" (v0.2+): device/precisao/batch resolvidos por
+    # runtime.resolve_device + resolve_compute_settings — cuda -> float16/8,
+    # cpu -> int8/2. Valores explicitos antigos continuam validos (float16
+    # em CPU e coagido para int8 pelo runner).
+    "asr_device": "auto",
+    "asr_compute_type": "auto",
+    "asr_batch_size": "auto",
     "asr_beam_size": 5,
     "asr_initial_prompt": None,
     "asr_initial_prompt_file": None,

@@ -55,6 +55,12 @@ def main(argv: list[str] | None = None) -> int:
     diarize_parser.add_argument("--min-speakers", type=int, dest="min_speakers")
     diarize_parser.add_argument("--max-speakers", type=int, dest="max_speakers")
     diarize_parser.add_argument("--diarize-model", dest="diarize_model")
+    diarize_parser.add_argument(
+        "--progress-json",
+        action="store_true",
+        dest="progress_json",
+        help="Imprime linhas '@PROGRESS {json}' para consumo da GUI (subprocesso).",
+    )
     diarize_parser.set_defaults(func=cmd_diarize)
 
     render_parser = subparsers.add_parser("render", help="Render canonical JSON, Markdown, DOCX and TSV.")
@@ -231,7 +237,18 @@ def cmd_diarize(args: argparse.Namespace) -> int:
     config, paths = load_context(args)
     apply_overrides(config, args, ["diarization_num_speakers", "diarize_model", "min_speakers", "max_speakers"])
     rows = load_manifest_or_exit(paths)
-    return run_pyannote_diarization(rows, config, paths, ids=args.ids, dry_run=args.dry_run)
+    progress_callback = None
+    if getattr(args, "progress_json", False):
+        from .utils import PROGRESS_JSON_PREFIX
+
+        def progress_callback(detail: dict) -> None:
+            # Linha estruturada para a GUI (diarizacao em subprocesso, v0.2).
+            print(PROGRESS_JSON_PREFIX + json.dumps(detail, ensure_ascii=False), flush=True)
+
+    return run_pyannote_diarization(
+        rows, config, paths, ids=args.ids, dry_run=args.dry_run,
+        progress_callback=progress_callback,
+    )
 
 
 def cmd_render(args: argparse.Namespace) -> int:
