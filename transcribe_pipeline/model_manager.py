@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 import json
 import os
+import re
 import threading
 import time
 
@@ -370,9 +371,12 @@ def cached_snapshot_path(
     refs_main = repo_cache / "refs" / "main"
     if refs_main.exists():
         ref_rev = refs_main.read_text(encoding="utf-8").strip()
-        candidate = snapshots / ref_rev
-        if candidate.exists():
-            return candidate
+        # refs/main vazio: sem o guard, snapshots/"" == snapshots/ e o proprio
+        # diretorio-pai seria retornado como "snapshot" (estado parcial eterno).
+        if ref_rev:
+            candidate = snapshots / ref_rev
+            if candidate.exists():
+                return candidate
     if not snapshots.exists():
         return None
     candidates = [path for path in snapshots.iterdir() if path.is_dir()]
@@ -386,7 +390,9 @@ def installed_asr_variants(cache_dir: Path | None = None) -> list[str]:
     result: list[str] = []
     for key, info in ASR_VARIANTS.items():
         path = cached_snapshot_path(info["repo"], cache_dir, revision=info.get("revision"))
-        if path and any(path.iterdir()):
+        # _snapshot_has_weights, nao any(iterdir()): cache parcial (so config/
+        # tokenizer) nao pode contar como variante instalada.
+        if path and _snapshot_has_weights(path):
             result.append(key)
     return result
 
@@ -403,7 +409,7 @@ def resolve_asr_model(configured: str, cache_dir: Path | None = None) -> str:
     if configured in ASR_VARIANTS:
         info = ASR_VARIANTS[configured]
         path = cached_snapshot_path(info["repo"], cache_dir, revision=info.get("revision"))
-        if path and any(path.iterdir()):
+        if path and _snapshot_has_weights(path):
             return configured
     else:
         # Unknown variant (e.g. custom model path) — pass through
@@ -437,7 +443,12 @@ def resolve_asr_repo(configured: str) -> str:
     return configured
 
 
-_WEIGHT_BLOB_MIN_BYTES = 100 * 1024  # 100 KB floor: below this, only JSON/txt metadata is there
+# Piso para considerar um blob como PESO de modelo. Empiricamente (cache real,
+# 2026-08-23): o maior arquivo nao-peso e o tokenizer.json do whisper (~2.4 MB);
+# o menor peso real e o do pyannote community-1 (~25 MB). 4 MB separa os dois
+# com folga. O piso antigo de 100 KB aceitava tokenizer.json e blobs parciais
+# como "peso", marcando modelo quebrado como pronto (desabilitava a retomada).
+_WEIGHT_BLOB_MIN_BYTES = 4 * 1024 * 1024
 
 
 def _snapshot_has_weights(path: Path) -> bool:
@@ -465,6 +476,9 @@ def _snapshot_has_weights(path: Path) -> bool:
     try:
         for entry in blobs_dir.iterdir():
             try:
+                # *.incomplete = download parcial do hub; nunca contar como peso.
+                if entry.name.endswith(".incomplete"):
+                    continue
                 if entry.is_file() and entry.stat().st_size >= _WEIGHT_BLOB_MIN_BYTES:
                     return True
             except OSError:
@@ -915,6 +929,11 @@ def _manual_snapshot_download(
         if _cancelled():
             raise RuntimeError("Cancelado pelo usuario")
         rfilename = sibling["rfilename"]
+        # rfilename e ETag entram em caminhos locais: rejeitar path traversal
+        # de resposta adulterada (defesa em profundidade junto ao pin de SHA).
+        _rf = PurePosixPath(rfilename)
+        if _rf.is_absolute() or ".." in _rf.parts:
+            raise RuntimeError(f"rfilename suspeito rejeitado: {rfilename!r}")
         resolve_url = f"{HF_ENDPOINT}/{repo_id}/resolve/{effective_rev}/{rfilename}"
         head = session.head(resolve_url, timeout=30, allow_redirects=False)
         if head.status_code not in (200, 302, 307):
@@ -924,6 +943,8 @@ def _manual_snapshot_download(
         etag = _etag_from_headers(head.headers)
         if not etag:
             raise RuntimeError(f"{rfilename}: resposta sem ETag")
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", etag):
+            raise RuntimeError(f"{rfilename}: ETag suspeito rejeitado: {etag!r}")
         expected_size = int(
             head.headers.get("X-Linked-Size")
             or head.headers.get("Content-Length")
@@ -1085,11 +1106,12 @@ def download_required_models(
             # pra diagnosticar retrospectivamente.
             import traceback
             _download_diag_log(
-                f"[manual:{asset.label}] EXCEPTION: {type(exc).__name__}: {exc}"
+                f"[manual:{asset.label}] EXCEPTION: {type(exc).__name__}: "
+                f"{sanitize_message(str(exc))}"
             )
             for line in traceback.format_exception(type(exc), exc, exc.__traceback__):
                 for subline in line.rstrip().splitlines():
-                    _download_diag_log(f"  {subline}")
+                    _download_diag_log(f"  {sanitize_message(subline)}")
             if progress_callback is not None:
                 progress_callback(
                     {
@@ -1113,7 +1135,10 @@ def download_required_models(
     return failures
 
 
-def verify_required_models(progress_callback: ProgressCallback | None = None) -> int:
+def verify_required_models(
+    progress_callback: ProgressCallback | None = None,
+    asr_variants: list[str] | None = None,
+) -> int:
     """Verifica se os modelos obrigatorios estao no cache local.
 
     Antes chamava snapshot_download(local_files_only=True) — caminho que
@@ -1124,9 +1149,13 @@ def verify_required_models(progress_callback: ProgressCallback | None = None) ->
     """
     cache_dir = runtime.model_cache_dir()
     failures = 0
-    total = max(1, len(REQUIRED_MODELS))
+    # get_required_models(asr_variants): verificar os variants que o chamador
+    # baixou/configurou — verificar sempre REQUIRED_MODELS (default) gerava
+    # falha falsa apos download bem-sucedido de outra variante.
+    assets = get_required_models(asr_variants)
+    total = max(1, len(assets))
     _download_diag_log(f"[verify] start cache_dir={cache_dir} assets={total}")
-    for index, asset in enumerate(REQUIRED_MODELS, start=1):
+    for index, asset in enumerate(assets, start=1):
         path = cached_snapshot_path(asset.repo_id, cache_dir, revision=asset.revision)
         path_exists = path is not None and path.exists()
         has_weights = False

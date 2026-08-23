@@ -235,6 +235,12 @@ def ensure_project(paths: Paths, config: dict[str, Any]) -> dict[str, Any]:
     path = project_path(paths)
     if path.exists():
         project = read_json(path)
+        if not isinstance(project, dict):
+            # Arquivo .transcritorio corrompido (JSON valido mas nao-dict,
+            # ex. "null"): reconstruir com defaults em vez de crashar em
+            # normalize_project. read_json ja levanta ValueError com mensagem
+            # clara para JSON invalido.
+            project = default_project(paths, config)
     else:
         project = default_project(paths, config)
     normalized = normalize_project(project, paths, config)
@@ -445,9 +451,12 @@ def restore_ids_to_csvs(paths: Paths, snapshots: dict[str, Any]) -> None:
         spath = speakers_map_csv_path(paths)
         current = _read_csv_rows(spath)
         fieldnames = list(current[0].keys()) if current else list(speakers_rows[0].keys())
+        # Chave = colunas REAIS do schema (interview_id, speaker_label, ...);
+        # "speaker_id"/"role" nao existem e degeneravam a chave para so o
+        # interview_id, descartando as linhas dos demais falantes do snapshot.
         key = "interview_id"
-        existing_keys = {(r.get(key), r.get("speaker_id"), r.get("role")) for r in current}
-        merged = current + [r for r in speakers_rows if (r.get(key), r.get("speaker_id"), r.get("role")) not in existing_keys]
+        existing_keys = {(r.get(key), r.get("speaker_label")) for r in current}
+        merged = current + [r for r in speakers_rows if (r.get(key), r.get("speaker_label")) not in existing_keys]
         _write_csv_rows(spath, merged, fieldnames)
     jobs_entries = snapshots.get("jobs_entries") or {}
     if jobs_entries:

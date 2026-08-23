@@ -173,7 +173,12 @@ def _load_simple_yaml(text: str) -> dict[str, Any]:
     result: dict[str, Any] = {}
     current_key: str | None = None
     for raw_line in text.splitlines():
-        line = raw_line.split("#", 1)[0].rstrip()
+        if raw_line.lstrip().startswith("#"):
+            continue
+        # '#' so inicia comentario precedido de espaco (regra YAML);
+        # '#' dentro de valores (ex.: paths como take#3.wav) e preservado.
+        comment_idx = raw_line.find(" #")
+        line = (raw_line[:comment_idx] if comment_idx != -1 else raw_line).rstrip()
         if not line:
             continue
         if line.startswith("  - ") and current_key:

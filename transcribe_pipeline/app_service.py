@@ -14,7 +14,7 @@ from .qc import run_qc
 from .render import render_outputs, write_empty_speaker_map
 from .review_store import create_review_from_canonical, export_review_outputs, load_review_transcript, save_review_transcript
 from .status import InterviewStatus, collect_status
-from .utils import read_json, write_json
+from .utils import is_interview_artifact, read_json, write_json
 from .whisperx_runner import run_whisperx
 
 
@@ -261,8 +261,8 @@ def models_status_text() -> str:
     return model_manager.status_text()
 
 
-def required_models_ready() -> bool:
-    return model_manager.all_required_models_cached()
+def required_models_ready(asr_variants: list[str] | None = None) -> bool:
+    return model_manager.all_required_models_cached(asr_variants=asr_variants)
 
 
 def download_models(
@@ -274,7 +274,7 @@ def download_models(
     failures = model_manager.download_required_models(token=token, progress_callback=progress_callback, should_cancel=should_cancel, asr_variants=asr_variants)
     if failures:
         return JobResult("models", failures, "Falha ao baixar um ou mais modelos.")
-    verify_failures = model_manager.verify_required_models(progress_callback=progress_callback)
+    verify_failures = model_manager.verify_required_models(progress_callback=progress_callback, asr_variants=asr_variants)
     # Ternario CRITICO: sem isto a mensagem seria "Modelos prontos..."
     # mesmo em falha, causando UI mostrar sucesso como erro. Bug visto
     # pelo Rogerio em 2026-04-22 depois do download completar mas verify
@@ -287,8 +287,8 @@ def download_models(
     )
 
 
-def verify_models(progress_callback: ProgressCallback | None = None) -> JobResult:
-    failures = model_manager.verify_required_models(progress_callback=progress_callback)
+def verify_models(progress_callback: ProgressCallback | None = None, asr_variants: list[str] | None = None) -> JobResult:
+    failures = model_manager.verify_required_models(progress_callback=progress_callback, asr_variants=asr_variants)
     return JobResult("models", failures, "Modelos prontos para uso local." if failures == 0 else "Modelos ausentes ou incompletos.")
 
 
@@ -381,7 +381,7 @@ def delete_transcription_outputs(context: ProjectContext, ids: list[str]) -> tup
             if not base_dir.exists():
                 continue
             for f in base_dir.rglob(f"{interview_id}*"):
-                if f.is_file():
+                if f.is_file() and is_interview_artifact(f.name, interview_id):
                     f.unlink()
                     deleted += 1
         context = update_job(context, interview_id, {
@@ -459,7 +459,7 @@ def collect_trash_files(context: ProjectContext, ids: list[str]) -> list[dict]:
             if not base.exists():
                 continue
             for f in base.rglob(f"{iid}*"):
-                if f.is_file():
+                if f.is_file() and is_interview_artifact(f.name, iid):
                     add(f)
     # Deduplicate
     seen: set[str] = set()
@@ -616,6 +616,11 @@ def redo_trash(context: ProjectContext, trash_id: str) -> tuple[str, ProjectCont
         raise RedoUnavailableError("exclusao original foi parcial")
     moved_files = manifest.get("moved_files") or []
     ids = manifest.get("interview_ids") or []
+    # Mesmo guard de prepare_trash_move: nunca deletar arquivos de entrevista
+    # com job ativo (assimetria era brecha — redo deletava sem bloquear).
+    busy = _ids_with_active_jobs(context, ids)
+    if busy:
+        raise InterviewBusyError(", ".join(busy))
     # Validar: todos os originais existem (foi feito undo antes)
     for mf in moved_files:
         original = mf.get("original") or ""
@@ -674,7 +679,7 @@ def _ids_with_active_jobs(context: ProjectContext, ids: list[str]) -> list[str]:
     busy = []
     for iid in ids:
         status = (context.jobs.get(iid) or {}).get("status") or ""
-        if status in ("Executando", "Na fila"):
+        if status in ("Rodando", "Na fila"):
             busy.append(iid)
     return busy
 

@@ -67,6 +67,9 @@ def run_command(args: list[str], cwd: Path | None = None) -> subprocess.Complete
         text=True,
         encoding="utf-8",
         errors="replace",
+        # Mesmo env sanitizado de run_command_stream: ffmpeg/ffprobe nao
+        # precisam (nem devem) herdar o token HF do processo pai.
+        env=secure_subprocess_env(),
         **_no_window_flags(),
     )
 
@@ -169,3 +172,17 @@ def relative_to(path: Path, root: Path) -> str:
         return str(path.resolve().relative_to(root.resolve()))
     except ValueError:
         return str(path.resolve())
+
+
+def is_interview_artifact(name: str, interview_id: str) -> bool:
+    """True se o nome de arquivo pertence a esta entrevista.
+
+    Derivados seguem os padroes {id}.ext, {id}.kind.ext e {id}_nvivo.tsv.
+    Um rglob("{id}*") sozinho tambem casaria "entrevista_10.json" para o id
+    "entrevista_1" — este filtro evita apagar/mover artefatos de outra entrevista.
+    """
+    return (
+        name == interview_id
+        or name.startswith(interview_id + ".")
+        or name == interview_id + "_nvivo.tsv"
+    )

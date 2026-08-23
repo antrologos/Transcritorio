@@ -368,8 +368,11 @@ def find_whisperx_json(paths: Paths, interview_id: str) -> Path | None:
     for candidate in candidates:
         if candidate.exists():
             return candidate
-    for candidate in paths.asr_dir.rglob(f"*{interview_id}*.json"):
-        return candidate
+    # Match exato por nome (nunca wildcard nos dois lados: "*{id}*" casaria
+    # o JSON de OUTRA entrevista com id que contem/e contido neste).
+    for pattern in (f"{interview_id}.json", f"{interview_id}.whisperx.json"):
+        for candidate in paths.asr_dir.rglob(pattern):
+            return candidate
     return None
 
 

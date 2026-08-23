@@ -821,7 +821,7 @@ if QT_IMPORT_ERROR is None:
                 self.progress.emit(f"{self.label} concluido.", 100)
                 self.finished_ok.emit(f"{self.label} concluido.")
             except Exception as exc:  # GUI boundary
-                self.failed.emit(str(exc))
+                self.failed.emit(sanitize_message(str(exc)))
 
         def unpack_step(self, step: tuple) -> tuple[str, Callable, bool]:
             if len(step) >= 3:
@@ -1392,7 +1392,7 @@ if QT_IMPORT_ERROR is None:
             open_folder_in_explorer(folder)
 
         def _jobs_using_model_repo(self, repo_id: str) -> int:
-            """Retorna numero de jobs Executando/Na fila que estao usando este modelo.
+            """Retorna numero de jobs Rodando/Na fila que estao usando este modelo.
 
             Heuristica simples: se o repo corresponde ao asr_model configurado e
             existem jobs ativos, conta. Diarizacao/alignment sao sempre usados
@@ -1403,7 +1403,7 @@ if QT_IMPORT_ERROR is None:
                 return 0
             if ctx is None:
                 return 0
-            active = [iid for iid, j in (ctx.jobs or {}).items() if (j or {}).get("status") in ("Executando", "Na fila")]
+            active = [iid for iid, j in (ctx.jobs or {}).items() if (j or {}).get("status") in ("Rodando", "Na fila")]
             if not active:
                 return 0
             from . import model_manager
@@ -1484,16 +1484,14 @@ if QT_IMPORT_ERROR is None:
 
         def _change_token(self) -> None:
             from . import token_vault
-            current = ""
-            try:
-                current = token_vault.retrieve() or ""
-            except Exception:
-                current = ""
+            # Nunca pre-preencher com o token do cofre nem exibir em texto
+            # claro: campo mascarado (Password). Deixar vazio + OK = fluxo
+            # de apagar token (confirmado abaixo).
             new_token, ok = QInputDialog.getText(
                 self,
                 "Token do Hugging Face",
-                "Token (fica salvo apenas neste computador):",
-                text=current,
+                "Token (fica salvo apenas neste computador; vazio = apagar o salvo):",
+                QLineEdit.EchoMode.Password,
             )
             if not ok:
                 return
@@ -1865,6 +1863,17 @@ if QT_IMPORT_ERROR is None:
             self.setPage(self.PAGE_DOWNLOAD, self._make_download_page())
             self.setPage(self.PAGE_DONE, self._make_done_page())
 
+        def done(self, result: int) -> None:
+            # Fechar o wizard (X, Pular, Concluir) com download em andamento
+            # NUNCA pode destruir o QThread vivo (crash na saida) nem deixar
+            # o download orfao competindo com um proximo download.
+            page = self.page(self.PAGE_DOWNLOAD)
+            worker = getattr(page, "_worker", None)
+            if worker is not None and worker.isRunning():
+                worker.request_cancel()
+                worker.wait()  # bloqueante: should_cancel corta entre blobs/chunks
+            super().done(result)
+
         # -- Page factories --
 
         def _make_welcome_page(self) -> QWizardPage:
@@ -1878,7 +1887,8 @@ if QT_IMPORT_ERROR is None:
                 "Nenhum áudio será enviado para a internet. "
                 "Suas gravações ficam sempre no seu computador.\n\n"
                 "Para funcionar, o programa precisa baixar alguns componentes de "
-                "inteligência artificial (arquivos grandes, cerca de 7 GB). "
+                "inteligência artificial (arquivos grandes — cerca de 7 GB de download "
+                "no fluxo padrão; o espaço em disco aparece na etapa de seleção). "
                 "Isso é feito uma única vez.\n\n"
                 "Vamos guiá-lo passo a passo. O processo leva uns 10 minutos "
                 "e você só precisa fazer isso na primeira vez."
@@ -2069,8 +2079,10 @@ if QT_IMPORT_ERROR is None:
                 if cb.isChecked()
             )
             total = asr_gb + self.FIXED_GB
+            # estimated_gb e tamanho EM DISCO (download real e ~metade, o cache
+            # HF duplica) — rotular como "espaco em disco", nao "download".
             self.total_label.setText(
-                f"Download total: ~{self._fmt(total)} "
+                f"Espaço em disco necessário: ~{self._fmt(total)} "
                 f"(inclui componentes obrigatórios de alinhamento e identificação de falantes)"
             )
 
@@ -2187,6 +2199,7 @@ if QT_IMPORT_ERROR is None:
         def __init__(self, wizard: "FirstRunWizard") -> None:
             super().__init__()
             self._wizard = wizard
+            self._worker: "_SetupDownloadThread | None" = None
             self._download_started = False
             self._download_done = False
             self.setTitle("Passo 5 de 5: Baixar os componentes")
@@ -2263,6 +2276,10 @@ if QT_IMPORT_ERROR is None:
             super().__init__()
             self.token = token
             self.asr_variants = asr_variants
+            self._cancel_requested = False
+
+        def request_cancel(self) -> None:
+            self._cancel_requested = True
 
         def run(self) -> None:
             from .model_manager import _download_diag_log
@@ -2274,6 +2291,7 @@ if QT_IMPORT_ERROR is None:
                 result = app_service.download_models(
                     token=self.token,
                     progress_callback=on_progress,
+                    should_cancel=lambda: self._cancel_requested,
                     asr_variants=self.asr_variants,
                 )
                 result_failures = getattr(result, "failures", 0)
@@ -2417,7 +2435,7 @@ if QT_IMPORT_ERROR is None:
             # to paste the token once and never see this dialog again. Users
             # who share a machine can explicitly uncheck.
             self.remember_checkbox.setChecked(True)
-            self.remember_checkbox.setToolTip("Armazena o token criptografado com suas credenciais do Windows (DPAPI). So voce neste computador pode acessar.")
+            self.remember_checkbox.setToolTip("Armazena o token criptografado no cofre de credenciais do sistema (Gerenciador de Credenciais no Windows, Keychain no macOS, SecretService no Linux). So voce neste computador pode acessar.")
             layout.addWidget(self.remember_checkbox)
 
             status = QTextEdit()
@@ -3111,23 +3129,36 @@ if QT_IMPORT_ERROR is None:
                 [
                     (
                         "Baixando e verificando modelos locais...",
-                        lambda progress, should_cancel, hf_token=token: app_service.download_models(
+                        lambda progress, should_cancel, hf_token=token, variants=self._configured_asr_variants(): app_service.download_models(
                             token=hf_token,
                             progress_callback=progress,
                             should_cancel=should_cancel,
+                            asr_variants=variants,
                         ),
                         True,
                     )
                 ],
             )
 
+        def _configured_asr_variants(self) -> list[str] | None:
+            """Variants ASR para os gates de modelos: o configurado no projeto.
+
+            None (sem projeto/config) mantem o comportamento default
+            (REQUIRED_MODELS). Sem isso, os gates verificavam sempre o variant
+            default e reprovavam projetos configurados com outro modelo."""
+            if self.context is None:
+                return None
+            model = (self.context.config or {}).get("asr_model")
+            return [model] if model else None
+
         def ensure_models_ready(self) -> bool:
-            if app_service.required_models_ready():
+            variants = self._configured_asr_variants()
+            if app_service.required_models_ready(variants):
                 return True
             from . import model_manager as _mm
             partial = False
             try:
-                partial = _mm.has_partial_cache()
+                partial = _mm.has_partial_cache(asr_variants=variants)
             except Exception:
                 partial = False
             if partial:
@@ -3152,15 +3183,28 @@ if QT_IMPORT_ERROR is None:
             return False
 
         def _open_project_path(self, project_path: Path) -> None:
+            # Mesmo protocolo de open_project(): salvar edicoes pendentes e
+            # resetar o estado do editor via switch_project_context — sem isso,
+            # autosave/undo gravariam a review do projeto antigo dentro do novo.
+            if not self.save_current_turn():
+                return
+            if not project_path.exists():
+                # Item de "Projetos recentes" apontando para pasta movida/apagada:
+                # abrir criaria silenciosamente um projeto novo vazio no caminho.
+                QMessageBox.warning(
+                    self,
+                    APP_NAME,
+                    f"O projeto não foi encontrado em:\n{project_path}\n\n"
+                    "Ele pode ter sido movido ou apagado.",
+                )
+                return
             try:
                 context = app_service.open_project(project_path)
-                self.context = context
-                from . import recent_projects
-                recent_projects.save_recent(context.paths.project_root)
-                self.project_label.setText(self.project_header_text())
-                self.refresh_interviews()
             except Exception as exc:
                 QMessageBox.warning(self, APP_NAME, f"Erro ao abrir projeto:\n{exc}")
+                return
+            self.switch_project_context(context)
+            self.project_label.setText(self.project_header_text())
 
         def _build_ui(self) -> None:
             self._build_menus()
@@ -3868,6 +3912,11 @@ if QT_IMPORT_ERROR is None:
             self.text_edit.clear()
             self.set_editor_enabled(False)
             self.undo_stack.clear()
+            # Estado por-projeto: checkboxes e pilhas de undo/redo da lixeira
+            # nao podem sobreviver a troca (Ctrl+Z restauraria no projeto errado).
+            self._checked_ids.clear()
+            self._trash_undo.clear()
+            self._trash_redo.clear()
             self.set_save_state("Projeto aberto.")
             self.refresh_interviews()
 
@@ -3897,14 +3946,28 @@ if QT_IMPORT_ERROR is None:
                 return
             allowed = {ext.lower() for ext in self.context.config.get("media_extensions", [])}
             expanded: list[Path] = []
+            skipped_dirs: list[str] = []
             for entry in paths:
                 if entry.is_dir():
-                    for child in entry.iterdir():
+                    try:
+                        children = list(entry.iterdir())
+                    except OSError:
+                        # Pasta sem permissao/drive desconectado no drag-and-drop:
+                        # avisar em vez de estourar dentro do dropEvent.
+                        skipped_dirs.append(entry.name)
+                        continue
+                    for child in children:
                         if child.is_file() and (not allowed or child.suffix.lower() in allowed):
                             expanded.append(child)
                 elif entry.is_file():
                     if not allowed or entry.suffix.lower() in allowed:
                         expanded.append(entry)
+            if skipped_dirs:
+                QMessageBox.warning(
+                    self,
+                    "Pasta inacessível",
+                    "Não foi possível ler: " + ", ".join(skipped_dirs),
+                )
             if not expanded:
                 QMessageBox.information(
                     self,
@@ -4054,6 +4117,14 @@ if QT_IMPORT_ERROR is None:
                 self.open_review(str(item.data(Qt.ItemDataRole.UserRole) or item.text()))
 
         def open_selected_review(self) -> None:
+            # Abrir a linha ATIVA (cursor), nao o primeiro checkbox marcado:
+            # Enter/duplo-clique agem sobre a linha em foco, como no Explorer.
+            row = self.interview_table.currentRow()
+            if row >= 0 and not self.interview_table.isRowHidden(row):
+                item = self.interview_table.item(row, COL_ARQUIVO)
+                if item:
+                    self.open_review(str(item.data(Qt.ItemDataRole.UserRole) or item.text()))
+                    return
             interview_id = self.selected_interview_id()
             if not interview_id:
                 QMessageBox.information(self, "Selecione uma entrevista", "Selecione uma entrevista na lista.")
@@ -4075,9 +4146,13 @@ if QT_IMPORT_ERROR is None:
                 self.undo_stack.clear()
             except Exception as exc:
                 QMessageBox.critical(self, "Não foi possível abrir", sanitize_message(str(exc)))
+                # Falha pode ocorrer apos atribuicoes parciais (review/id novos
+                # com editor antigo) — resetar para estado coerente "nada aberto".
+                self.close_open_file()
                 return
             if not self.media_candidates:
                 QMessageBox.critical(self, "Mídia não encontrada", "Não encontrei o áudio/vídeo desta entrevista.")
+                self.close_open_file()
                 return
             self.review_title.setText(f"Transcrição: {interview_id}")
             self.set_editor_enabled(True)
@@ -4471,7 +4546,7 @@ if QT_IMPORT_ERROR is None:
             single_target_busy = False
             if single_target and self.context:
                 only = self.effective_target_ids()[0]
-                single_target_busy = (self.context.jobs.get(only) or {}).get("status") in ("Executando", "Na fila")
+                single_target_busy = (self.context.jobs.get(only) or {}).get("status") in ("Rodando", "Na fila")
             rename_reason = "Selecione um unico arquivo para renomear." if not single_target else "Aguarde a transcricao terminar."
             reorder_reason = "Selecione um unico arquivo para reordenar." if not single_target else "Aguarde a transcricao terminar."
             self._set_action(self.rename_interview_action, not busy and single_target and not single_target_busy, reason_busy if busy else rename_reason)
@@ -4734,7 +4809,7 @@ if QT_IMPORT_ERROR is None:
                 QMessageBox.information(self, "Selecione um arquivo", "Selecione um unico arquivo para renomear.")
                 return
             interview_id = ids[0]
-            busy = [iid for iid in ids if (self.context.jobs.get(iid) or {}).get("status") in ("Executando", "Na fila")]
+            busy = [iid for iid in ids if (self.context.jobs.get(iid) or {}).get("status") in ("Rodando", "Na fila")]
             if busy:
                 QMessageBox.information(self, "Acao bloqueada", "Aguarde a transcricao terminar ou cancele o job na fila de processamento.")
                 return
@@ -4782,7 +4857,7 @@ if QT_IMPORT_ERROR is None:
                 QMessageBox.information(self, "Selecione um arquivo", "Selecione um unico arquivo para reordenar.")
                 return
             moving_id = ids[0]
-            if (self.context.jobs.get(moving_id) or {}).get("status") in ("Executando", "Na fila"):
+            if (self.context.jobs.get(moving_id) or {}).get("status") in ("Rodando", "Na fila"):
                 QMessageBox.information(self, "Acao bloqueada", "Aguarde a transcricao terminar ou cancele o job na fila de processamento.")
                 return
             # Primeira ativacao de ordem manual: captura ordem VISUAL atual
@@ -4859,7 +4934,7 @@ if QT_IMPORT_ERROR is None:
             if not ids:
                 QMessageBox.information(self, "Selecione arquivos", "Selecione ao menos um arquivo para enviar a Lixeira.")
                 return
-            busy_ids = [iid for iid in ids if (self.context.jobs.get(iid) or {}).get("status") in ("Executando", "Na fila")]
+            busy_ids = [iid for iid in ids if (self.context.jobs.get(iid) or {}).get("status") in ("Rodando", "Na fila")]
             if busy_ids:
                 QMessageBox.information(self, "Acao bloqueada", "Nao e possivel enviar arquivos com transcricao em andamento. Aguarde ou cancele o job na fila de processamento.")
                 return
@@ -4961,12 +5036,17 @@ if QT_IMPORT_ERROR is None:
                 entry_dict["project_root"] = str(project_root)
                 _write_json(trash_dir / project_store.TRASH_MANIFEST, entry_dict)
                 entry_dict["trash_dir"] = str(trash_dir)
-                self._on_trash_worker_finished(entry_dict, "", n, async_mode=False)
             except Exception as exc:
+                # Falha na fase de copia/staging: originais ainda intactos,
+                # descartar o trash_dir incompleto e abortar.
                 shutil.rmtree(_Path(trash_entry["trash_dir"]), ignore_errors=True)
                 self._trash_busy = False
                 self.update_action_states()
                 QMessageBox.critical(self, "Erro ao mover para lixeira", str(exc)[:2000])
+                return
+            # FORA do try: a partir daqui finalize_trash_move deleta os originais —
+            # nunca fazer rollback (rmtree) do trash_dir, que vira a UNICA copia.
+            self._on_trash_worker_finished(entry_dict, "", n, async_mode=False)
 
         def _run_trash_worker(self, trash_entry: dict, n: int) -> None:
             """Trash para >= 50 MB: worker + QProgressDialog."""
@@ -5216,7 +5296,7 @@ if QT_IMPORT_ERROR is None:
             target_ids = self.effective_target_ids(cursor_row)
             single = len(target_ids) == 1
             job_status = (self.context.jobs.get(target_ids[0]) or {}).get("status") if single else ""
-            busy_single = job_status in ("Executando", "Na fila")
+            busy_single = job_status in ("Rodando", "Na fila")
             menu = QMenu(self)
             self.rename_interview_action.setEnabled(single and not busy_single)
             self.move_up_action.setEnabled(single and not busy_single)
@@ -5473,6 +5553,10 @@ if QT_IMPORT_ERROR is None:
             w = _pipeline_weights(asr_model, asr_device)
             if not do_diarize:
                 w = [w[0], w[1], 0, w[3], w[4]]  # zero weight for skipped diarize
+            # Pesos POR STEP: sem diarizacao o arquivo tem 4 steps, entao a lista
+            # de pesos tambem precisa ter 4 itens — 5 pesos para 4 steps desalinha
+            # todo o progresso a partir do segundo arquivo.
+            step_w = w if do_diarize else [w[0], w[1], w[3], w[4]]
             boundaries = [0]
             for v in w:
                 boundaries.append(boundaries[-1] + v)
@@ -5528,7 +5612,7 @@ if QT_IMPORT_ERROR is None:
                     self.job_step(f"{prefix}: verificando arquivos gerados...", interview_id, "verificar arquivos", r[4], r[5], lambda item=interview_id: app_service.qc_interviews(self.context, ids=[item])),
                 ])
                 steps.extend(file_steps)
-                weights.extend(w)
+                weights.extend(step_w)
             self.refresh_interviews()
             self.start_worker(
                 f"Transcrever {len(ids)} arquivo(s)",
@@ -5745,6 +5829,28 @@ if QT_IMPORT_ERROR is None:
             self.progress_label.setText("Cancelamento solicitado.")
             self.cancel_job_action.setEnabled(False)
 
+        def _reset_orphan_queue_jobs(self) -> None:
+            """Com o worker encerrado, jobs 'Na fila'/'Rodando' remanescentes sao
+            orfaos (cancelamento ou falha de lote) e bloqueariam rename/mover/
+            lixeira para sempre; resetar para Pendente."""
+            if self.context is None:
+                return
+            try:
+                orphans = [
+                    iid for iid, j in (self.context.jobs or {}).items()
+                    if (j or {}).get("status") in ("Na fila", "Rodando")
+                ]
+                for iid in orphans:
+                    self.context = app_service.update_job(self.context, iid, {
+                        "status": "Pendente",
+                        "stage": "",
+                        "progress": 0,
+                        "last_error": "",
+                        "estimated_finish_at": "",
+                    })
+            except Exception as exc:
+                _logger.warning("reset de jobs orfaos falhou: %s", exc)
+
         def on_worker_progress(self, message: str, percent: int) -> None:
             if percent < self.progress_bar.value():
                 return  # Ignore stale signals — never regress text or bar
@@ -5760,6 +5866,7 @@ if QT_IMPORT_ERROR is None:
             else:
                 self.progress_bar.setValue(100)
             self.current_job_label = ""
+            self._reset_orphan_queue_jobs()
             self.refresh_interviews()
             if self.current_interview_id:
                 current_id = self.current_interview_id
@@ -5792,6 +5899,7 @@ if QT_IMPORT_ERROR is None:
             dialog.setInformativeText("Verifique a entrevista selecionada, o token/modelo quando houver separação de falantes, e tente novamente.")
             dialog.setDetailedText(message)
             dialog.exec()
+            self._reset_orphan_queue_jobs()
             self.refresh_interviews()
             self.update_action_states()
             if self._close_after_worker:
@@ -5814,10 +5922,16 @@ if QT_IMPORT_ERROR is None:
                 # Force close: sinaliza cancel e aguarda graciosamente.
                 # NAO chamar terminate() — corrompe copy/CUDA/tokenizer in-flight (bug 3).
                 self.worker.cancel_after_step = True
-                if not self.worker.wait(5000):
+                if not self.worker.wait(15000):
                     _logger.warning(
-                        "Transcription worker did not stop gracefully within 5s; abandoning thread."
+                        "Transcription worker did not stop gracefully within 15s; "
+                        "detaching thread (QThread vivo nunca pode ser destruido — "
+                        "crash na saida + risco de truncar jobs.json/review)."
                     )
+                    # Manter referencia global impede o GC de destruir o QThread
+                    # em execucao quando a janela morre.
+                    _ABANDONED_WORKERS.append(self.worker)
+                    self.worker = None
             # Trash worker: NUNCA terminate() (pode corromper copy in-flight)
             if getattr(self, "_trash_worker", None) is not None and self._trash_worker.isRunning():
                 self._trash_worker.request_cancel()
@@ -5827,9 +5941,28 @@ if QT_IMPORT_ERROR is None:
                 self._maybe_purge_session_trash()
             except Exception as exc:
                 _logger.warning("_maybe_purge_session_trash falhou: %s", exc)
-            self.save_current_turn()
+            if not self.save_current_turn():
+                msg = QMessageBox(self)
+                msg.setIcon(QMessageBox.Icon.Warning)
+                msg.setWindowTitle("Erro ao salvar")
+                msg.setText(
+                    "Nao foi possivel salvar as alteracoes pendentes da transcricao.\n"
+                    "Se fechar agora, as edicoes nao salvas serao perdidas."
+                )
+                keep_btn = msg.addButton("Cancelar fechamento", QMessageBox.ButtonRole.RejectRole)
+                msg.addButton("Fechar mesmo assim", QMessageBox.ButtonRole.AcceptRole)
+                msg.setDefaultButton(keep_btn)
+                msg.exec()
+                if msg.clickedButton() == keep_btn:
+                    event.ignore()
+                    return
             self.player.stop()
             event.accept()
+
+
+# Workers que nao pararam a tempo no closeEvent: manter vivos ate o exit do
+# processo em vez de deixar o GC destruir um QThread em execucao (crash).
+_ABANDONED_WORKERS: list[Any] = []
 
 
 def _apply_dark_theme(app) -> None:

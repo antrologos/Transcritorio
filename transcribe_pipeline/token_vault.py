@@ -153,7 +153,11 @@ def _fernet_store(token: str) -> None:
     ciphertext = f.encrypt(token.encode("utf-8"))
     path = _fallback_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(ciphertext)
+    # Criar ja com 0600 (O_CREAT com mode) — write_bytes + chmod posterior
+    # deixava janela em que o ciphertext nascia legivel pelo umask default.
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(ciphertext)
     try:
         os.chmod(path, 0o600)
     except Exception:
@@ -205,10 +209,21 @@ def store(token: str) -> None:
 def retrieve() -> str | None:
     """Read the token, migrating from DPAPI legacy if needed."""
     if _keyring_available():
-        token = _keyring_get()
+        try:
+            token = _keyring_get()
+        except Exception:
+            # keyring importavel mas backend quebrado em runtime (ex.: Linux
+            # sem SecretService levanta NoKeyringError). Nunca crashar aqui —
+            # seguir para os fallbacks abaixo (regra: token_vault nunca crasha).
+            token = None
         if token:
             return token
-        if _is_windows() and _legacy_path().exists():
+        if not _is_windows():
+            # store() pode ter caido no fallback Fernet quando o keyring
+            # falhou na gravacao — sem esta leitura o token ficaria
+            # irrecuperavel com keyring importavel porem quebrado.
+            return _fernet_retrieve()
+        if _legacy_path().exists():
             # Atomic two-phase migration
             try:
                 legacy = _decrypt_dpapi(_legacy_path().read_text(encoding="utf-8").strip())
