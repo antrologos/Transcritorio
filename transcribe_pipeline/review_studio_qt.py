@@ -2968,6 +2968,14 @@ if QT_IMPORT_ERROR is None:
             transcrever_menu.addSeparator()
             transcrever_menu.addAction(self.engine_settings_action)
             transcrever_menu.addAction(self.model_manager_action)
+            from . import install_tools as _install_tools
+            if not _install_tools.is_frozen():
+                # Canal uv/PyPI (v0.2): aceleracao NVIDIA e um extra opcional
+                # instalado por fora (o app fechado); o bundle legado usa o
+                # fluxo antigo do cuda_pack.
+                transcrever_menu.addAction(
+                    "Instalar aceleração NVIDIA (CUDA)...", self.show_cuda_uv_install_dialog
+                )
             transcrever_menu.addSeparator()
             transcrever_menu.addAction(self.cancel_job_action)
 
@@ -2976,8 +2984,92 @@ if QT_IMPORT_ERROR is None:
             ajuda_menu.addAction(self.documentation_action)
             ajuda_menu.addAction(self.workflow_help_action)
             ajuda_menu.addSeparator()
+            if not _install_tools.is_frozen():
+                ajuda_menu.addAction("Verificar atualizações...", self.show_upgrade_dialog)
+                ajuda_menu.addAction("Reparar instalação...", self.show_repair_dialog)
+                ajuda_menu.addSeparator()
             ajuda_menu.addAction(self.credits_action)
             ajuda_menu.addAction(self.about_action)
+
+        def _show_uv_command_dialog(self, title: str, intro: str, command: str) -> None:
+            """Dialog padrao do canal uv/PyPI: mostra o comando a rodar com o
+            app FECHADO (o uv nao consegue reinstalar um ambiente em uso)."""
+            from . import install_tools as _it
+            body = (
+                f"{intro}\n\n"
+                "1. Feche o Transcritório.\n"
+                "2. Abra o Prompt de Comando (ou PowerShell).\n"
+                "3. Cole e execute:\n\n"
+                f"    {command}\n\n"
+                "4. Abra o Transcritório novamente."
+            )
+            if _it.find_uv() is None:
+                body += (
+                    "\n\nAtenção: o programa 'uv' não foi encontrado neste computador. "
+                    "Instale antes com:\n\n    winget install astral-sh.uv"
+                )
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Icon.Information)
+            msg.setWindowTitle(title)
+            msg.setText(body)
+            copy_btn = msg.addButton("Copiar comando", QMessageBox.ButtonRole.ActionRole)
+            msg.addButton("Fechar", QMessageBox.ButtonRole.RejectRole)
+            msg.exec()
+            if msg.clickedButton() == copy_btn:
+                QApplication.clipboard().setText(command)
+                self.progress_label.setText("Comando copiado. Feche o Transcritório e execute no terminal.")
+
+        def show_upgrade_dialog(self, *_args: Any) -> None:
+            from . import install_tools as _it
+            self._show_uv_command_dialog(
+                "Verificar atualizações",
+                "Para atualizar o Transcritório para a versão mais recente:",
+                _it.upgrade_command(),
+            )
+
+        def show_repair_dialog(self, *_args: Any) -> None:
+            from . import install_tools as _it
+            from . import runtime as _rt
+            # Reparo preserva a aceleracao NVIDIA se ela esta instalada
+            # (flag persistido OU torch atual e build CUDA).
+            with_cuda = _it.cuda_extra_installed() or _rt.cuda_libs_present()
+            self._show_uv_command_dialog(
+                "Reparar instalação",
+                "Isto reconstrói o ambiente técnico do Transcritório.\n"
+                "Seus projetos, áudios, transcrições e modelos NÃO são afetados.",
+                _it.repair_command(cuda=with_cuda),
+            )
+
+        def show_cuda_uv_install_dialog(self, *_args: Any) -> None:
+            from . import install_tools as _it
+            from . import runtime as _rt
+            if _rt.cuda_libs_present():
+                QMessageBox.information(
+                    self,
+                    "Aceleração NVIDIA",
+                    "A aceleração NVIDIA já está instalada neste computador.\n"
+                    "Escolha o dispositivo em Transcrever → Configurar transcrição.",
+                )
+                _it.mark_cuda_extra_installed(True)
+                return
+            if not _rt.has_nvidia_gpu():
+                QMessageBox.information(
+                    self,
+                    "Aceleração NVIDIA",
+                    "Nenhuma placa NVIDIA compatível foi encontrada neste computador.\n"
+                    "O Transcritório continua funcionando normalmente em CPU.",
+                )
+                return
+            self._show_uv_command_dialog(
+                "Instalar aceleração NVIDIA",
+                "Placa NVIDIA detectada. A aceleração torna a transcrição 3-9x mais rápida.\n"
+                "O download é grande (~2,5 GB) e o Transcritório continua funcionando em CPU\n"
+                "caso algo dê errado — a instalação não altera seus projetos.",
+                _it.cuda_install_command(),
+            )
+            # O flag cuda_extra_installed so e marcado quando a instalacao e
+            # CONFIRMADA (cuda_libs_present no proximo start) — mostrar o
+            # dialog nao significa que o usuario rodou o comando.
 
         def show_workflow_help(self) -> None:
             QMessageBox.information(
@@ -6200,6 +6292,13 @@ def main() -> int:
     try:
         from . import diagnostics
         diagnostics.startup_init()
+    except Exception:
+        pass
+    # Canal uv/PyPI (v0.2): cria o atalho da area de trabalho uma unica vez
+    # no primeiro run. Nunca levanta.
+    try:
+        from . import install_tools
+        install_tools.ensure_first_run_setup()
     except Exception:
         pass
     if QT_IMPORT_ERROR is not None:

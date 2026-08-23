@@ -5,8 +5,22 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "transcritorio"
 version = "0.1.8"
-description = "Transcricao local de entrevistas com WhisperX e pyannote"
+description = "Transcricao local de entrevistas em portugues brasileiro, com separacao de falantes (WhisperX + pyannote). Nenhum audio sai do computador."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Rogerio Jeronimo Barbosa" }]
 requires-python = ">=3.10"
+keywords = ["transcricao", "whisper", "whisperx", "diarizacao", "entrevistas", "pesquisa-qualitativa", "asr"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Natural Language :: Portuguese (Brazilian)",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
 dependencies = [
     "PySide6==6.11.0",
     "whisperx==3.8.5",
@@ -19,6 +33,12 @@ dependencies = [
     "keyring>=24",
     "cryptography>=42",
 ]
+
+[project.urls]
+Homepage = "https://antrologos.github.io/Transcritorio/pt/"
+Repository = "https://github.com/antrologos/Transcritorio"
+Changelog = "https://github.com/antrologos/Transcritorio/blob/main/CHANGELOG.md"
+Issues = "https://github.com/antrologos/Transcritorio/issues"
 
 [project.scripts]
 transcritorio-cli = "transcribe_pipeline.cli:main"
@@ -33,6 +53,23 @@ build = ["pyinstaller>=6.0"]
 # default dependency set — the runtime code path checks availability and
 # falls back to the CPU whisperx path.
 mac = ["mlx-whisper>=0.4.0"]
+# Aceleracao NVIDIA (opcional, v0.2): declara torch/torchaudio/torchvision
+# explicitamente para que o uv resolva os TRES do indice cu128 do PyTorch
+# (ver [tool.uv.sources]) — misturar torch-cu128 com torchaudio/vision CPU
+# do PyPI quebra por ABI. Sem este extra, tudo vem transitivamente do PyPI,
+# que no Windows e CPU-only: o caminho seguro e o caminho default.
+# pip puro: pip install "transcritorio[cuda]" --extra-index-url https://download.pytorch.org/whl/cu128
+cuda = ["torch>=2.7", "torchaudio>=2.7", "torchvision>=0.22"]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu128", extra = "cuda" }]
+torchaudio = [{ index = "pytorch-cu128", extra = "cuda" }]
+torchvision = [{ index = "pytorch-cu128", extra = "cuda" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
 
 [tool.setuptools.packages.find]
 include = ["transcribe_pipeline*"]
