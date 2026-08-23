@@ -1,4 +1,4 @@
-# Desenvolvimento
+﻿# Desenvolvimento
 
 Este documento descreve como rodar o Transcritório **do código-fonte**
 (não do instalador). Para usuário final, prefira os binários em
@@ -139,3 +139,9 @@ Abra uma issue em
 [GitHub Issues](https://github.com/antrologos/Transcritorio/issues)
 descrevendo o bug ou feature. PRs bem-vindos; siga o estilo do código
 existente.
+
+> **Nao instale/build a partir da pasta sincronizada pelo Dropbox**: o setuptools
+> escreve em `build/` dentro do source dir e o sync do Dropbox segura locks
+> (`WinError 32`). Para instalar localmente, gere o wheel (`uv build`) e instale
+> a partir de `dist/` — ou clone o repo fora do Dropbox. Usuarios finais (PyPI/
+> git+https) nao passam por isso: o build acontece em diretorio temporario.
