@@ -30,7 +30,7 @@ sys.path.insert(0, str(ROOT))
 
 from transcribe_pipeline import model_manager  # noqa: E402
 
-_WEIGHT_THRESHOLD = model_manager._WEIGHT_BLOB_MIN_BYTES  # 100 KB
+_WEIGHT_THRESHOLD = model_manager._WEIGHT_BLOB_MIN_BYTES  # 4 MB desde 2026-08-23
 
 
 def _make_hf_cache_layout(
@@ -112,12 +112,12 @@ def test_weight_blob_via_symlink_detected() -> None:
             "rev-symlink",
             {
                 "config.json": b"{}",
-                "model.bin": b"x" * (200 * 1024),  # 200 KB > threshold
+                "model.bin": b"x" * (_WEIGHT_THRESHOLD + 1024),  # acima do threshold
             },
             use_symlinks=True,
         )
         assert model_manager._snapshot_has_weights(snap) is True, (
-            "weight blob >= 100 KB deve ser detectado mesmo com snapshot via symlink"
+            "weight blob >= threshold deve ser detectado mesmo com snapshot via symlink"
         )
     print("PASS: blob via symlink detectado")
 
@@ -131,7 +131,7 @@ def test_weight_blob_via_copy_detected() -> None:
             "rev-copy",
             {
                 "config.json": b"{}",
-                "model.bin": b"x" * (200 * 1024),
+                "model.bin": b"x" * (_WEIGHT_THRESHOLD + 1024),
             },
             use_symlinks=False,
         )
@@ -140,11 +140,15 @@ def test_weight_blob_via_copy_detected() -> None:
 
 
 def test_threshold_exactly_at_100k() -> None:
-    """Exatamente 100 KB conta; 99 KB nao conta."""
+    """Exatamente no threshold conta; 1 KB abaixo nao conta.
+
+    (2026-08-23: threshold subiu de 100 KB para 4 MB — tokenizer.json ~2.4 MB
+    e blobs parciais nao podem contar como peso. Tamanhos agora relativos a
+    _WEIGHT_THRESHOLD.)"""
     with tempfile.TemporaryDirectory() as tmp:
         snap = _make_hf_cache_layout(
             Path(tmp), "a/b", "r1",
-            {"model.bin": b"x" * (100 * 1024)},
+            {"model.bin": b"x" * _WEIGHT_THRESHOLD},
             use_symlinks=False,
         )
         assert model_manager._snapshot_has_weights(snap) is True
@@ -152,11 +156,11 @@ def test_threshold_exactly_at_100k() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         snap = _make_hf_cache_layout(
             Path(tmp), "a/b", "r2",
-            {"model.bin": b"x" * (99 * 1024)},
+            {"model.bin": b"x" * (_WEIGHT_THRESHOLD - 1024)},
             use_symlinks=False,
         )
         assert model_manager._snapshot_has_weights(snap) is False
-    print("PASS: threshold 100 KB exato")
+    print("PASS: threshold exato")
 
 
 def test_has_partial_cache_distingue_config_only_vs_complete() -> None:
@@ -181,7 +185,7 @@ def test_has_partial_cache_distingue_config_only_vs_complete() -> None:
             # Agora adiciona blob grande (completion)
             _make_hf_cache_layout(
                 cache, fake.repo_id, fake.revision,
-                {"config.json": b"{}", "model.bin": b"x" * (500 * 1024)},
+                {"config.json": b"{}", "model.bin": b"x" * (_WEIGHT_THRESHOLD + 1024)},
                 use_symlinks=False,
             )
             assert model_manager.has_partial_cache() is False

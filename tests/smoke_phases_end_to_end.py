@@ -306,6 +306,11 @@ if sys.platform == "win32":
     with tempfile.TemporaryDirectory() as tmp:
         os.environ["TRANSCRITORIO_HOME"] = tmp
         importlib.reload(token_vault)
+        # Isolar o cofre REAL do usuario: TRANSCRITORIO_HOME so isola paths de
+        # arquivo — o keyring usa (_SERVICE, _USER), e store/clear no service
+        # real sobrescreveriam/APAGARIAM o token HF verdadeiro da maquina.
+        token_vault._SERVICE = "TranscritorioSmokeTest"
+        token_vault._USER = "huggingface-smoketest"
         try:
             token_vault.store("hf_E2E_ABC")
             if token_vault.retrieve() == "hf_E2E_ABC":
