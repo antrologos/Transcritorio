@@ -92,9 +92,14 @@ def test_resolve_device_invalid_config_value() -> None:
     )
     sys.modules["torch"] = fake
     try:
-        # None -> default 'cuda' -> cai em cpu
+        # None -> default 'auto' (v0.2): cair em cpu e o ESPERADO, sem
+        # fell_back (nao dispara warning de fallback na GUI)
         d, fb = runtime.resolve_device(None)
-        assert d == "cpu" and fb is True, f"None: esperado ('cpu', True), got ({d!r}, {fb})"
+        assert d == "cpu" and fb is False, f"None: esperado ('cpu', False), got ({d!r}, {fb})"
+        # 'auto' explicito: mesmo contrato
+        runtime._detected_device = None
+        d, fb = runtime.resolve_device("auto")
+        assert d == "cpu" and fb is False, f"'auto': esperado ('cpu', False), got ({d!r}, {fb})"
         # Uppercase 'CUDA' -> lower() -> cuda -> cai em cpu
         runtime._detected_device = None
         d, fb = runtime.resolve_device("CUDA")

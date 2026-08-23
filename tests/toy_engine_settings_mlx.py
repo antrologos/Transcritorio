@@ -63,8 +63,9 @@ def test_no_mps_on_cpu_only_system() -> None:
     options = _get_dialog_device_options("cpu")
     values = [v for v, _ in options]
     assert "mps" not in values, options
-    assert values == ["cuda", "cpu"], f"unexpected options: {options}"
-    print("PASS: CPU-only system -> only cuda + cpu offered")
+    # v0.2: "auto" e a primeira opcao (Automatico recomendado)
+    assert values == ["auto", "cuda", "cpu"], f"unexpected options: {options}"
+    print("PASS: CPU-only system -> auto + cuda + cpu offered")
 
 
 if __name__ == "__main__":
