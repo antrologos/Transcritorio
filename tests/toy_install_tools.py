@@ -20,19 +20,25 @@ with tempfile.TemporaryDirectory() as tmp:
     # Isolar as preferencias reais da maquina
     app_settings._settings_path = lambda: Path(tmp) / "app_settings.json"
 
-    # Comandos
+    # Comandos. CRITICO: qualquer comando com [cuda] PRECISA carregar o indice
+    # cu128 + unsafe-best-match — tool.uv.sources nao viaja no wheel do PyPI;
+    # sem as flags, uv instalaria torch CPU e a aceleracao nunca ativaria
+    # (bug pego na validacao real de 2026-08-23).
+    CUDA_FLAGS = " --index https://download.pytorch.org/whl/cu128 --index-strategy unsafe-best-match"
     assert install_tools.upgrade_command() == "uv tool upgrade transcritorio"
     assert install_tools.repair_command(cuda=False) == 'uv tool install --reinstall "transcritorio"'
-    assert install_tools.repair_command(cuda=True) == 'uv tool install --reinstall "transcritorio[cuda]"'
-    assert install_tools.cuda_install_command() == 'uv tool install --reinstall "transcritorio[cuda]"'
-    print("PASS: comandos uv corretos")
+    assert install_tools.repair_command(cuda=True) == 'uv tool install --reinstall "transcritorio[cuda]"' + CUDA_FLAGS
+    assert install_tools.cuda_install_command() == 'uv tool install --reinstall "transcritorio[cuda]"' + CUDA_FLAGS
+    assert "[cuda]" not in install_tools.repair_command(cuda=False)
+    print("PASS: comandos uv corretos (cuda sempre com indice cu128)")
 
     # Flag cuda persiste e o default do reparo o segue
     assert install_tools.cuda_extra_installed() is False
     assert install_tools.repair_command() == 'uv tool install --reinstall "transcritorio"'
     install_tools.mark_cuda_extra_installed(True)
     assert install_tools.cuda_extra_installed() is True
-    assert install_tools.repair_command() == 'uv tool install --reinstall "transcritorio[cuda]"'
+    assert install_tools.repair_command().startswith('uv tool install --reinstall "transcritorio[cuda]"')
+    assert CUDA_FLAGS in install_tools.repair_command()
     print("PASS: flag cuda_extra_installed persiste e muda o reparo")
 
     # app_settings round-trip + arquivo corrompido nunca crasha

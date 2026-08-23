@@ -23,6 +23,19 @@ from . import app_settings
 
 PACKAGE_NAME = "transcritorio"
 
+# Flags obrigatorias para o extra [cuda] FORA do repositorio: tool.uv.sources
+# (que mapeia torch/torchaudio/torchvision ao indice cu128) NAO viaja no wheel
+# publicado — sem estas flags, uv resolveria torch>=2.7 do PyPI (CPU no
+# Windows) e a aceleracao nunca ativaria. unsafe-best-match e necessario
+# porque o indice cu128 tambem publica torchcodec (sem wheel Windows) e o
+# first-match-wins travaria nele; com best-match, os builds +cu128 (versao
+# local > versao base) vencem para o trio torch e o torchcodec vem do PyPI.
+# Validado empiricamente em 2026-08-23 na maquina de desenvolvimento.
+_CUDA_INDEX_FLAGS = (
+    " --index https://download.pytorch.org/whl/cu128"
+    " --index-strategy unsafe-best-match"
+)
+
 
 def is_frozen() -> bool:
     """True no bundle PyInstaller legado (canal standalone aposentado)."""
@@ -37,8 +50,9 @@ def repair_command(cuda: bool | None = None) -> str:
     """Comando que reconstroi o ambiente do app (nao toca projetos/modelos)."""
     if cuda is None:
         cuda = cuda_extra_installed()
-    spec = f"{PACKAGE_NAME}[cuda]" if cuda else PACKAGE_NAME
-    return f'uv tool install --reinstall "{spec}"'
+    if cuda:
+        return f'uv tool install --reinstall "{PACKAGE_NAME}[cuda]"{_CUDA_INDEX_FLAGS}'
+    return f'uv tool install --reinstall "{PACKAGE_NAME}"'
 
 
 def upgrade_command() -> str:
@@ -46,7 +60,7 @@ def upgrade_command() -> str:
 
 
 def cuda_install_command() -> str:
-    return f'uv tool install --reinstall "{PACKAGE_NAME}[cuda]"'
+    return f'uv tool install --reinstall "{PACKAGE_NAME}[cuda]"{_CUDA_INDEX_FLAGS}'
 
 
 def cuda_extra_installed() -> bool:
