@@ -239,7 +239,9 @@ assert "KB" in mm_dialog.summary_label.text() or "MB" in mm_dialog.summary_label
 check(f"6.2 summary: '{mm_dialog.summary_label.text()[:60]}...'")
 
 # Simular job ativo -> remove bloqueado pra asr_model + fixos
-win.context.jobs["A01"] = {"status": "Executando"}
+# "Rodando" e o status real gravado pelo pipeline ("Executando" nunca foi
+# escrito — os guards que o checavam eram codigo morto, corrigido 2026-08-23)
+win.context.jobs["A01"] = {"status": "Rodando"}
 # turbo e asr_model configurado
 turbo_repo = model_manager.ASR_VARIANTS["large-v3-turbo"]["repo"]
 assert mm_dialog._jobs_using_model_repo(turbo_repo) == 1

@@ -172,7 +172,8 @@ check("2.1 tiny como asr_model = status 'Em uso'")
 # ==== CENARIO 3: Bloqueio de remocao por job ativo ====
 header("CENARIO 3 - Remove bloqueado quando job usa o modelo")
 
-win.context.jobs["A01"] = {"status": "Executando", "progress": 50}
+# "Rodando" e o status real do pipeline (guard corrigido em 2026-08-23)
+win.context.jobs["A01"] = {"status": "Rodando", "progress": 50}
 # Tentar remover tiny (asr_model configurado) → deve bloquear
 busy = dlg2._jobs_using_model_repo("Systran/faster-whisper-tiny")
 assert busy == 1, f"esperava 1 job ativo, got {busy}"
