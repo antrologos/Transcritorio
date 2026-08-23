@@ -1,4 +1,11 @@
-# Packaging Checklist — antes de push de tag `v*`
+# Packaging Checklist — canal standalone (LEGADO)
+
+> **LEGADO (2026-08):** o canal standalone foi descontinuado — ver
+> [`LEGACY_STANDALONE.md`](LEGACY_STANDALONE.md). Esta checklist so se
+> aplica a execucoes MANUAIS do `release.yml` (workflow_dispatch). No
+> canal atual (PyPI + uv), o "bundle completo" equivale a: `uv lock
+> --check` verde no CI + `transcritorio-cli self-test` na maquina do
+> usuario. Um push de tag `v*` agora publica no PyPI (`publish.yml`).
 
 Esta checklist existe para evitar lacunas de bundle que quebram a promessa
 "baixou, clicou, funciona" em alguma plataforma. Foi criada depois que a

@@ -1,11 +1,15 @@
-name: Release
+name: Release (standalone LEGADO)
 
-# Builds Linux AppImage and macOS .dmg.
-# - workflow_dispatch: trigger manual para iterar sem publicar.
-# - push tag v*: gera artefatos + cria Release com eles.
+# =============================================================================
+# CANAL LEGADO — descontinuado em 2026-08 (ver docs/LEGACY_STANDALONE.md).
+# O canal oficial de distribuicao passou a ser PyPI + uv (publish.yml).
 #
-# Bundle cross-plataforma e pesado (~3 GB de deps PyInstaller), entao
-# roda so sob demanda, nao em cada push.
+# Este workflow (instalador Windows, .dmg, AppImage via PyInstaller) fica
+# preservado APENAS para execucao manual (workflow_dispatch), caso o canal
+# standalone precise ser ressuscitado — ex.: se o projeto obtiver assinatura
+# digital. O gatilho automatico em tag v* foi removido: um tag agora publica
+# no PyPI (publish.yml), nao aqui.
+# =============================================================================
 
 on:
   workflow_dispatch:
@@ -22,9 +26,6 @@ on:
         description: 'Tag a atualizar em rebuild parcial (ex: v0.1.1). Obrigatorio quando only_platforms != vazio.'
         required: false
         default: ''
-  push:
-    tags:
-      - 'v*'
 
 concurrency:
   group: release-${{ github.ref }}

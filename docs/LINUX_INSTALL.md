@@ -1,4 +1,9 @@
-# Como instalar o Transcritorio no Linux
+ > **LEGADO (2026-08):** o AppImage foi descontinuado. Instale pelo canal
+> atual: `uv` + `uv tool install transcritorio` (ver o
+> [README](../README.md#instalação) e [`LEGACY_STANDALONE.md`](LEGACY_STANDALONE.md)).
+> O guia abaixo vale apenas para os AppImages antigos (v0.1.x).
+
+# Como instalar o Transcritorio no Linux (AppImage — LEGADO)
 
 Guia rapido para pesquisadores em Ubuntu, Fedora ou outras distribuicoes
 com base no AppImage. Testado em Ubuntu 22.04 e 24.04.

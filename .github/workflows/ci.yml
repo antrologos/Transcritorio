@@ -13,6 +13,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Gate do canal uv/PyPI (v0.2): o lockfile precisa acompanhar o pyproject
+  # e a resolucao dos perfis default e [cuda] precisa ser instalavel.
+  # dry-run valida wheels/indices sem baixar os ~2.5 GB de deps.
+  lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Lockfile em dia com o pyproject
+        run: uv lock --check
+      - name: Resolucao instalavel (default e cuda, sem download)
+        run: |
+          uv sync --frozen --dry-run
+          uv sync --frozen --extra cuda --dry-run
+
   tests:
     strategy:
       fail-fast: false

@@ -13,23 +13,30 @@ Aplicativo desktop gratuito para transcrição automática e separação de fala
 - **Gratuito e código aberto** — licença MIT, desenvolvido no IESP-UERJ / CERES. Sem assinatura, sem telemetria (o primeiro uso pede apenas uma conta gratuita da Hugging Face para baixar o modelo de separação de falantes).
 
 Site do projeto: **[antrologos.github.io/Transcritorio](https://antrologos.github.io/Transcritorio/pt/)** (passo a passo com imagens)
-Baixar: **[Releases](https://github.com/antrologos/Transcritorio/releases/latest)**
 
-| Sistema | Arquivo | Instrução rápida |
-|---|---|---|
-| **Windows 10/11** | `Transcritorio-0.1.7-Setup.exe` | Clique duas vezes no `.exe`. Se tiver placa NVIDIA, o app detecta e oferece a aceleração CUDA opcional (+1 GB). |
-| **macOS** (Apple Silicon M1–M4) | `Transcritorio.dmg` | Arraste para Aplicativos. Primeira vez: botão direito no ícone → **Abrir** (Gatekeeper). Aceleração Metal automática. |
-| **Linux** (Ubuntu 22.04+, Fedora 40+) | `Transcritorio-x86_64.AppImage` | `chmod +x` e execute. Requer apenas libs X11 do sistema (veja [`docs/LINUX_INSTALL.md`](docs/LINUX_INSTALL.md)). |
+## Instalação
 
-### Avisos de antivírus / SmartScreen (Windows)
+O Transcritório é instalado pelo [uv](https://docs.astral.sh/uv/), que baixa o Python e todas as dependências **das fontes oficiais** (Microsoft, PyPI, PyTorch). É uma vez só; no dia a dia você abre pelo atalho da área de trabalho.
 
-O Transcritório é distribuído sem assinatura digital (code signing custa €69/ano e ainda não fizemos esse investimento). Antivírus como **AVAST**, **Norton**, **Kaspersky** e o **SmartScreen do Windows** podem mostrar avisos genéricos de "fornecedor desconhecido" ou "ameaça" — **é falso positivo, não há malware**.
+**Windows 10/11** — abra o *Prompt de Comando* (menu Iniciar → digite `cmd` → Enter) e cole os três comandos, um por vez:
 
-- Como verificar autenticidade: o código-fonte está [aqui no GitHub](https://github.com/antrologos/Transcritorio), é auditável.
-- **SmartScreen** ("o Windows protegeu seu computador"): clique em **"Mais informações"** → **"Executar assim mesmo"**.
-- **AVAST/Norton/Kaspersky**: pode pedir para adicionar exceção para `Transcritorio.exe` e `whisperx.exe` (ambos em `C:\Program Files\Transcritorio\` ou `%LOCALAPPDATA%\Programs\Transcritorio\`).
-- A instalação do bundle (~1.6 GB) usa compressão lzma2/ultra64 — **a barra pode ficar parada em 99% por 5–15 minutos** durante a fase final de extração. **Não cancele**; é normal.
-- Plano de longo prazo (code signing, eliminação dos avisos): ver [`docs/WINDOWS_CODE_SIGNING.md`](docs/WINDOWS_CODE_SIGNING.md).
+```bat
+winget install astral-sh.uv
+winget install Gyan.FFmpeg
+uv tool install transcritorio
+```
+
+Feche e reabra o Prompt, digite `transcritorio` e pressione Enter. O programa abre e cria o atalho **Transcritório** na área de trabalho — a partir daí, é só clicar nele.
+
+Guia detalhado com solução de problemas: [`docs/INSTALL_WINDOWS.md`](docs/INSTALL_WINDOWS.md)
+
+**macOS / Linux (beta)** — mesmo mecanismo: instale o `uv` ([instruções oficiais](https://docs.astral.sh/uv/getting-started/installation/)) e o ffmpeg (`brew install ffmpeg` / `sudo apt install ffmpeg`), depois `uv tool install transcritorio`.
+
+- **Atualizar:** `uv tool upgrade transcritorio` (o app avisa quando há versão nova).
+- **Reparar:** menu **Ajuda → Reparar instalação** (não afeta projetos, áudios nem modelos).
+- **Aceleração NVIDIA (opcional, 3–9× mais rápido):** menu **Transcrever → Instalar aceleração NVIDIA**.
+
+> **Por que não tem mais instalador `.exe`?** As versões em instalador (.exe/.dmg/AppImage) foram descontinuadas: sem assinatura digital paga, antivírus e SmartScreen bloqueavam a instalação para boa parte dos usuários. O formato atual usa apenas componentes assinados pelos distribuidores oficiais e elimina esses bloqueios. Histórico e downloads antigos: [`docs/LEGACY_STANDALONE.md`](docs/LEGACY_STANDALONE.md).
 
 ---
 
@@ -42,7 +49,7 @@ O Transcritório é distribuído sem assinatura digital (code signing custa €6
 - **Separar falantes** automaticamente — identifica quem falou em cada trecho (entrevistador, entrevistado, etc.).
 - **Revisar no Estúdio** com player sincronizado, forma de onda interativa e edição por bloco.
 - **Exportar** em DOCX, MD, SRT, VTT, CSV, TSV e formato NVivo.
-- **Tudo offline** depois do download inicial dos modelos (~3 GB, uma única vez).
+- **Tudo offline** depois do download inicial dos modelos (4–7 GB conforme as opções, uma única vez).
 
 ### Requisitos mínimos
 
@@ -56,7 +63,7 @@ O Transcritório é distribuído sem assinatura digital (code signing custa €6
 
 ### Primeiros passos
 
-**1. Baixe e instale.** Use o arquivo da tabela acima. No Windows, o Defender pode exibir um aviso azul na primeira execução — clique em "Mais informações" → "Executar assim mesmo"; isso acontece porque o instalador não é assinado digitalmente, não porque tenha algo errado. No macOS, o botão direito → **Abrir** só é necessário na primeira vez.
+**1. Instale e abra.** Siga a seção **Instalação** acima (três comandos, uma vez). Depois, abra pelo atalho **Transcritório** da área de trabalho. No primeiro uso, um assistente em português prepara os modelos de IA — e pergunta se você quer a identificação de falantes (opcional).
 
 **2. Crie um projeto.** Abra o Transcritório e vá em **Projeto → Novo projeto…** Dê um nome (ex.: `tese-entrevistas-2026`) e escolha uma pasta. O app cria uma estrutura `.transcricao` com áudios, transcrições e metadados lado a lado — fácil de fazer backup e arquivar.
 
@@ -64,7 +71,7 @@ O Transcritório é distribuído sem assinatura digital (code signing custa €6
 
 **4. Clique em Transcrever e revise no Estúdio.** O botão **Transcrever** faz o fluxo completo: prepara o áudio, transcreve, separa os falantes e monta o texto editável. Tempos realistas para 1 hora de entrevista: **~5–10 min** em máquina com GPU NVIDIA ou Apple Silicon, **~20–30 min** em notebook recente sem GPU, **~40–60 min** em máquina modesta. Ao final, abra o **Estúdio de Revisão** para ouvir o áudio sincronizado com o texto, ajustar trechos com a forma de onda e exportar. Guia visual completo no [site do projeto](https://antrologos.github.io/Transcritorio/pt/#how).
 
-> **Modelos de IA no primeiro uso:** o Transcritório baixa os modelos de IA uma única vez (~7 GB de download no fluxo padrão); depois roda offline. O modelo de separação de falantes (pyannote) tem acesso *gated* na [Hugging Face](https://huggingface.co/): o assistente de primeiro uso orienta a criar uma conta gratuita, aceitar os termos do modelo e colar um *token* de leitura — tudo em português, em **Configurações → Configurar modelos…**
+> **Modelos de IA no primeiro uso:** o Transcritório baixa os modelos uma única vez (~5 GB só para transcrever; ~7 GB com identificação de falantes); depois roda offline. A **identificação de falantes é opcional**: quem quer apenas transcrever não precisa de cadastro algum. Quem a ativa é orientado pelo assistente a criar uma conta gratuita na [Hugging Face](https://huggingface.co/), aceitar os termos do modelo pyannote e colar um *token* de leitura — tudo em português, e dá para ativar depois sem repetir as transcrições.
 
 ### Privacidade e ética
 
@@ -133,9 +140,11 @@ docs/                   documentação completa
 
 | Plataforma | Estado | Notas |
 |---|---|---|
-| Windows 10/11 | Estável | Aceleração CUDA opcional (pack separado, detecção automática). |
-| Linux (AppImage) | Estável | CPU only no bundle distribuído. CUDA requer rodar do source (veja [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)). |
-| macOS (Apple Silicon) | Em validação | Aceleração Metal (MLX) integrada e embutida no `.dmg`; teste em hardware real pendente. |
+| Windows 10/11 | Suportada | CPU por padrão; aceleração NVIDIA opcional pelo extra `[cuda]` (menu do app). |
+| Linux x64 | Beta | Mesmo canal `uv tool install transcritorio`; CPU. |
+| macOS (Apple Silicon) | Beta | `uv tool install "transcritorio[mac]"` habilita a aceleração Metal (MLX). |
+
+As versões em instalador (.exe/.dmg/AppImage) foram descontinuadas — ver [`docs/LEGACY_STANDALONE.md`](docs/LEGACY_STANDALONE.md).
 
 Roadmap e histórico em [`docs/STANDALONE_APP_ROADMAP.md`](docs/STANDALONE_APP_ROADMAP.md).
 

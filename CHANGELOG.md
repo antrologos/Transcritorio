@@ -1,5 +1,30 @@
 # Changelog
 
+## Não lançado (v0.2 em preparação)
+
+**Mudança de canal de distribuição**: o standalone (Setup.exe/.dmg/AppImage)
+foi descontinuado — antivírus/SmartScreen bloqueavam a instalação sem
+assinatura digital, e o SignPath recusou a assinatura gratuita. O canal
+oficial passa a ser **PyPI + uv** (`uv tool install transcritorio`); ver
+`docs/INSTALL_WINDOWS.md` e `docs/LEGACY_STANDALONE.md`.
+
+- Defaults seguros: `asr_device/compute_type/batch_size: auto` — CPU usa
+  int8/batch 2 (float16 em CPU era convertido p/ float32 pelo CTranslate2,
+  ~2x RAM: travava máquinas sem GPU); float16 explícito em CPU é coagido.
+- Diarização opcional de ponta a ponta: quem só quer transcrever não cria
+  conta HF nem token; escolha no wizard, persistida para projetos novos;
+  falha de diarização não derruba mais o lote (render segue sem falantes).
+- Diarização roda em subprocesso (`transcritorio-cli diarize
+  --progress-json`): crash de pyannote/torch/CUDA não fecha mais a GUI.
+- Aceleração NVIDIA como extra `[cuda]` (menu do app); reparo/atualização
+  via uv no menu Ajuda; atalho de área de trabalho criado no 1º run;
+  aviso discreto de versão nova via PyPI.
+- Correções do diagnóstico 2026-08-23 (101 findings triplo-verificados):
+  lixeira nunca mais apaga a única cópia de originais, guards de job
+  ativos, globs por id sem colisão de prefixo, parser YAML preserva '#',
+  token_vault nunca crasha, release não publica com build falho, e ~40
+  outros fixes (ver mensagens dos commits de 2026-08-23).
+
 ## 0.1.8 — 2026-04-27
 
 UX baseada em feedback da Denise (1ª usuária externa, instalou v0.1.7 e

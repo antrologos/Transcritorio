@@ -1,3 +1,8 @@
+﻿> **LEGADO (2026-08):** o .dmg foi descontinuado. Instale pelo canal atual:
+> `uv` + `uv tool install "transcritorio[mac]"` (ver o [README](../README.md#instalacao)
+> e [`LEGACY_STANDALONE.md`](LEGACY_STANDALONE.md)). O guia abaixo vale apenas
+> para os .dmg antigos (v0.1.x).
+
 # Como instalar o Transcritorio no Mac
 
 Guia passo a passo para pesquisadores instalando o Transcritorio pela

@@ -6346,7 +6346,48 @@ def main() -> int:
     window.show()
     if os.environ.get("QT_QPA_PLATFORM", "").lower() != "offscreen":
         QTimer.singleShot(0, window.show_startup_dialog)
-    return app.exec()
+
+    # Aviso de versao nova (canal uv/PyPI, v0.2): checagem leve do JSON do
+    # PyPI em thread propria. Silencio absoluto em erro/offline — jamais
+    # bloqueia ou atrapalha o startup. Sem auto-update: so um aviso discreto.
+    update_thread = None
+    try:
+        from . import install_tools as _install_check
+        if not _install_check.is_frozen() and os.environ.get("QT_QPA_PLATFORM", "").lower() != "offscreen":
+            class _UpdateCheck(QThread):
+                found = Signal(str)
+
+                def run(self) -> None:
+                    try:
+                        import json as _json
+                        from urllib.request import urlopen
+                        with urlopen("https://pypi.org/pypi/transcritorio/json", timeout=6) as resp:
+                            data = _json.load(resp)
+                        latest = str((data.get("info") or {}).get("version") or "")
+
+                        def _t(v: str) -> tuple[int, ...]:
+                            return tuple(int(p) for p in v.split(".") if p.isdigit())
+
+                        from . import __version__ as _cur
+                        if latest and _t(latest) > _t(_cur):
+                            self.found.emit(latest)
+                    except Exception:
+                        pass
+
+            update_thread = _UpdateCheck()
+            update_thread.found.connect(
+                lambda v: window.progress_label.setText(
+                    f"Nova versão {v} disponível — menu Ajuda → Verificar atualizações."
+                )
+            )
+            update_thread.start()
+    except Exception:
+        update_thread = None
+
+    rc = app.exec()
+    if update_thread is not None and update_thread.isRunning():
+        update_thread.wait(8000)  # nunca destruir QThread vivo
+    return rc
 
 
 if __name__ == "__main__":
