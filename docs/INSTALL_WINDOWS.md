@@ -82,6 +82,26 @@ Peça ao setor de TI para liberar `pypi.org`, `files.pythonhosted.org`,
 alarmes sobre `python.exe` em `%LOCALAPPDATA%` são falsos positivos. O
 código-fonte é auditável em https://github.com/antrologos/Transcritorio.
 
+**"foi bloqueado pela política do Device Guard da sua organização"** — a
+máquina (pessoal ou corporativa) tem uma política de integridade de código
+que só executa binários com assinatura digital, e o atalho `.exe` criado
+pelo `uv` não é assinado. Solução: usar um Python oficial assinado
+(Microsoft/PSF) como base e abrir sem o atalho:
+
+```bat
+winget install Python.Python.3.12
+uv tool uninstall transcritorio
+uv tool install --python 3.12 --python-preference only-system transcritorio
+%APPDATA%\uv\tools\transcritorio\Scripts\pythonw.exe -m transcribe_pipeline.gui_launcher
+```
+
+Em máquina gerenciada pela instituição, pode ser preciso pedir uma exceção
+à TI (cite a licença MIT e o repositório público).
+
+**"No solution found... torchcodec... cp314"** — versão antiga do pacote
+sem teto de Python (corrigido a partir do beta 0.2.0b2); se aparecer,
+acrescente `--python 3.12` logo após `uv tool install`.
+
 **Diagnóstico para pedir ajuda** — Prompt de Comando:
 `transcritorio-cli self-test` — copie a saída e cole em uma
 [issue no GitHub](https://github.com/antrologos/Transcritorio/issues).
