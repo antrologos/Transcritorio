@@ -77,7 +77,7 @@ def _gui_launcher_path() -> str | None:
     return shutil.which(PACKAGE_NAME)
 
 
-def create_windows_shortcut(target: str, name: str = "Transcritório") -> bool:
+def create_windows_shortcut(target: str, name: str = "Transcritório", arguments: str = "") -> bool:
     """Cria atalho na area de trabalho via WScript.Shell. Nunca levanta."""
     if sys.platform != "win32":
         return False
@@ -87,7 +87,8 @@ def create_windows_shortcut(target: str, name: str = "Transcritório") -> bool:
             "$desktop = [Environment]::GetFolderPath('Desktop'); "
             f"$s = $ws.CreateShortcut((Join-Path $desktop '{name}.lnk')); "
             f"$s.TargetPath = '{target}'; "
-            "$s.Save()"
+            + (f"$s.Arguments = '{arguments}'; " if arguments else "")
+            + "$s.Save()"
         )
         completed = subprocess.run(
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
@@ -112,7 +113,16 @@ def ensure_first_run_setup() -> None:
         target = _gui_launcher_path()
         if not target:
             return  # instalado sem shim no PATH (ex.: dev) — nada a fazer
-        if create_windows_shortcut(str(Path(target))):
+        # O atalho aponta para o pythonw do ambiente (nao para o shim .exe do
+        # uv): politicas de integridade de codigo (Device Guard/WDAC, vistas
+        # em beta 2026-08) bloqueiam executaveis nao assinados, e o pythonw
+        # de um CPython oficial e assinado. Um trampolim a menos para todos.
+        pythonw = Path(sys.executable).with_name("pythonw.exe")
+        if pythonw.exists():
+            created = create_windows_shortcut(str(pythonw), arguments="-m transcribe_pipeline.gui_launcher")
+        else:
+            created = create_windows_shortcut(str(Path(target)))
+        if created:
             app_settings.save({"shortcut_created": True})
     except Exception:
         pass
