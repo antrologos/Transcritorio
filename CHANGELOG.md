@@ -24,6 +24,32 @@ oficial passa a ser **PyPI + uv** (`uv tool install transcritorio`); ver
   ativos, globs por id sem colisão de prefixo, parser YAML preserva '#',
   token_vault nunca crasha, release não publica com build falho, e ~40
   outros fixes (ver mensagens dos commits de 2026-08-23).
+- Qualidade da separação de falantes (4 correções, 2026-08-23/24): os
+  metadados por arquivo ("Aplicar falantes", ex.: grupo focal com 6 vozes)
+  passam a valer na rota CLI/GUI; o pós-processamento da camada exclusiva
+  não atropela mais apartes curtos (padrão A-B-A); o corte palavra→falante
+  usa critério acústico (palavra de borda segue o turno vizinho;
+  interjeições reais são preservadas); hiperparâmetros de clustering
+  aplicam-se por chave (`diarization_fa/fb` eram inertes).
+- **"De quem é esta voz?"**: ao fim de cada transcrição (e via banner na
+  revisão), o app toca amostras de cada voz — com timestamp e prévia do
+  texto — e pede o nome, que vale para a transcrição inteira; confirmação
+  registrada por arquivo; opção por projeto de não perguntar (lote).
+- Reconhecimento local de vozes recorrentes: as vozes confirmadas em 2+
+  arquivos viram âncoras do projeto (embeddings já calculados pela
+  diarização, agora persistidos) e os arquivos seguintes abrem com
+  "parece ser X" pré-preenchido — sempre confirmável, nunca automático.
+- Grupo focal como caso de primeira classe: ao transcrever, o app pergunta
+  "Quantas pessoas falam?" (presets entrevista/grupo focal/exato/auto, uma
+  vez por lote); cores estáveis por voz na tabela de blocos; rótulos
+  default "Moderador/Participante N".
+- Partida com feedback e instância única: splash imediato ao abrir e o
+  segundo clique no ícone traz a janela existente (nunca mais duas janelas);
+  campo Falante editável com "Aplicar a todos desta voz".
+- Player das amostras: toca o WAV preparado (timeline exata do pipeline) e
+  contorna o descarte silencioso de seek do backend de mídia do Windows.
+- Beta público do canal novo: release `beta-0.2.0b1` (wheel instalável por
+  URL com `uv tool install`) para testes em máquinas reais antes da v0.2.0.
 
 ## 0.1.8 — 2026-04-27
 

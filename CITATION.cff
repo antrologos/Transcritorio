@@ -10,7 +10,7 @@ version: "0.1.8"
 date-released: "2026-04-27"
 license: "MIT"
 repository-code: "https://github.com/antrologos/Transcritorio"
-url: "https://antrologos.github.io/Transcritorio/"
+url: "https://antrologos.github.io/Transcritorio/pt/"
 type: software
 keywords:
   - transcription

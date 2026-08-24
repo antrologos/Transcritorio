@@ -1,8 +1,13 @@
 ﻿# Desenvolvimento
 
-Este documento descreve como rodar o Transcritório **do código-fonte**
-(não do instalador). Para usuário final, prefira os binários em
-[Releases](https://github.com/antrologos/Transcritorio/releases/latest).
+Este documento descreve como rodar o Transcritório **do código-fonte**.
+Para usuário final, o caminho é `uv tool install transcritorio` — ver a
+seção Instalação do [README](../README.md).
+
+> Dica: para desenvolvimento, `uv sync` (cria o venv a partir do
+> `uv.lock`) e `uv build --wheel` (gera o wheel fora do Dropbox) são os
+> equivalentes modernos dos passos com pip abaixo. Os entrypoints
+> instalados são `transcritorio` (GUI) e `transcritorio-cli` (CLI).
 
 ## Pré-requisitos
 
@@ -108,7 +113,11 @@ comandos.
   subprocess. No bundle distribuído, eles ficam em
   `vendor/ffmpeg/bin/`; no source, precisam estar no `PATH` do SO.
 
-## Build do instalador (empacotamento)
+## Build do instalador (empacotamento — CANAL LEGADO)
+
+> O canal standalone foi descontinuado em 2026-08; o release oficial é o
+> wheel no PyPI (`publish.yml`, tag `v*`). Esta seção vale apenas para
+> builds manuais do canal legado (`release.yml` via workflow_dispatch).
 
 Veja [`docs/STANDALONE_DISTRIBUTION.md`](STANDALONE_DISTRIBUTION.md) para
 detalhes completos de build. Em resumo:

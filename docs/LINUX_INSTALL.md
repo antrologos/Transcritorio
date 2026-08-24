@@ -1,151 +1,69 @@
- > **LEGADO (2026-08):** o AppImage foi descontinuado. Instale pelo canal
-> atual: `uv` + `uv tool install transcritorio` (ver o
-> [README](../README.md#instalação) e [`LEGACY_STANDALONE.md`](LEGACY_STANDALONE.md)).
-> O guia abaixo vale apenas para os AppImages antigos (v0.1.x).
+# Instalar o Transcritório no Linux
 
-# Como instalar o Transcritorio no Linux (AppImage — LEGADO)
+> Canal atual (v0.2+): pacote Python instalado via [uv](https://docs.astral.sh/uv/).
+> Suporte em **beta** — o suporte principal é Windows 10/11. O AppImage foi
+> descontinuado; ver [`LEGACY_STANDALONE.md`](LEGACY_STANDALONE.md).
 
-Guia rapido para pesquisadores em Ubuntu, Fedora ou outras distribuicoes
-com base no AppImage. Testado em Ubuntu 22.04 e 24.04.
+## Instalação (Ubuntu/Debian e similares)
 
-## O que baixar
+1. Instale as ferramentas de base:
 
-1. Va ate a pagina de Releases: https://github.com/antrologos/Transcritorio/releases/latest
-2. Baixe o arquivo **`Transcritorio-x86_64.AppImage`**
-3. Tamanho esperado: ~1.5 GB (inclui tudo que o programa precisa)
+   ```sh
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   sudo apt install ffmpeg
+   ```
 
-## Instalar pre-requisitos do sistema
+   (Em Fedora: `sudo dnf install ffmpeg`; em Arch: `sudo pacman -S ffmpeg`.
+   O `uv` também está disponível em vários gerenciadores — ver
+   [instruções oficiais](https://docs.astral.sh/uv/getting-started/installation/).)
 
-O AppImage **ja inclui o FFmpeg** (ffmpeg + ffprobe embutidos). O que
-ele **nao inclui** sao as libs graficas do sistema que o Qt exige —
-instale uma vez via gerenciador de pacotes.
+2. Feche e abra o terminal de novo (para o `uv` entrar no PATH) e instale:
 
-### Ubuntu/Debian
+   ```sh
+   uv tool install transcritorio
+   ```
 
-```sh
-sudo apt update
-sudo apt install -y \
-    libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
-    libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-sync1 \
-    libxcb-util1 libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1 \
-    libxkbcommon-x11-0 libxkbcommon0 libegl1 \
-    libfuse2 libglib2.0-0 libasound2
-```
+   > **Período beta (até a v0.2.0 sair no PyPI):** o comando acima ainda não
+   > está ativo. Use o comando do release
+   > [beta-0.2.0b1](https://github.com/antrologos/Transcritorio/releases/tag/beta-0.2.0b1),
+   > que é idêntico trocando `transcritorio` pela URL do wheel.
 
-(Lista completa — Qt 6.5+ exige varias libs xcb para o plugin da
-plataforma X11 carregar corretamente. Se esquecer alguma, o app mostra
-"Could not load the Qt platform plugin 'xcb'" no terminal.)
+3. Abra com:
 
-### Fedora
+   ```sh
+   transcritorio
+   ```
 
-```sh
-sudo dnf install -y libxcb libxkbcommon
-```
+## Aceleração NVIDIA (opcional)
 
-## Executar
-
-No terminal, no diretorio onde baixou o AppImage:
+Com placa NVIDIA e driver instalado, o mesmo comando do Windows habilita a
+aceleração CUDA (download de ~2,5 GB):
 
 ```sh
-chmod +x Transcritorio-x86_64.AppImage
-./Transcritorio-x86_64.AppImage
+uv tool install --reinstall "transcritorio[cuda]" \
+  --with torch==2.8.0+cu128 --with torchaudio==2.8.0+cu128 --with torchvision==0.23.0+cu128 \
+  --index https://download.pytorch.org/whl/cu128 --index-strategy unsafe-best-match
 ```
 
-Ou clique duas vezes no arquivo pelo gerenciador de arquivos (precisa
-que o arquivo tenha permissao de execucao — alguns gerenciadores
-fazem isso automaticamente, outros pedem pra marcar).
+(No beta, troque `"transcritorio[cuda]"` por `"transcritorio[cuda] @ <URL do wheel>"`.)
 
-## Integrar com o menu de aplicativos (opcional)
+## Manutenção
 
-Para aparecer no menu "Aplicativos" do seu desktop ao lado de outros
-programas instalados:
+- **Atualizar:** `uv tool upgrade transcritorio`
+- **Reparar:** menu **Ajuda → Reparar instalação** (não afeta projetos nem modelos)
+- **Desinstalar:** `uv tool uninstall transcritorio` — projetos e transcrições ficam intactos
 
-```sh
-# Instala o AppImageLauncher (Ubuntu)
-sudo apt install appimagelauncher
+## Notas
 
-# Primeira vez que voce rodar o AppImage ele pergunta se quer integrar
-# Resposta: "Integrate and run"
-```
+- O token da Hugging Face (apenas para separação de falantes) é guardado no
+  Secret Service do desktop (GNOME Keyring/KWallet); em servidores sem
+  desktop, um fallback criptografado local é usado automaticamente.
+- Primeira execução baixa os modelos (~5 GB só transcrição; ~7 GB com
+  separação de falantes); depois tudo roda offline.
+- Wayland/X11: a interface usa Qt 6 (PySide6); em caso de problema de
+  renderização, tente `QT_QPA_PLATFORM=xcb transcritorio`.
 
-## Desempenho no Linux
+## Canal legado (descontinuado)
 
-**O AppImage atual roda em CPU** (o pacote Linux embute o PyTorch
-CPU-only; o suporte a CUDA no Linux esta no backlog). Audio de 1 hora
-leva ~3-5 horas, dependendo do processador.
-
-Se voce tem placa NVIDIA e precisa da aceleracao 3-9x hoje, use a
-versao Windows (nativa ou via dual-boot), que baixa o pacote CUDA
-automaticamente quando detecta a placa.
-
-## Desinstalar
-
-Simples — apague o arquivo `.AppImage`. Opcionalmente, apague dados
-do app:
-
-```sh
-rm -rf ~/.local/share/Transcritorio
-```
-
-Seus projetos de transcricao (`.transcritorio`) ficam onde voce os
-salvou e nao sao apagados.
-
-## Token HF (Hugging Face)
-
-O Transcritorio pede um token gratis do Hugging Face uma vez para
-baixar os modelos de transcricao. O token e armazenado:
-
-- **Com desktop grafico** (GNOME, KDE, etc.): via `keyring`, usando
-  o SecretService/KWallet do sistema. Seguro, sincronizado com o
-  gerenciador de credenciais do desktop.
-- **Headless / SSH**: via Fernet criptografado em
-  `~/.local/share/Transcritorio/hf_token.fallback` com permissao 0600.
-
-## Problemas comuns
-
-### "Error: libxcb-cursor.so.0: cannot open shared object file"
-
-Faltou instalar as libs xcb. Rode o comando de pre-requisitos de novo.
-
-### "ffmpeg: not found"
-
-Rode `sudo apt install ffmpeg` (ou `dnf`). Confirme com `ffmpeg -version`.
-
-### "Permission denied" ao executar o AppImage
-
-```sh
-chmod +x Transcritorio-x86_64.AppImage
-```
-
-### FUSE error no AppImage
-
-Alguns sistemas minimais nao tem FUSE habilitado:
-
-```sh
-sudo apt install libfuse2
-```
-
-### Integracao com desktop nao funciona
-
-`AppImageLauncher` e opcional. Sem ele, o AppImage roda mas nao
-aparece no menu de aplicativos automaticamente. Voce pode criar um
-`.desktop` file manualmente em `~/.local/share/applications/`.
-
-## Rodar pela linha de comando
-
-O AppImage inclui o CLI. Para usar:
-
-```sh
-./Transcritorio-x86_64.AppImage --help                      # abre GUI
-# TODO: documentar como invocar a CLI do subprocess
-```
-
-## Reportar bugs
-
-Via GitHub Issues: https://github.com/antrologos/Transcritorio/issues
-
-Inclua:
-- Distro + versao (`lsb_release -a` ou `/etc/os-release`)
-- Desktop environment (`echo $XDG_CURRENT_DESKTOP`)
-- Traceback ou erro do terminal
-- Label `platform-linux`
+O AppImage (v0.1.x) não recebe mais atualizações. Histórico e downloads
+antigos: [`LEGACY_STANDALONE.md`](LEGACY_STANDALONE.md).

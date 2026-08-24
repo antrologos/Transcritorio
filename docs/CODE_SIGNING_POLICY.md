@@ -1,16 +1,21 @@
 # Code Signing Policy
 
-## About signed releases
+> **Status (2026-08): superseded.** This document was prepared for the
+> SignPath Foundation application, which was declined (project considered
+> too early-stage). The standalone Windows installer channel was retired
+> shortly after; the official distribution channel is now the Python
+> package on PyPI installed via `uv` (see `LEGACY_STANDALONE.md`). No
+> release is code-signed. The sections below are kept for the record.
 
-Code signing for the Windows installer of Transcritorio is provided
-for free by [SignPath.io](https://signpath.io/), with a certificate
-issued by the [SignPath Foundation](https://signpath.org/).
+## About signed releases (historical)
 
-Signed releases are published exclusively at:
+Code signing for the Windows installer of Transcritorio was planned
+through [SignPath.io](https://signpath.io/) with a certificate issued by
+the [SignPath Foundation](https://signpath.org/); the application was not
+approved and no signed release was ever published.
+
+Releases are published exclusively at:
 - GitHub Releases: https://github.com/antrologos/Transcritorio/releases
-
-Only releases distributed from this URL with a SignPath Foundation
-signature should be considered authentic.
 
 ## Authorization & responsibilities
 

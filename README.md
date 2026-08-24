@@ -30,7 +30,26 @@ Feche e reabra o Prompt, digite `transcritorio` e pressione Enter. O programa ab
 
 Guia detalhado com solução de problemas: [`docs/INSTALL_WINDOWS.md`](docs/INSTALL_WINDOWS.md)
 
-**macOS / Linux (beta)** — mesmo mecanismo: instale o `uv` ([instruções oficiais](https://docs.astral.sh/uv/getting-started/installation/)) e o ffmpeg (`brew install ffmpeg` / `sudo apt install ffmpeg`), depois `uv tool install transcritorio`.
+> **⏳ Período beta (até a v0.2.0 sair no PyPI):** o comando `uv tool install transcritorio` ainda não está ativo. Por enquanto, instale a versão beta trocando `transcritorio` por `"transcritorio @ <URL do wheel>"` — o comando pronto para copiar, por sistema, está no [release beta-0.2.0b1](https://github.com/antrologos/Transcritorio/releases/tag/beta-0.2.0b1).
+
+**macOS (beta)** — no Terminal, com [Homebrew](https://brew.sh):
+
+```sh
+brew install uv ffmpeg
+uv tool install transcritorio
+```
+
+Em Apple Silicon (M1/M2/M3/M4), use `uv tool install "transcritorio[mac]"` para transcrever com aceleração Metal. Sem Gatekeeper: não há app para "autorizar". Guia: [`docs/MAC_INSTALL.md`](docs/MAC_INSTALL.md)
+
+**Linux (beta)** — no terminal:
+
+```sh
+curl -LsSf https://astral.sh/uv/install.sh | sh
+sudo apt install ffmpeg   # ou o gerenciador da sua distribuição
+uv tool install transcritorio
+```
+
+Guia: [`docs/LINUX_INSTALL.md`](docs/LINUX_INSTALL.md)
 
 - **Atualizar:** `uv tool upgrade transcritorio` (o app avisa quando há versão nova).
 - **Reparar:** menu **Ajuda → Reparar instalação** (não afeta projetos, áudios nem modelos).
@@ -45,9 +64,9 @@ Guia detalhado com solução de problemas: [`docs/INSTALL_WINDOWS.md`](docs/INST
 ### O que você consegue fazer
 
 - **Importar** áudios e vídeos (MP3, WAV, M4A, MP4 e outros) — um arquivo, uma pasta, ou uma lista.
-- **Transcrever** em português brasileiro com alta acurácia (90–96% em áudios limpos).
-- **Separar falantes** automaticamente — identifica quem falou em cada trecho (entrevistador, entrevistado, etc.).
-- **Revisar no Estúdio** com player sincronizado, forma de onda interativa e edição por bloco.
+- **Transcrever** em português brasileiro com alta acurácia (90–96% em áudios limpos). Ao transcrever, o app pergunta quantas pessoas falam — entrevista a dois ou **grupo focal** (até ~8 participantes).
+- **Separar falantes** automaticamente — e nomeá-los ouvindo amostras: o diálogo **"De quem é esta voz?"** toca trechos de cada voz para você dizer quem é. Vozes recorrentes do projeto (ex.: a sua) passam a ser **reconhecidas automaticamente** e vêm sugeridas.
+- **Revisar no Estúdio** com player sincronizado, forma de onda interativa, cores por falante e edição por bloco.
 - **Exportar** em DOCX, MD, SRT, VTT, CSV, TSV e formato NVivo.
 - **Tudo offline** depois do download inicial dos modelos (4–7 GB conforme as opções, uma única vez).
 
@@ -67,9 +86,9 @@ Guia detalhado com solução de problemas: [`docs/INSTALL_WINDOWS.md`](docs/INST
 
 **2. Crie um projeto.** Abra o Transcritório e vá em **Projeto → Novo projeto…** Dê um nome (ex.: `tese-entrevistas-2026`) e escolha uma pasta. O app cria uma estrutura `.transcricao` com áudios, transcrições e metadados lado a lado — fácil de fazer backup e arquivar.
 
-**3. Adicione os áudios ou vídeos.** Clique em **Adicionar mídia…** (ou arraste arquivos para a janela). Use **Editar propriedades…** para definir idioma (Português brasileiro), número aproximado de falantes e rótulos (ex.: Entrevistador, Informante).
+**3. Adicione os áudios ou vídeos.** Clique em **Adicionar mídia…** (ou arraste arquivos para a janela). Ao transcrever, o app pergunta quantas pessoas falam (entrevista, grupo focal, número exato ou automático) — e **Editar propriedades…** permite ajustar por arquivo depois (idioma, falantes, rótulos).
 
-**4. Clique em Transcrever e revise no Estúdio.** O botão **Transcrever** faz o fluxo completo: prepara o áudio, transcreve, separa os falantes e monta o texto editável. Tempos realistas para 1 hora de entrevista: **~5–10 min** em máquina com GPU NVIDIA ou Apple Silicon, **~20–30 min** em notebook recente sem GPU, **~40–60 min** em máquina modesta. Ao final, abra o **Estúdio de Revisão** para ouvir o áudio sincronizado com o texto, ajustar trechos com a forma de onda e exportar. Guia visual completo no [site do projeto](https://antrologos.github.io/Transcritorio/pt/#how).
+**4. Clique em Transcrever e revise no Estúdio.** O botão **Transcrever** faz o fluxo completo: prepara o áudio, transcreve, separa os falantes e monta o texto editável. Ao final, o diálogo **"De quem é esta voz?"** toca uma amostra de cada voz para você nomeá-las — os nomes valem para a transcrição inteira. Tempos realistas para 1 hora de entrevista: **~5–10 min** em máquina com GPU NVIDIA ou Apple Silicon, **~20–30 min** em notebook recente sem GPU, **~40–60 min** em máquina modesta. Ao final, abra o **Estúdio de Revisão** para ouvir o áudio sincronizado com o texto, ajustar trechos com a forma de onda e exportar. Guia visual completo no [site do projeto](https://antrologos.github.io/Transcritorio/pt/#how).
 
 > **Modelos de IA no primeiro uso:** o Transcritório baixa os modelos uma única vez (~5 GB só para transcrever; ~7 GB com identificação de falantes); depois roda offline. A **identificação de falantes é opcional**: quem quer apenas transcrever não precisa de cadastro algum. Quem a ativa é orientado pelo assistente a criar uma conta gratuita na [Hugging Face](https://huggingface.co/), aceitar os termos do modelo pyannote e colar um *token* de leitura — tudo em português, e dá para ativar depois sem repetir as transcrições.
 
@@ -86,14 +105,14 @@ Guia detalhado com solução de problemas: [`docs/INSTALL_WINDOWS.md`](docs/INST
 
 ### Como citar
 
-Barbosa, R. J. (2026). *Transcritório: transcrição local de entrevistas em português brasileiro* (v0.1.7) [Software]. IESP-UERJ/CERES. https://github.com/antrologos/Transcritorio
+Barbosa, R. J. (2026). *Transcritório: transcrição local de entrevistas em português brasileiro* (v0.1.8) [Software]. IESP-UERJ/CERES. https://github.com/antrologos/Transcritorio
 
 ```bibtex
 @software{barbosa2026transcritorio,
   author    = {Barbosa, Rog{\'e}rio Jer{\^o}nimo},
   title     = {Transcrit{\'o}rio: transcri{\c{c}}{\~a}o local de entrevistas em portugu{\^e}s brasileiro},
   year      = {2026},
-  version   = {0.1.7},
+  version   = {0.1.8},
   publisher = {IESP-UERJ/CERES},
   license   = {MIT},
   url       = {https://github.com/antrologos/Transcritorio}
@@ -115,13 +134,13 @@ Se você quer rodar do código-fonte, contribuir com pull requests ou auditar o 
 - **Setup de ambiente, CLI e primeiros commits:** [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)
 - **Arquitetura do pipeline e estrutura de arquivos:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - **Histórico de experimentos e decisões de modelo (testes A/B, variants):** [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md)
-- **Checklist pré-release (bundle completo):** [`docs/PACKAGING_CHECKLIST.md`](docs/PACKAGING_CHECKLIST.md)
+- **Checklist pré-release (canal standalone legado):** [`docs/PACKAGING_CHECKLIST.md`](docs/PACKAGING_CHECKLIST.md)
 - **Segurança de tokens:** [`docs/SEGURANCA_SEGREDOS.md`](docs/SEGURANCA_SEGREDOS.md)
-- **Instalação a partir do source em macOS:** [`docs/MAC_INSTALL.md`](docs/MAC_INSTALL.md)
-- **Instalação a partir do source em Linux:** [`docs/LINUX_INSTALL.md`](docs/LINUX_INSTALL.md)
+- **Instalação no macOS:** [`docs/MAC_INSTALL.md`](docs/MAC_INSTALL.md)
+- **Instalação no Linux:** [`docs/LINUX_INSTALL.md`](docs/LINUX_INSTALL.md)
 - **Aceleração MLX no Apple Silicon:** [`docs/MLX_WHISPER_MACOS.md`](docs/MLX_WHISPER_MACOS.md)
-- **Troubleshooting macOS/Linux (referência consolidada):** [`docs/MAC_LINUX.md`](docs/MAC_LINUX.md)
-- **Code signing no Windows (backlog, opções e passo a passo):** [`docs/WINDOWS_CODE_SIGNING.md`](docs/WINDOWS_CODE_SIGNING.md)
+- **Troubleshooting macOS/Linux:** [`docs/MAC_LINUX.md`](docs/MAC_LINUX.md)
+- **Code signing no Windows (encerrado — canal standalone aposentado):** [`docs/WINDOWS_CODE_SIGNING.md`](docs/WINDOWS_CODE_SIGNING.md)
 
 ### Estrutura do repositório
 
@@ -146,7 +165,7 @@ docs/                   documentação completa
 
 As versões em instalador (.exe/.dmg/AppImage) foram descontinuadas — ver [`docs/LEGACY_STANDALONE.md`](docs/LEGACY_STANDALONE.md).
 
-Roadmap e histórico em [`docs/STANDALONE_APP_ROADMAP.md`](docs/STANDALONE_APP_ROADMAP.md).
+Histórico do desenvolvimento (era do app standalone): [`docs/STANDALONE_APP_ROADMAP.md`](docs/STANDALONE_APP_ROADMAP.md).
 
 ## Contribuir e reportar bugs
 
@@ -161,4 +180,4 @@ Autor: **Rogério Jerônimo Barbosa** — IESP-UERJ / CERES — [antrologos.gith
 
 Agradecimentos às bibliotecas sobre as quais este projeto se apoia: [WhisperX](https://github.com/m-bain/whisperX), [faster-whisper](https://github.com/SYSTRAN/faster-whisper), [mlx-whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper), [pyannote.audio](https://github.com/pyannote/pyannote-audio), [PySide6](https://pypi.org/project/PySide6/), [FFmpeg](https://ffmpeg.org/).
 
-O ffmpeg/ffprobe embutidos nos binários distribuídos são builds GPL de terceiros (BtbN para Windows, evermeet.cx para macOS, johnvansickle.com para Linux). Veja [`NOTICE`](NOTICE) para a lista completa de componentes bundled e seus termos.
+No canal atual, o ffmpeg/ffprobe vêm do gerenciador de pacotes do sistema (winget/brew/apt) — nada é embutido. Nas releases legadas em instalador, o ffmpeg/ffprobe embutidos eram builds GPL de terceiros (BtbN para Windows, evermeet.cx para macOS, johnvansickle.com para Linux); veja [`NOTICE`](NOTICE) para a lista de componentes dessas versões e seus termos.
