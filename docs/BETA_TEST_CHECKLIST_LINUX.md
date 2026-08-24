@@ -1,7 +1,11 @@
 # Checklist de teste em Linux (via VM VirtualBox)
 
-Backlog 0.3+ Item 4. Para executar apos o Item 3 (AppImage) publicar um
-artefato de release.
+> **LEGADO (2026-08):** este checklist foi escrito para o AppImage, que foi
+> descontinuado. Para testar o canal atual em Linux, siga
+> `LINUX_INSTALL.md` (uv) — os passos de VM abaixo continuam uteis como
+> roteiro geral, trocando o AppImage pelo comando de instalacao via uv.
+
+Backlog 0.3+ Item 4 (era do canal standalone).
 
 ## Pre-requisitos (uma vez)
 

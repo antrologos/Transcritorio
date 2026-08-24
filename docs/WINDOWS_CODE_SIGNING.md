@@ -1,6 +1,10 @@
 # Code Signing no Windows — opções, custos e passo a passo
 
-**Status**: backlog de decisão (2026-04-22). Não implementado.
+**Status**: ENCERRADO (2026-08). O SignPath Foundation recusou a aplicação
+(projeto considerado imaturo) e o canal standalone foi aposentado em
+seguida — a distribuição atual (`uv tool install transcritorio`) não usa
+executável próprio e dispensa assinatura. Documento preservado como
+registro; só voltaria a valer se o canal legado fosse reativado.
 
 Este documento registra o estado da arte de code signing para Windows em
 2026 e avalia as opções disponíveis para o Transcritório, um projeto

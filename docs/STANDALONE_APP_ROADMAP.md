@@ -1,5 +1,11 @@
 # Roadmap do app standalone de transcricao
 
+> **HISTORICO (2026-08):** o canal standalone (instaladores .exe/.dmg/
+> AppImage) foi descontinuado; o canal oficial e `uv tool install
+> transcritorio` (PyPI) — ver `LEGACY_STANDALONE.md`. Este roadmap e
+> preservado como registro da fase 2026-04..2026-08; as promessas de
+> instalador aqui nao valem mais.
+
 Este documento registra o plano do software standalone para usuarios nao tecnicos. O objetivo e manter o processamento local, auditavel e seguro, reaproveitando o motor atual em `transcribe_pipeline/`.
 
 ## Decisao atual

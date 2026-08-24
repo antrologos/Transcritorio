@@ -1,5 +1,12 @@
 Transcritorio — third-party components bundled with distributed binaries.
 
+NOTE (2026-08): this notice applies to the LEGACY standalone releases
+(.exe/.dmg/AppImage, v0.1.x), which bundled FFmpeg builds. The current
+distribution channel (Python wheel on PyPI installed via uv) bundles no
+third-party binaries: FFmpeg comes from the user's package manager
+(winget/brew/apt) and Python dependencies come from PyPI under their own
+licenses.
+
 The Python source in this repository is licensed under the MIT License (see LICENSE).
 
 Some distributed release artifacts bundle static builds of FFmpeg (ffmpeg + ffprobe),

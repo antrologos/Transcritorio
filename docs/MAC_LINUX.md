@@ -1,8 +1,13 @@
 # Transcritorio em Mac e Linux (MVP)
 
-A versao 0.2.0 traz suporte experimental a macOS e Linux via scripts
-`.sh` e deteccao de dispositivo com MPS. Instaladores `.dmg` e AppImage
-ficam para 0.3+.
+> **DESATUALIZADO (2026-08):** o canal oficial em todos os SOs passou a ser
+> `uv tool install transcritorio` — ver `MAC_INSTALL.md` e `LINUX_INSTALL.md`.
+> Instaladores `.dmg`/AppImage foram DESCONTINUADOS (nao "ficam para 0.3+");
+> historico em `LEGACY_STANDALONE.md`. O conteudo tecnico abaixo (deteccao
+> MPS, keyring, scripts .sh) continua valido como referencia.
+
+A versao 0.2.0 trouxe suporte experimental a macOS e Linux via scripts
+`.sh` e deteccao de dispositivo com MPS.
 
 ## macOS (Apple Silicon e Intel)
 

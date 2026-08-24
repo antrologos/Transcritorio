@@ -1,5 +1,12 @@
 # Como configurar `SITE_DISPATCH_PAT`
 
+> **NOTA (2026-08):** o `release.yml` virou manual (workflow_dispatch) com a
+> aposentadoria do canal standalone — logo o rebuild AUTOMATICO do site em
+> release ficou orfao. O site tambem rebuilda sozinho a cada push em
+> `site-src/**`. Pendente para a v0.2.0: decidir se o `publish.yml` (tag
+> `v*` -> PyPI) ganha o mesmo repository_dispatch, ou se o rebuild e feito
+> manualmente no lancamento (workflow_dispatch do site.yml).
+
 O workflow `release.yml` dispara um rebuild do site antrologos.github.io
 quando uma nova release publica. Para isso ele precisa de um Personal
 Access Token (PAT) com permissao de escrita naquele outro repositorio.

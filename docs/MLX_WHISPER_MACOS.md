@@ -4,14 +4,18 @@ O Transcritorio usa a framework MLX da Apple para rodar Whisper direto
 no GPU integrado dos chips M1/M2/M3/M4. Isso da tipicamente **3x a 5x
 mais rapido** que CPU puro em Apple Silicon.
 
-## Para usuarios finais (baixaram o .dmg)
+## Para usuarios finais
 
-**A integracao MLX esta no codigo mas ainda nao foi empacotada nos
-binarios publicos** — a v0.1.1 distribuida em `.dmg` foi montada antes da
-integracao. A proxima release macOS ja incluira `mlx-whisper` dentro do
-`Transcritorio.app`.
+Instale com o extra `[mac]` para habilitar a aceleracao Metal:
+
+```sh
+uv tool install "transcritorio[mac]"
+```
+
 Ao abrir o app num Mac com Apple Silicon, a aceleracao MPS e detectada
-automaticamente e o caminho MLX e usado.
+automaticamente e o caminho MLX e usado (selo `Motor: MLX (Metal)` no
+cabecalho do projeto). Sem o extra, o app funciona normalmente em CPU.
+(O `.dmg` legado foi descontinuado — ver `LEGACY_STANDALONE.md`.)
 
 > **Confirmar que a aceleracao esta ativa**: abra o Transcritorio, va em
 > *Preferencias → Sobre* (ou equivalente) e verifique que o backend

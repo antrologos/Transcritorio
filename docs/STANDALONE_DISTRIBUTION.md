@@ -1,5 +1,10 @@
 # Distribuicao standalone do Transcritorio
 
+> **LEGADO (2026-08):** o canal standalone foi descontinuado; o canal
+> oficial e `uv tool install transcritorio` (PyPI, via `publish.yml`).
+> Este contrato vale APENAS para builds manuais do `release.yml`
+> (workflow_dispatch) — ver `LEGACY_STANDALONE.md`.
+
 Este documento define o contrato de build para instaladores multiplataforma. O objetivo e que o usuario final nao precise instalar Python, FFmpeg, Git, VS Code, CUDA Toolkit ou usar terminal.
 
 ## Contrato do runtime
