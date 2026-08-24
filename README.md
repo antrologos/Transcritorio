@@ -30,7 +30,7 @@ Feche e reabra o Prompt, digite `transcritorio` e pressione Enter. O programa ab
 
 Guia detalhado com solução de problemas: [`docs/INSTALL_WINDOWS.md`](docs/INSTALL_WINDOWS.md)
 
-> **⏳ Período beta (até a v0.2.0 sair no PyPI):** o comando `uv tool install transcritorio` ainda não está ativo. Por enquanto, instale a versão beta trocando `transcritorio` por `"transcritorio @ <URL do wheel>"` — o comando pronto para copiar, por sistema, está no [release beta-0.2.0b1](https://github.com/antrologos/Transcritorio/releases/tag/beta-0.2.0b1).
+> **⏳ Período beta (até a v0.2.0 sair no PyPI):** o comando `uv tool install transcritorio` ainda não está ativo. Por enquanto, instale a versão beta trocando `transcritorio` por `"transcritorio @ <URL do wheel>"` — o comando pronto para copiar, por sistema, está no [release beta-0.2.0b2](https://github.com/antrologos/Transcritorio/releases/tag/beta-0.2.0b2).
 
 **macOS (beta)** — no Terminal, com [Homebrew](https://brew.sh):
 

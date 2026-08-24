@@ -25,7 +25,7 @@
 
    > **Período beta (até a v0.2.0 sair no PyPI):** o comando acima ainda não
    > está ativo. Use o comando do release
-   > [beta-0.2.0b1](https://github.com/antrologos/Transcritorio/releases/tag/beta-0.2.0b1),
+   > [beta-0.2.0b2](https://github.com/antrologos/Transcritorio/releases/tag/beta-0.2.0b2),
    > que é idêntico trocando `transcritorio` pela URL do wheel.
 
 3. Abra com:
