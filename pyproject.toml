@@ -44,7 +44,7 @@ Issues = "https://github.com/antrologos/Transcritorio/issues"
 transcritorio-cli = "transcribe_pipeline.cli:main"
 
 [project.gui-scripts]
-transcritorio = "transcribe_pipeline.review_studio_qt:main"
+transcritorio = "transcribe_pipeline.gui_launcher:main"
 
 [project.optional-dependencies]
 build = ["pyinstaller>=6.0"]

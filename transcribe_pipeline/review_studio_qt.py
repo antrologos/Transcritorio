@@ -51,7 +51,7 @@ def _setup_logger() -> None:
 
 _setup_logger()
 
-from . import app_service, project_store, review_store
+from . import app_service, project_store, review_store, voice_recognition
 from .runtime import resolve_executable
 from .utils import sanitize_message
 
@@ -85,6 +85,7 @@ try:
         QProgressBar,
         QProgressDialog,
         QRadioButton,
+        QScrollArea,
         QSlider,
         QSpinBox,
         QSplitter,
@@ -264,6 +265,234 @@ def speaker_internal_label(label: str) -> str:
     if label in SPEAKER_LABELS:
         return SPEAKER_LABELS[label]
     return label.strip() or "Falante"
+
+
+def _speaker_key_sort(label: str) -> tuple[int, int, str]:
+    suffix = label[len("SPEAKER_"):] if label.startswith("SPEAKER_") else ""
+    if suffix.isdigit():
+        return (0, int(suffix), label)
+    return (1, 0, label)
+
+
+def ordered_speaker_keys(turns: list[dict[str, Any]]) -> list[str]:
+    """SPEAKER_XX distintos dos turnos, na mesma ordem posicional usada pelo
+    render para mapear speaker_labels (indice numerico, nao aparicao)."""
+    seen: list[str] = []
+    for turn in turns:
+        key = str(turn.get("speaker") or "").strip()
+        if key and key not in seen:
+            seen.append(key)
+    return sorted(seen, key=_speaker_key_sort)
+
+
+def unlabeled_speaker_ids(turns: list[dict[str, Any]]) -> list[str]:
+    """Vozes ainda sem nome humano (rotulo efetivo continua SPEAKER_NN)."""
+    seen: list[str] = []
+    for turn in turns:
+        key = review_store.turn_speaker_key(turn)
+        if key.startswith("SPEAKER_") and key[len("SPEAKER_"):].isdigit() and key not in seen:
+            seen.append(key)
+    return sorted(seen, key=_speaker_key_sort)
+
+
+def raw_voice_ids(turns: list[dict[str, Any]]) -> list[str]:
+    """Vozes cruas da diarizacao (SPEAKER_NN em turn["speaker"]).
+
+    Exclui SPEAKER_UNKNOWN — pseudo-voz de diarizacao parcial/desligada, nao
+    e uma pessoa nomeavel."""
+    seen: list[str] = []
+    for turn in turns:
+        key = str(turn.get("speaker") or "").strip()
+        if key.startswith("SPEAKER_") and key[len("SPEAKER_"):].isdigit() and key not in seen:
+            seen.append(key)
+    return sorted(seen, key=_speaker_key_sort)
+
+
+def should_offer_voice_naming(config: dict[str, Any], file_metadata: dict[str, str] | None, turns: list[dict[str, Any]]) -> bool:
+    """Gatilho puro do "De quem é esta voz?" (plano D2.5).
+
+    O rotulo default posicional (Entrevistador/Entrevistado) NAO conta como
+    confirmacao — por isso o criterio e o flag speakers_confirmed, nunca a
+    presenca de nomes nos turnos (que mascarou o caso N=2)."""
+    if not bool(config.get("voice_naming_prompt", True)):
+        return False
+    confirmed = str((file_metadata or {}).get("speakers_confirmed") or "").strip().lower()
+    if confirmed == "true":
+        return False
+    return len(raw_voice_ids(turns)) >= 2
+
+
+def dominant_speaker_key(turns: list[dict[str, Any]], speaker_id: str) -> str:
+    """Rotulo (turn_speaker_key) mais frequente entre os turnos da voz crua.
+
+    Usado no relabel em lote: turno que o usuario ja reatribuiu a mao tem key
+    divergente e fica fora da aplicacao."""
+    counts: dict[str, int] = {}
+    for turn in turns:
+        if str(turn.get("speaker") or "").strip() != speaker_id:
+            continue
+        key = review_store.turn_speaker_key(turn)
+        counts[key] = counts.get(key, 0) + 1
+    if not counts:
+        return speaker_id
+    return max(counts, key=lambda key: counts[key])
+
+
+def raw_speaker_key(turn: dict[str, Any]) -> str:
+    """Voz CRUA da diarizacao (turn["speaker"]), independente do rotulo humano."""
+    return str(turn.get("speaker") or "").strip()
+
+
+# Identidade visual por voz (dialogo "De quem e esta voz?" e coluna Falante
+# da tabela de blocos, D3.2). Paleta legivel em tema escuro e claro.
+VOICE_CHIP_COLORS = ["#4dabf7", "#69db7c", "#ffa94d", "#e599f7", "#ffd43b", "#63e6be", "#ff8787", "#a5d8ff"]
+
+
+def voice_color_map(turns: list[dict[str, Any]]) -> dict[str, str]:
+    """Cor estavel por voz crua (ordem dos SPEAKER_NN)."""
+    return {
+        key: VOICE_CHIP_COLORS[index % len(VOICE_CHIP_COLORS)]
+        for index, key in enumerate(ordered_speaker_keys(turns))
+    }
+
+
+def ids_without_speaker_setup(metadata: dict[str, dict[str, str]], ids: list[str]) -> list[str]:
+    """Arquivos cuja configuracao de falantes nunca foi definida por um humano.
+
+    O sync pre-semeia speaker_mode com defaults — por isso o criterio e o
+    marcador speaker_setup (gravado pelo dialogo "Quantas pessoas falam?" e
+    pelo Editar propriedades), nunca a presenca de um modo (plano D3.1)."""
+    return [
+        interview_id for interview_id in ids
+        if str((metadata.get(interview_id) or {}).get("speaker_setup") or "").strip().lower() != "true"
+    ]
+
+
+def speaker_sample_clips(
+    turns: list[dict[str, Any]], speaker_key: str, count: int = 3, max_seconds: float = 8.0,
+    key_fn: Any = None,
+) -> list[dict[str, Any]]:
+    """Trechos de amostra v2 (plano D2.6): {start, end, text} por trecho.
+
+    Exclui turnos com marcacoes suspeitas (duvida/sobreposicao — os candidatos
+    a contaminacao do agrupamento) e espalha as amostras por inicio/meio/fim
+    do audio: variedade que tambem torna VISIVEL um agrupamento contaminado
+    (voz que muda entre amostras). Fallback: se todos sao suspeitos, usa-os."""
+    resolve = key_fn or review_store.turn_speaker_key
+    candidates: list[dict[str, Any]] = []
+    for turn in turns:
+        if resolve(turn) != speaker_key:
+            continue
+        start = float(turn.get("start", 0) or 0)
+        end = float(turn.get("end", start) or start)
+        if end <= start:
+            continue
+        flags = set(str(flag) for flag in (turn.get("flags") or []))
+        candidates.append({
+            "start": start,
+            "end": end,
+            "duration": end - start,
+            "text": " ".join(str(turn.get("text", "")).split()),
+            "suspect": bool(flags & {"duvida", "sobreposicao"}),
+        })
+    if not candidates:
+        return []
+    clean = [item for item in candidates if not item["suspect"]] or candidates
+    span_start = min(item["start"] for item in clean)
+    span = max(1e-9, max(item["end"] for item in clean) - span_start)
+    thirds: list[list[dict[str, Any]]] = [[], [], []]
+    for item in clean:
+        thirds[min(2, int((item["start"] - span_start) / span * 3))].append(item)
+    picked = [max(bucket, key=lambda item: item["duration"]) for bucket in thirds if bucket]
+    if len(picked) < count:
+        rest = sorted((item for item in clean if item not in picked), key=lambda item: item["duration"], reverse=True)
+        picked.extend(rest[: count - len(picked)])
+    picked = sorted(picked[:count], key=lambda item: item["start"])
+    return [
+        {"start": item["start"], "end": min(item["end"], item["start"] + max_seconds), "text": item["text"]}
+        for item in picked
+    ]
+
+
+def speaker_sample_ranges(
+    turns: list[dict[str, Any]], speaker_key: str, count: int = 3, max_seconds: float = 8.0,
+    key_fn: Any = None,
+) -> list[tuple[float, float]]:
+    """Ate `count` trechos de amostra da voz: os turnos mais longos, cortados
+    em max_seconds — o suficiente para reconhecer quem fala."""
+    resolve = key_fn or review_store.turn_speaker_key
+    candidates: list[tuple[float, float, float]] = []
+    for turn in turns:
+        if resolve(turn) != speaker_key:
+            continue
+        start = float(turn.get("start", 0) or 0)
+        end = float(turn.get("end", start) or start)
+        if end > start:
+            candidates.append((end - start, start, end))
+    candidates.sort(reverse=True)
+    return [(start, min(end, start + max_seconds)) for _dur, start, end in candidates[:count]]
+
+
+def speaker_talk_summary(turns: list[dict[str, Any]], speaker_key: str, key_fn: Any = None) -> tuple[float, int]:
+    """(segundos falados, numero de blocos) da voz."""
+    resolve = key_fn or review_store.turn_speaker_key
+    seconds = 0.0
+    blocks = 0
+    for turn in turns:
+        if resolve(turn) != speaker_key:
+            continue
+        start = float(turn.get("start", 0) or 0)
+        end = float(turn.get("end", start) or start)
+        seconds += max(0.0, end - start)
+        blocks += 1
+    return seconds, blocks
+
+
+def order_role_suggestions(turns: list[dict[str, Any]], speaker_ids: list[str], key_fn: Any = None) -> dict[str, list[str]]:
+    """Sugestoes de rotulo por voz, ORDENADAS por heuristica de papel.
+
+    Quem fala menos e pergunta mais provavelmente conduz (Entrevistador /
+    Moderador). A heuristica so ordena as sugestoes do combo — nunca rotula
+    sozinha; a decisao e do usuario ouvindo as amostras (plano D2.4).
+    """
+    if not speaker_ids:
+        return {}
+    resolve = key_fn or review_store.turn_speaker_key
+    stats: dict[str, dict[str, float]] = {key: {"seconds": 0.0, "blocks": 0.0, "questions": 0.0} for key in speaker_ids}
+    for turn in turns:
+        key = resolve(turn)
+        entry = stats.get(key)
+        if entry is None:
+            continue
+        start = float(turn.get("start", 0) or 0)
+        end = float(turn.get("end", start) or start)
+        entry["seconds"] += max(0.0, end - start)
+        entry["blocks"] += 1
+        entry["questions"] += str(turn.get("text", "")).count("?")
+    total_seconds = sum(entry["seconds"] for entry in stats.values()) or 1.0
+
+    def interviewer_score(key: str) -> float:
+        entry = stats[key]
+        question_rate = entry["questions"] / max(1.0, entry["blocks"])
+        talk_share = entry["seconds"] / total_seconds
+        return question_rate - talk_share
+
+    likely_lead = max(speaker_ids, key=interviewer_score)
+    result: dict[str, list[str]] = {}
+    if len(speaker_ids) <= 2:
+        for key in speaker_ids:
+            result[key] = ["Entrevistador", "Entrevistado"] if key == likely_lead else ["Entrevistado", "Entrevistador"]
+        return result
+    participant_names = [f"Participante {index}" for index in range(1, len(speaker_ids))]
+    participant = 0
+    for key in speaker_ids:
+        if key == likely_lead:
+            result[key] = ["Moderador"] + participant_names
+        else:
+            participant += 1
+            own = f"Participante {participant}"
+            result[key] = [own, "Moderador"] + [name for name in participant_names if name != own]
+    return result
 
 
 def turn_preview(turn: dict[str, Any], max_chars: int = 120) -> str:
@@ -1618,6 +1847,263 @@ if QT_IMPORT_ERROR is None:
             return updates
 
 
+    class SpeakerCountDialog(QDialog):
+        """Pergunta "Quantas pessoas falam?" ao transcrever arquivos ainda sem
+        configuracao de falantes (plano D3.1). Uma pergunta por LOTE — a
+        transcricao em massa nunca e interrompida arquivo a arquivo."""
+
+        def __init__(self, file_count: int, parent: QWidget | None = None) -> None:
+            super().__init__(parent)
+            self.setWindowTitle("Quantas pessoas falam?")
+            self.setMinimumWidth(480)
+            layout = QVBoxLayout(self)
+            scope = f"nestes {file_count} arquivos" if file_count > 1 else "neste arquivo"
+            intro = QLabel(
+                f"Quantas pessoas falam {scope}? Isso orienta a separação de vozes — "
+                "um grupo focal forçado a 2 falantes sai errado. Dá para ajustar depois por arquivo em Editar propriedades."
+            )
+            intro.setWordWrap(True)
+            layout.addWidget(intro)
+            self.interview_radio = QRadioButton("Entrevista — 2 pessoas (entrevistador e entrevistado)")
+            self.interview_radio.setChecked(True)
+            layout.addWidget(self.interview_radio)
+            group_row = QHBoxLayout()
+            self.group_radio = QRadioButton("Grupo focal — entre")
+            group_row.addWidget(self.group_radio)
+            self.group_min_spin = QSpinBox()
+            self.group_min_spin.setRange(2, 20)
+            self.group_min_spin.setValue(3)
+            group_row.addWidget(self.group_min_spin)
+            group_row.addWidget(QLabel("e"))
+            self.group_max_spin = QSpinBox()
+            self.group_max_spin.setRange(2, 20)
+            self.group_max_spin.setValue(8)
+            group_row.addWidget(self.group_max_spin)
+            group_row.addWidget(QLabel("pessoas"))
+            group_row.addStretch()
+            layout.addLayout(group_row)
+            exact_row = QHBoxLayout()
+            self.exact_radio = QRadioButton("Número exato:")
+            exact_row.addWidget(self.exact_radio)
+            self.exact_spin = QSpinBox()
+            self.exact_spin.setRange(1, 20)
+            self.exact_spin.setValue(3)
+            exact_row.addWidget(self.exact_spin)
+            exact_row.addWidget(QLabel("pessoas"))
+            exact_row.addStretch()
+            layout.addLayout(exact_row)
+            self.auto_radio = QRadioButton("Automático — deixar o programa estimar")
+            layout.addWidget(self.auto_radio)
+            buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+            buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Transcrever")
+            buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Cancelar")
+            buttons.accepted.connect(self.accept)
+            buttons.rejected.connect(self.reject)
+            layout.addWidget(buttons)
+
+        def updates(self) -> dict[str, str]:
+            """Mesmas chaves do MetadataDialog + marcador speaker_setup."""
+            result: dict[str, str] = {"speaker_setup": "true"}
+            if self.interview_radio.isChecked():
+                result.update({
+                    "speaker_mode": "exact", "speaker_count": "2", "min_speakers": "2", "max_speakers": "2",
+                    "speaker_labels": "|".join(project_store.default_speaker_labels(2)),
+                })
+            elif self.group_radio.isChecked():
+                low = min(self.group_min_spin.value(), self.group_max_spin.value())
+                high = max(self.group_min_spin.value(), self.group_max_spin.value())
+                result.update({
+                    "speaker_mode": "range", "speaker_count": "", "min_speakers": str(low), "max_speakers": str(high),
+                    "speaker_labels": "|".join(project_store.default_speaker_labels(high)),
+                })
+            elif self.exact_radio.isChecked():
+                count = self.exact_spin.value()
+                result.update({
+                    "speaker_mode": "exact", "speaker_count": str(count), "min_speakers": str(count), "max_speakers": str(count),
+                    "speaker_labels": "|".join(project_store.default_speaker_labels(count)),
+                })
+            else:
+                result.update({"speaker_mode": "auto", "speaker_count": "", "min_speakers": "", "max_speakers": ""})
+            return result
+
+
+    class SpeakerNamingDialog(QDialog):
+        """Dialogo "De quem é esta voz?" (planos D2.1/D2.5/D2.6): trechos com
+        timestamp + prévia do texto por voz, ▶/⏹ com destaque do que toca, e a
+        saída de emergência para agrupamento contaminado (vozes misturadas =
+        número de falantes errado, não um nome a escolher). Player próprio —
+        o diálogo é modal e não pode depender do player da janela."""
+
+        def __init__(self, media_path: Path, rows: list[dict[str, Any]], parent: QWidget | None = None) -> None:
+            super().__init__(parent)
+            self.setWindowTitle("De quem é esta voz?")
+            self.setMinimumWidth(640)
+            self._player = QMediaPlayer(self)
+            self._audio_output = QAudioOutput(self)
+            self._player.setAudioOutput(self._audio_output)
+            self._player.setSource(QUrl.fromLocalFile(str(media_path)))
+            self._stop_at_ms: int | None = None
+            self._sample_start_ms: int | None = None
+            self._playing_button: QPushButton | None = None
+            self._pending_sample: tuple[QPushButton, float, float] | None = None
+            self._player.positionChanged.connect(self._stop_when_sample_ends)
+            self._player.mediaStatusChanged.connect(self._play_pending_when_loaded)
+            self.combos: list[QComboBox] = []
+
+            layout = QVBoxLayout(self)
+            intro = QLabel(
+                "Ouça um trecho de cada voz e diga quem é — escolha uma sugestão ou digite qualquer nome. "
+                "O nome vale para a transcrição inteira."
+            )
+            intro.setWordWrap(True)
+            layout.addWidget(intro)
+            # Vozes numa area rolavel: um grupo focal com 6+ vozes estourava a
+            # altura da tela e os botoes OK/Cancelar ficavam inalcancaveis
+            # (bug pego no 1o teste real de grupo focal, 2026-08-23).
+            voices_container = QWidget()
+            voices_layout = QVBoxLayout(voices_container)
+            voices_layout.setContentsMargins(0, 0, 0, 0)
+            for index, row in enumerate(rows):
+                chip = VOICE_CHIP_COLORS[index % len(VOICE_CHIP_COLORS)]
+                group = QGroupBox()
+                group_layout = QVBoxLayout(group)
+                title = QLabel(f"<span style='color:{chip}; font-size:14px;'>●</span> <b>{row['title']}</b>")
+                title.setTextFormat(Qt.TextFormat.RichText)
+                group_layout.addWidget(title)
+                for sample in row["samples"]:
+                    preview = str(sample.get("text") or "")
+                    if len(preview) > 70:
+                        preview = preview[:67].rstrip() + "..."
+                    start = float(sample["start"])
+                    end = float(sample["end"])
+                    button = QPushButton(f"▶  {format_clock(start)}   “{preview}”")
+                    button.setStyleSheet("text-align: left; padding: 4px 10px;")
+                    button.setToolTip("Tocar/parar este trecho.")
+                    button.clicked.connect(
+                        lambda _checked=False, b=button, s=start, e=end: self._toggle_sample(b, s, e)
+                    )
+                    group_layout.addWidget(button)
+                combo_row = QHBoxLayout()
+                combo_row.addWidget(QLabel("Quem é?"))
+                combo = QComboBox()
+                combo.setEditable(True)
+                combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+                combo.addItems(list(row["suggestions"]))
+                combo.setMinimumWidth(220)
+                combo_row.addWidget(combo, 1)
+                self.combos.append(combo)
+                group_layout.addLayout(combo_row)
+                voices_layout.addWidget(group)
+            voices_layout.addStretch()
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.Shape.NoFrame)
+            scroll.setWidget(voices_container)
+            layout.addWidget(scroll, 1)
+            mixed_note = QLabel(
+                "⚠ Ouviu vozes DIFERENTES nos trechos de uma mesma linha? O número de falantes pode estar "
+                "errado — cancele, ajuste em Editar propriedades → \"Aplicar falantes\" e use "
+                "Transcrever → Reprocessar falantes."
+            )
+            mixed_note.setWordWrap(True)
+            mixed_note.setStyleSheet(_style_muted())
+            layout.addWidget(mixed_note)
+            skip_note = QLabel("Deixe em branco para manter o nome atual e decidir depois.")
+            skip_note.setStyleSheet(_style_muted())
+            layout.addWidget(skip_note)
+            self.dont_ask_checkbox = QCheckBox("Não perguntar ao abrir transcrições deste projeto (reative no menu Transcrever)")
+            layout.addWidget(self.dont_ask_checkbox)
+            buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+            buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Aplicar nomes")
+            buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Agora não")
+            buttons.accepted.connect(self.accept)
+            buttons.rejected.connect(self.reject)
+            layout.addWidget(buttons)
+            screen = QApplication.primaryScreen()
+            if screen is not None:
+                available = screen.availableGeometry()
+                self.resize(min(760, available.width() - 80), min(860, available.height() - 80))
+
+        def _toggle_sample(self, button: QPushButton, start: float, end: float) -> None:
+            if self._playing_button is button:
+                self._stop_at_ms = None
+                self._sample_start_ms = None
+                self._pending_sample = None
+                self._player.pause()
+                self._reset_playing_button()
+                return
+            self._reset_playing_button()
+            # setPosition antes da midia carregar e ignorado pelo QMediaPlayer
+            # (tocaria do inicio do arquivo) — adiar ate LoadedMedia.
+            if self._player.mediaStatus() not in (
+                QMediaPlayer.MediaStatus.LoadedMedia,
+                QMediaPlayer.MediaStatus.BufferedMedia,
+                QMediaPlayer.MediaStatus.BufferingMedia,
+            ):
+                self._pending_sample = (button, start, end)
+                return
+            self._start_sample(button, start, end)
+
+        def _play_pending_when_loaded(self, status: "QMediaPlayer.MediaStatus") -> None:
+            if self._pending_sample is None:
+                return
+            if status in (QMediaPlayer.MediaStatus.LoadedMedia, QMediaPlayer.MediaStatus.BufferedMedia):
+                button, start, end = self._pending_sample
+                self._pending_sample = None
+                self._start_sample(button, start, end)
+
+        def _start_sample(self, button: QPushButton, start: float, end: float) -> None:
+            self._playing_button = button
+            button.setText("⏹" + button.text()[1:])
+            target_ms = int(start * 1000)
+            self._sample_start_ms = target_ms
+            self._stop_at_ms = int(end * 1000)
+            self._player.setPosition(target_ms)
+            self._player.play()
+
+            # O backend de midia do Windows DESCARTA silenciosamente o seek
+            # feito com o player pausado (pause->setPosition->play retoma de
+            # onde parou; reproduzido empiricamente em 2026-08-24). Confirmar
+            # a posicao logo apos o play e reaplicar se foi ignorada.
+            def _ensure_position() -> None:
+                if self._playing_button is button and abs(self._player.position() - target_ms) > 1500:
+                    self._player.setPosition(target_ms)
+
+            QTimer.singleShot(80, _ensure_position)
+            QTimer.singleShot(300, _ensure_position)
+
+        def _reset_playing_button(self) -> None:
+            if self._playing_button is not None:
+                self._playing_button.setText("▶" + self._playing_button.text()[1:])
+                self._playing_button = None
+
+        def _stop_when_sample_ends(self, position_ms: int) -> None:
+            if self._stop_at_ms is None:
+                return
+            # Posicao fora da janela da amostra = seek ainda nao aplicado (ou
+            # descartado, em correcao pelo _ensure_position) — nao e o fim da
+            # amostra; ignorar para nao pausar antes de o trecho tocar.
+            if self._sample_start_ms is not None and (
+                position_ms < self._sample_start_ms - 500 or position_ms > self._stop_at_ms + 2000
+            ):
+                return
+            if position_ms >= self._stop_at_ms:
+                self._stop_at_ms = None
+                self._sample_start_ms = None
+                self._player.pause()
+                self._reset_playing_button()
+
+        def labels(self) -> list[str]:
+            return [" ".join(combo.currentText().split()) for combo in self.combos]
+
+        def dont_ask(self) -> bool:
+            return self.dont_ask_checkbox.isChecked()
+
+        def done(self, result: int) -> None:
+            self._player.stop()
+            super().done(result)
+
+
     class EngineSettingsDialog(QDialog):
         def __init__(self, config: dict[str, Any], parent: QWidget | None = None) -> None:
             super().__init__(parent)
@@ -2608,6 +3094,8 @@ if QT_IMPORT_ERROR is None:
             self._slider_dragging = False
             self._changing_selection = False
             self._fallback_media_attempted = False
+            self._voice_naming_declined: set[str] = set()  # "De quem e esta voz?" recusado nesta sessao
+            self._confirm_migrated: set[str] = set()  # migracao implicita ja gravada nesta sessao
             self._close_after_worker = False
             self.undo_stack = QUndoStack(self)
 
@@ -2795,6 +3283,19 @@ if QT_IMPORT_ERROR is None:
             self.improve_speakers_action.setToolTip("Refazer a diarizacao local deste arquivo e remontar a transcricao editavel.")
             self.improve_speakers_action.triggered.connect(self.improve_speakers_current_file)
 
+            self.name_voices_action = QAction("Identificar vozes (De quem é esta voz?)...", self)
+            self.name_voices_action.setToolTip("Ouvir uma amostra de cada voz da transcrição aberta e dar nome aos falantes.\nAbra uma transcrição primeiro.")
+            self.name_voices_action.triggered.connect(self.open_voice_naming_dialog)
+
+            self.voice_prompt_action = QAction("Perguntar de quem é cada voz ao abrir transcrições", self)
+            self.voice_prompt_action.setCheckable(True)
+            self.voice_prompt_action.setChecked(True)
+            self.voice_prompt_action.setToolTip(
+                "Quando ligado, transcrições ainda não confirmadas abrem com a pergunta \"De quem é esta voz?\".\n"
+                "Desligue para revisar em lote sem interrupções (vale para este projeto)."
+            )
+            self.voice_prompt_action.toggled.connect(self._on_voice_prompt_toggled)
+
             self.render_action = QAction("Atualizar transcricao editavel", self)
             self.render_action.setToolTip("Remontar a transcrição editável a partir dos dados brutos (ASR + diarização).\nSelecione ao menos um arquivo.")
             self.render_action.triggered.connect(self.run_render_job)
@@ -2960,6 +3461,8 @@ if QT_IMPORT_ERROR is None:
             transcrever_menu.addSeparator()
             transcrever_menu.addAction(self.diarize_action)
             transcrever_menu.addAction(self.improve_speakers_action)
+            transcrever_menu.addAction(self.name_voices_action)
+            transcrever_menu.addAction(self.voice_prompt_action)
             transcrever_menu.addAction(self.render_action)
             transcrever_menu.addSeparator()
             transcrever_menu.addAction(self.qc_action)
@@ -3725,6 +4228,27 @@ if QT_IMPORT_ERROR is None:
             turn_panel = QWidget()
             turn_layout = QVBoxLayout(turn_panel)
             turn_layout.setContentsMargins(0, 0, 0, 0)
+            # Banner contextual (plano D2.6): a acao importante mora onde e
+            # necessaria — o menu e acesso secundario.
+            self.voice_banner = QFrame()
+            self.voice_banner.setVisible(False)
+            self.voice_banner.setStyleSheet(
+                "QFrame { background: rgba(77,171,247,0.14); border: 1px solid rgba(77,171,247,0.45); border-radius: 6px; }"
+            )
+            banner_layout = QHBoxLayout(self.voice_banner)
+            banner_layout.setContentsMargins(10, 6, 10, 6)
+            banner_label = QLabel("🔊 As vozes desta transcrição ainda não foram confirmadas.")
+            banner_label.setWordWrap(True)
+            banner_layout.addWidget(banner_label, 1)
+            self.voice_banner_button = QPushButton("Identificar vozes")
+            self.voice_banner_button.clicked.connect(self._on_banner_identify_clicked)
+            banner_layout.addWidget(self.voice_banner_button)
+            banner_dismiss = QPushButton("Não perguntar neste projeto")
+            banner_dismiss.setFlat(True)
+            banner_dismiss.setToolTip("Desliga a pergunta neste projeto. Reative no menu Transcrever.")
+            banner_dismiss.clicked.connect(self._on_banner_dismiss_clicked)
+            banner_layout.addWidget(banner_dismiss)
+            turn_layout.addWidget(self.voice_banner)
             turn_header = QHBoxLayout()
             turn_header.addWidget(QLabel("Blocos da transcricao"))
             turn_header.addStretch()
@@ -3752,9 +4276,20 @@ if QT_IMPORT_ERROR is None:
             grid = QGridLayout(group)
             grid.addWidget(QLabel("Falante:"), 0, 0)
             self.speaker_combo = QComboBox()
+            # Editavel (D2.2): o usuario pode digitar qualquer nome; NoInsert
+            # evita que textos parciais entrem na lista de opcoes.
+            self.speaker_combo.setEditable(True)
+            self.speaker_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
             self.speaker_combo.addItems(list(SPEAKER_LABELS))
             self.speaker_combo.currentIndexChanged.connect(self.editor_changed)
-            grid.addWidget(self.speaker_combo, 0, 1)
+            self.speaker_combo.editTextChanged.connect(self.editor_changed)
+            speaker_layout = QHBoxLayout()
+            speaker_layout.addWidget(self.speaker_combo, 1)
+            self.apply_speaker_all_button = QPushButton("Aplicar a todos desta voz")
+            self.apply_speaker_all_button.setToolTip("Dá este nome a todos os blocos desta mesma voz na transcrição. Ctrl+Z desfaz.")
+            self.apply_speaker_all_button.clicked.connect(self.apply_speaker_label_to_all)
+            speaker_layout.addWidget(self.apply_speaker_all_button)
+            grid.addLayout(speaker_layout, 0, 1)
 
             self.inaudivel_checkbox = QCheckBox(FLAG_LABELS["inaudivel"])
             self.duvida_checkbox = QCheckBox(FLAG_LABELS["duvida"])
@@ -3842,6 +4377,7 @@ if QT_IMPORT_ERROR is None:
             if hasattr(self, "project_label"):
                 self.project_label.setText(self.project_header_text())
             self._sync_diarize_checkbox()
+            self._sync_voice_prompt_action()
             self.interview_table.setSortingEnabled(False)
             self.interview_table.blockSignals(True)
             self.interview_table.setRowCount(0)
@@ -4240,9 +4776,59 @@ if QT_IMPORT_ERROR is None:
             if not updates:
                 QMessageBox.information(self, "Nada para aplicar", "Marque pelo menos um campo para alterar.")
                 return
+            if "speaker_labels" in updates:
+                # Rotulos escolhidos explicitamente contam como confirmacao
+                # humana das vozes (plano D2.5, item 9).
+                updates["speakers_confirmed"] = "true"
+            if "speaker_mode" in updates:
+                # Configuracao explicita de falantes dispensa o "Quantas
+                # pessoas falam?" na transcricao (plano D3.1).
+                updates["speaker_setup"] = "true"
             self.context = app_service.update_file_metadata(self.context, ids, updates)
             self.refresh_interviews()
             self.progress_label.setText(f"Propriedades atualizadas em {len(ids)} arquivo(s).")
+            if "speaker_labels" in updates:
+                self._offer_rerender_after_label_change(ids)
+
+        def _offer_rerender_after_label_change(self, ids: list[str]) -> None:
+            """Rotulos por arquivo so aparecem nos documentos apos remontar a
+            transcricao (o mapeamento acontece no render) — oferecer isso na
+            hora, em vez de exigir que o usuario descubra o menu (plano D2.3)."""
+            transcribed = []
+            for interview_id in ids:
+                status = self.status_by_interview_id(interview_id)
+                if status and (status.canonical_exists or status.review_exists):
+                    transcribed.append(interview_id)
+            if not transcribed:
+                return
+            if self.worker and self.worker.isRunning():
+                self.progress_label.setText(
+                    "Rótulos salvos. Para aplicá-los aos documentos, use Transcrever → Atualizar transcricao editavel."
+                )
+                return
+            answer = QMessageBox.question(
+                self,
+                "Aplicar os novos rótulos?",
+                f"{len(transcribed)} arquivo(s) já transcrito(s). Aplicar os novos rótulos de falantes aos documentos agora?\n\n"
+                "Transcrições com edições manuais mantêm as edições (nelas, use o botão \"Aplicar a todos desta voz\" no editor).",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            self.start_worker(
+                "Aplicar rótulos de falantes",
+                [
+                    (
+                        "Remontando transcricoes...",
+                        lambda: app_service.render_interviews(
+                            self.context, ids=transcribed, overrides={"diarization_source": "pyannote_exclusive"}
+                        ),
+                    ),
+                    (
+                        "Atualizando transcricoes editaveis...",
+                        lambda: app_service.refresh_unedited_reviews(self.context, transcribed),
+                    ),
+                ],
+            )
 
         def _on_interview_cell_clicked(self, row: int, column: int) -> None:
             if column == COL_CHECK:
@@ -4358,6 +4944,274 @@ if QT_IMPORT_ERROR is None:
                 self.select_turn_by_index(0, seek=False)
             self.set_save_state(saved_status_message())
             self.update_action_states()
+            # Abertura comum: o banner contextual assume (o dialogo automatico
+            # fica so para o fim de uma transcricao — plano D2.6).
+            self._update_voice_banner()
+
+        def _offer_voice_naming_after_job(self, interview_id: str) -> None:
+            """Versao pos-job da oferta: so vale se o mesmo arquivo continua
+            aberto (o usuario pode ter trocado durante o delay do QTimer)."""
+            if interview_id != self.current_interview_id:
+                return
+            self._maybe_offer_voice_naming(interview_id)
+            self._update_voice_banner()
+
+        def _review_has_speaker_edits(self) -> bool:
+            return any(
+                str(edit.get("action") or "") in ("set_speaker", "set_speaker_all")
+                for edit in (self.review or {}).get("edits", [])
+            )
+
+        def _persist_confirmed_from_edits(self, interview_id: str) -> None:
+            """Migracao implicita do parque legado: quem ja mexeu em falantes
+            nesta review confirmou na pratica — gravar o flag, sem perguntar."""
+            if interview_id in self._confirm_migrated:
+                return
+            self._confirm_migrated.add(interview_id)
+            try:
+                self.context = app_service.update_file_metadata(
+                    self.context, [interview_id], {"speakers_confirmed": "true"}
+                )
+            except Exception as exc:
+                _logger.warning("Falha ao gravar speakers_confirmed: %s", exc)
+
+        def _update_voice_banner(self) -> None:
+            """Banner "vozes nao confirmadas" acima da tabela de blocos.
+
+            E o caminho persistente e nao-intrusivo (plano D2.6): o dialogo
+            automatico so acontece ao FIM de uma transcricao; em todos os
+            outros momentos o estado fica visivel aqui, a um clique."""
+            if not hasattr(self, "voice_banner"):
+                return
+            visible = False
+            if self.review and self.current_interview_id and self.context is not None:
+                metadata = self.context.metadata.get(self.current_interview_id, {})
+                if should_offer_voice_naming(self.context.config, metadata, self.turns):
+                    if self._review_has_speaker_edits():
+                        self._persist_confirmed_from_edits(self.current_interview_id)
+                    else:
+                        visible = True
+            self.voice_banner.setVisible(visible)
+
+        def _on_banner_identify_clicked(self) -> None:
+            self.open_voice_naming_dialog()
+            self._update_voice_banner()
+
+        def _on_banner_dismiss_clicked(self) -> None:
+            self._set_voice_naming_prompt(False)
+            self._update_voice_banner()
+
+        def _maybe_offer_voice_naming(self, interview_id: str) -> None:
+            """Dialogo automatico do "De quem é esta voz?" — usado apenas ao
+            FIM de uma transcricao (plano D2.6); nos demais momentos o banner
+            contextual assume. Recusa vale pela sessão."""
+            if interview_id in self._voice_naming_declined:
+                return
+            if self.worker and self.worker.isRunning():
+                return
+            if not self.review or self.context is None:
+                return
+            metadata = self.context.metadata.get(interview_id, {})
+            if not should_offer_voice_naming(self.context.config, metadata, self.turns):
+                return
+            if self._review_has_speaker_edits():
+                self._persist_confirmed_from_edits(interview_id)
+                return
+            if not self.open_voice_naming_dialog():
+                self._voice_naming_declined.add(interview_id)
+
+        def open_voice_naming_dialog(self) -> bool:
+            """Dialogo "De quem é esta voz?" para a transcrição aberta.
+
+            Lista TODAS as vozes cruas (SPEAKER_NN) — o rótulo default
+            posicional não conta como nome confirmado (plano D2.5). Retorna
+            True quando o usuário confirmou (mesmo mantendo os nomes atuais)."""
+            if not self.review or not self.current_interview_id or not self.media_candidates:
+                QMessageBox.information(self, "Abra uma transcrição", "Abra uma transcrição para identificar as vozes.")
+                return False
+            voices = raw_voice_ids(self.turns)
+            if not voices:
+                QMessageBox.information(
+                    self,
+                    "Sem vozes para identificar",
+                    "Esta transcrição não tem vozes separadas (diarização desligada ou voz única).",
+                )
+                return False
+            if not self.save_current_turn():
+                return False
+            interview_id = self.current_interview_id
+            dominant = {voice: dominant_speaker_key(self.turns, voice) for voice in voices}
+            current_names: dict[str, str] = {}
+            for voice in voices:
+                current_names[voice] = next(
+                    (display_speaker(turn) for turn in self.turns
+                     if raw_speaker_key(turn) == voice
+                     and review_store.turn_speaker_key(turn) == dominant[voice]
+                     and str(turn.get("human_label") or "").strip()),
+                    "",
+                )
+            suggestions = order_role_suggestions(self.turns, voices, key_fn=raw_speaker_key)
+            embeddings: dict[str, list[float]] = {}
+            matches: dict[str, tuple[str, float]] = {}
+            try:
+                embeddings = voice_recognition.load_speaker_embeddings(self.context.paths, interview_id)
+                if embeddings:
+                    matches = voice_recognition.match_voices(
+                        embeddings,
+                        voice_recognition.load_anchors(self.context.paths),
+                        float(self.context.config.get("voice_match_threshold") or 0.65),
+                    )
+            except Exception as exc:
+                _logger.warning("Reconhecimento de vozes indisponivel: %s", exc)
+            rows: list[dict[str, Any]] = []
+            for position, voice in enumerate(voices, start=1):
+                seconds, blocks = speaker_talk_summary(self.turns, voice, key_fn=raw_speaker_key)
+                minutes = int(seconds // 60)
+                talk = f"{minutes} min" if minutes else f"{int(seconds)} s"
+                options = list(suggestions.get(voice, []))
+                recognized = matches.get(voice)
+                if recognized:
+                    options = [recognized[0]] + [option for option in options if option.casefold() != recognized[0].casefold()]
+                current = current_names.get(voice, "")
+                if current and all(option.casefold() != current.casefold() for option in options):
+                    options.append(current)
+                if recognized:
+                    title = f"Voz {position} — parece ser \"{recognized[0]}\" (confira na amostra) — {talk} em {blocks} bloco(s)"
+                elif current:
+                    title = f"Voz {position} — hoje \"{current}\" — {talk} em {blocks} bloco(s)"
+                else:
+                    title = f"Voz {position} — {talk} de fala em {blocks} bloco(s)"
+                rows.append({"title": title, "samples": speaker_sample_clips(self.turns, voice, key_fn=raw_speaker_key), "suggestions": options})
+            # Tocar o WAV preparado, nunca o original: os timestamps do
+            # pipeline referem-se ao WAV, e seek em MP3/M4A (VBR) e impreciso
+            # — o erro cresce com a posicao e toca a pessoa errada (bug pego
+            # no uso real, 2026-08-23).
+            dialog_media = next(
+                (path for path in self.media_candidates if path.suffix.lower() == ".wav"),
+                self.media_candidates[0],
+            )
+            dialog = SpeakerNamingDialog(dialog_media, rows, self)
+            accepted = dialog.exec() == QDialog.DialogCode.Accepted
+            if dialog.dont_ask():
+                self._set_voice_naming_prompt(False)
+            if not accepted:
+                return False
+            before = deepcopy(self.review)
+            applied = 0
+            confirmed_names: dict[str, str] = {}
+            for voice, label in zip(voices, dialog.labels()):
+                if not label:
+                    continue  # em branco = manter o nome atual, decidir depois
+                confirmed_names[voice] = label
+                try:
+                    applied += review_store.apply_label_to_raw_speaker(
+                        self.review, voice, speaker_internal_label(label), dominant[voice]
+                    )
+                except ValueError:
+                    continue
+            if applied:
+                try:
+                    app_service.save_review(self.context, interview_id, self.review)
+                except Exception as exc:
+                    self.review = before
+                    self.turns = review_store.review_turns(self.review)
+                    QMessageBox.critical(self, "Não foi possível salvar", sanitize_message(str(exc)))
+                    return False
+                self.turns = review_store.review_turns(self.review)
+                self.load_turn_table()
+                if self.turns:
+                    self.select_turn_by_index(0, seek=False)
+                self.undo_stack.push(ReviewSnapshotCommand(self, "Identificar vozes", before, self.review, self.current_turn_id))
+                self.set_save_state(saved_status_message())
+            # Rotulos POSICIONAIS (ordem dos SPEAKER_XX, a mesma do render) +
+            # confirmacao humana — o aceite conta mesmo sem mudar nomes.
+            positional: list[str] = []
+            for key in ordered_speaker_keys(self.turns):
+                named = next(
+                    (display_speaker(turn) for turn in self.turns
+                     if raw_speaker_key(turn) == key and str(turn.get("human_label") or "").strip()),
+                    "",
+                )
+                positional.append(named or key)
+            try:
+                self.context = app_service.update_file_metadata(
+                    self.context, [interview_id],
+                    {"speaker_labels": "|".join(positional), "speakers_confirmed": "true"},
+                )
+            except Exception as exc:
+                _logger.warning("Falha ao gravar rotulos no metadado: %s", exc)
+            # Ancoras do reconhecimento local: cada voz nomeada com embedding
+            # disponivel vira referencia do projeto (recorrentes = candidatas).
+            try:
+                if embeddings and confirmed_names:
+                    anchors = voice_recognition.load_anchors(self.context.paths)
+                    for voice, name in confirmed_names.items():
+                        vector = embeddings.get(voice)
+                        if vector:
+                            anchors = voice_recognition.add_anchor(anchors, name, interview_id, vector)
+                    voice_recognition.save_anchors(self.context.paths, anchors)
+            except Exception as exc:
+                _logger.warning("Falha ao gravar ancoras de voz: %s", exc)
+            if applied and not (self.worker and self.worker.isRunning()):
+                self.start_worker(
+                    "Aplicar nomes aos documentos",
+                    [(
+                        "Remontando transcricao...",
+                        lambda item=interview_id: app_service.render_interviews(
+                            self.context, ids=[item], overrides={"diarization_source": "pyannote_exclusive"}
+                        ),
+                    )],
+                )
+            self._update_voice_banner()
+            self.progress_label.setText(f"Nomes aplicados a {applied} bloco(s)." if applied else "Vozes confirmadas.")
+            return True
+
+        def _ask_speaker_counts_if_needed(self, ids: list[str]) -> bool:
+            """"Quantas pessoas falam?" — uma vez por lote, so para arquivos
+            nunca configurados (plano D3.1). False = usuario cancelou."""
+            pending = ids_without_speaker_setup(self.context.metadata, ids)
+            if not pending:
+                return True
+            dialog = SpeakerCountDialog(len(pending), self)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return False
+            try:
+                self.context = app_service.update_file_metadata(self.context, pending, dialog.updates())
+            except Exception as exc:
+                _logger.warning("Falha ao gravar configuracao de falantes: %s", exc)
+            return True
+
+        def _reset_speakers_confirmed(self, ids: list[str]) -> None:
+            """Re-diarizacao gera clusters novos: os nomes precisam ser
+            reconfirmados (plano D2.5, item 10). Limpar antes do job — se ele
+            falhar, a re-oferta e benigna."""
+            try:
+                self.context = app_service.update_file_metadata(self.context, ids, {"speakers_confirmed": ""})
+            except Exception as exc:
+                _logger.warning("Falha ao limpar speakers_confirmed: %s", exc)
+
+        def _set_voice_naming_prompt(self, enabled: bool) -> None:
+            """Liga/desliga a pergunta "De quem é esta voz?" no projeto atual."""
+            if self.context is None:
+                return
+            try:
+                self.context = app_service.update_engine_config(self.context, {"voice_naming_prompt": bool(enabled)})
+            except Exception as exc:
+                _logger.warning("update_engine_config(voice_naming_prompt) falhou: %s", exc)
+            self._sync_voice_prompt_action()
+            self._update_voice_banner()
+
+        def _on_voice_prompt_toggled(self, checked: bool) -> None:
+            self._set_voice_naming_prompt(bool(checked))
+
+        def _sync_voice_prompt_action(self) -> None:
+            if not hasattr(self, "voice_prompt_action"):
+                return
+            self.voice_prompt_action.blockSignals(True)
+            self.voice_prompt_action.setChecked(
+                bool(self.context.config.get("voice_naming_prompt", True)) if self.context else True
+            )
+            self.voice_prompt_action.blockSignals(False)
 
         def open_media_only(self, interview_id: str) -> None:
             try:
@@ -4404,6 +5258,7 @@ if QT_IMPORT_ERROR is None:
             self.set_editor_enabled(False)
             self.undo_stack.clear()
             self.set_save_state("Sem transcricao aberta.")
+            self._update_voice_banner()
             self.progress_label.setText("Arquivo fechado.")
             self.update_action_states()
 
@@ -4515,6 +5370,9 @@ if QT_IMPORT_ERROR is None:
         def load_turn_table(self) -> None:
             self.current_play_row = None
             self.turn_table.setRowCount(0)
+            # Cor estavel por voz na coluna Falante (plano D3.2) — so quando
+            # ha mais de uma voz; entrevista sem diarizacao fica neutra.
+            colors = voice_color_map(self.turns)
             for turn in self.turns:
                 row = self.turn_table.rowCount()
                 self.turn_table.insertRow(row)
@@ -4532,6 +5390,10 @@ if QT_IMPORT_ERROR is None:
                     item.setToolTip(value)
                     if column == 0:
                         item.setData(Qt.ItemDataRole.UserRole, turn.get("id"))
+                    elif column == 1 and len(colors) > 1:
+                        color = colors.get(raw_speaker_key(turn))
+                        if color:
+                            item.setForeground(QBrush(QColor(color)))
                     self.turn_table.setItem(row, column, item)
             if hasattr(self, "wrap_turns_checkbox"):
                 self.toggle_turn_word_wrap()
@@ -4690,6 +5552,46 @@ if QT_IMPORT_ERROR is None:
                 self.update_action_states()
                 return False
 
+        def apply_speaker_label_to_all(self) -> None:
+            """Aplica o nome do combo a todos os blocos da mesma voz (D2.2)."""
+            if not self.review or not self.current_interview_id or not self.current_turn_id:
+                QMessageBox.information(self, "Abra uma transcrição", "Abra uma transcrição e selecione um bloco primeiro.")
+                return
+            stored = self.current_turn()
+            if stored is None:
+                return
+            # A identidade da voz e capturada ANTES de salvar o turno atual:
+            # depois do save, o turno ja carrega o nome novo e a key mudaria.
+            reference_key = review_store.turn_speaker_key(stored)
+            label = speaker_internal_label(self.speaker_combo.currentText())
+            if not self.save_current_turn():
+                return
+            before = deepcopy(self.review)
+            try:
+                changed = review_store.apply_label_to_speaker_key(self.review, reference_key, label)
+            except ValueError as exc:
+                QMessageBox.warning(self, "Nome inválido", sanitize_message(str(exc)))
+                return
+            if not changed:
+                self.progress_label.setText("Todos os blocos desta voz já têm este nome.")
+                return
+            try:
+                app_service.save_review(self.context, self.current_interview_id, self.review)
+            except Exception as exc:
+                self.review = before
+                self.turns = review_store.review_turns(self.review)
+                QMessageBox.critical(self, "Não foi possível salvar", sanitize_message(str(exc)))
+                return
+            self.turns = review_store.review_turns(self.review)
+            self.load_turn_table()
+            try:
+                self.select_turn_by_index(review_store.find_turn_index(self.review, self.current_turn_id), seek=False)
+            except Exception:
+                pass
+            self.undo_stack.push(ReviewSnapshotCommand(self, "Aplicar falante a todos", before, self.review, self.current_turn_id))
+            self.set_save_state(saved_status_message())
+            self.progress_label.setText(f"Nome aplicado a {changed} bloco(s) desta voz.")
+
         def _set_action(self, action: QAction, enabled: bool, disabled_reason: str = "") -> None:
             """Enable/disable an action and update its tooltip with the reason."""
             action.setEnabled(enabled)
@@ -4772,6 +5674,8 @@ if QT_IMPORT_ERROR is None:
             self._set_action(self.open_export_folder_action, not busy, reason_busy)
             self._set_action(self.diarize_action, not busy and has_selected, reason_busy if busy else reason_select)
             self._set_action(self.improve_speakers_action, not busy and has_review, reason_busy if busy else reason_open)
+            self._set_action(self.name_voices_action, not busy and has_review, reason_busy if busy else reason_open)
+            self._set_action(self.voice_prompt_action, not busy and has_project, reason_busy if busy else "Abra ou crie um projeto primeiro.")
             self._set_action(self.render_action, not busy and has_selected, reason_busy if busy else reason_select)
             self._set_action(self.qc_action, not busy, reason_busy)
             self.cancel_job_action.setEnabled(busy)
@@ -5739,6 +6643,10 @@ if QT_IMPORT_ERROR is None:
             if not ids:
                 QMessageBox.information(self, "Selecione uma entrevista", "Selecione uma entrevista para transcrever.")
                 return
+            if bool(self.context.config.get("diarize", True)):
+                if not self._ask_speaker_counts_if_needed(ids):
+                    return
+                self._reset_speakers_confirmed(ids)
             steps: list[tuple] = []
             weights: list[int] = []
             # Dynamic weights from benchmark data (tests/benchmark_exhaustive_2026-04-19.csv)
@@ -6007,6 +6915,7 @@ if QT_IMPORT_ERROR is None:
             if not ids:
                 QMessageBox.information(self, "Selecione uma entrevista", "Selecione uma entrevista para identificar falantes.")
                 return
+            self._reset_speakers_confirmed(ids)
             self.start_worker(
                 "Identificar falantes",
                 [(
@@ -6032,6 +6941,7 @@ if QT_IMPORT_ERROR is None:
             )
             if answer != QMessageBox.StandardButton.Yes:
                 return
+            self._reset_speakers_confirmed([interview_id])
             steps = [
                 self.job_step(
                     f"{interview_id}: identificando falantes...",
@@ -6168,9 +7078,21 @@ if QT_IMPORT_ERROR is None:
                 except Exception as exc:
                     _logger.warning("Falha ao recarregar review de %s: %s", current_id, exc)
             self.update_action_states()
+            self._update_voice_banner()
             if self._close_after_worker:
                 self._close_after_worker = False
                 self.close()
+                return
+            if self.current_interview_id and self.review and "interrompido" not in message:
+                # Fluxo "transcrever o arquivo aberto": a transcricao aparece
+                # aqui SEM passar por open_review — a pergunta "De quem e esta
+                # voz?" precisa disparar tambem neste caminho (buraco pego no
+                # 1o uso real, 2026-08-23). QTimer: o QThread do job ainda
+                # esta finalizando e o guard de worker ocioso barraria agora.
+                QTimer.singleShot(
+                    200,
+                    lambda item=self.current_interview_id: self._offer_voice_naming_after_job(item),
+                )
 
         def on_worker_failed(self, message: str) -> None:
             self.progress_bar.setRange(0, 100)
@@ -6286,7 +7208,7 @@ def _apply_dark_theme(app) -> None:
     )
 
 
-def main() -> int:
+def main(splash: Any = None, single_instance_server: Any = None) -> int:
     # Startup diagnostics: env snapshot + faulthandler + symlink probe.
     # Idempotente. Cada sessao comeca gravando ambiente no log.
     try:
@@ -6340,10 +7262,30 @@ def main() -> int:
         sys.__excepthook__(exc_type, exc_value, exc_tb)
     sys.excepthook = _crash_excepthook
 
-    app = QApplication(sys.argv)
+    app = QApplication.instance() or QApplication(sys.argv)
     _apply_dark_theme(app)
     window = ReviewStudioWindow(project_root=project_root)
     window.show()
+    if splash is not None:
+        try:
+            splash.finish(window)
+        except Exception:
+            pass
+    if single_instance_server is not None:
+        # Segundo clique no icone: em vez de outra janela, trazer esta para
+        # frente (gui_launcher ja barrou o processo novo).
+        def _on_second_instance_ping() -> None:
+            try:
+                connection = single_instance_server.nextPendingConnection()
+                if connection is not None:
+                    connection.close()
+            except Exception:
+                pass
+            window.showNormal()
+            window.raise_()
+            window.activateWindow()
+        single_instance_server.newConnection.connect(_on_second_instance_ping)
+        window._single_instance_server = single_instance_server
     if os.environ.get("QT_QPA_PLATFORM", "").lower() != "offscreen":
         QTimer.singleShot(0, window.show_startup_dialog)
 
