@@ -5,11 +5,11 @@ import json
 from pathlib import Path
 import sys
 
-from . import model_manager
+from . import model_manager, project_store
 from .audio import prepare_audio
 from .config import ensure_directories, load_config, make_paths, write_default_config
 from .diarization import run_pyannote_diarization
-from .manifest import build_manifest, read_manifest, write_manifest
+from .manifest import build_manifest, read_manifest, selected_rows, write_manifest
 from .qc import run_qc
 from .render import render_outputs, write_empty_speaker_map
 from .whisperx_runner import run_whisperx
@@ -171,6 +171,26 @@ def load_context(args: argparse.Namespace):
     return config, paths
 
 
+def per_file_configs(
+    config: dict, paths, rows: list[dict[str, str]], ids: list[str] | None
+) -> list[tuple[str, dict]]:
+    """Pares (interview_id, config efetivo) das entrevistas selecionadas.
+
+    Aplica os metadados per-arquivo (metadados.csv: 'Aplicar falantes',
+    idioma, contexto como prompt, rotulos) sobre o config do projeto —
+    mesma regra de app_service.*_interviews. Sem isto, a rota CLI (usada
+    pela GUI via subprocesso desde a v0.2) ignorava essas escolhas.
+    """
+    metadata = project_store.read_file_metadata(project_store.metadata_path(paths))
+    return [
+        (
+            row["interview_id"],
+            project_store.config_with_file_metadata(config, metadata.get(row["interview_id"])),
+        )
+        for row in selected_rows(rows, ids)
+    ]
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     project_root = Path(args.project).resolve() if args.project else Path.cwd().resolve()
     config = load_config(None)
@@ -230,7 +250,10 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
     )
     apply_initial_prompt_file(config, paths)
     rows = load_manifest_or_exit(paths)
-    return run_whisperx(rows, config, paths, ids=args.ids, dry_run=args.dry_run)
+    failures = 0
+    for interview_id, file_config in per_file_configs(config, paths, rows, args.ids):
+        failures += run_whisperx(rows, file_config, paths, ids=[interview_id], dry_run=args.dry_run)
+    return failures
 
 
 def cmd_diarize(args: argparse.Namespace) -> int:
@@ -245,16 +268,22 @@ def cmd_diarize(args: argparse.Namespace) -> int:
             # Linha estruturada para a GUI (diarizacao em subprocesso, v0.2).
             print(PROGRESS_JSON_PREFIX + json.dumps(detail, ensure_ascii=False), flush=True)
 
-    return run_pyannote_diarization(
-        rows, config, paths, ids=args.ids, dry_run=args.dry_run,
-        progress_callback=progress_callback,
-    )
+    failures = 0
+    for interview_id, file_config in per_file_configs(config, paths, rows, args.ids):
+        failures += run_pyannote_diarization(
+            rows, file_config, paths, ids=[interview_id], dry_run=args.dry_run,
+            progress_callback=progress_callback,
+        )
+    return failures
 
 
 def cmd_render(args: argparse.Namespace) -> int:
     config, paths = load_context(args)
     rows = load_manifest_or_exit(paths)
-    return render_outputs(rows, config, paths, ids=args.ids)
+    failures = 0
+    for interview_id, file_config in per_file_configs(config, paths, rows, args.ids):
+        failures += render_outputs(rows, file_config, paths, ids=[interview_id])
+    return failures
 
 
 def cmd_qc(args: argparse.Namespace) -> int:

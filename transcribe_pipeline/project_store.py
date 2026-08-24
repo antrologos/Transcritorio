@@ -167,6 +167,8 @@ METADATA_COLUMNS = [
     "context_mode",
     "context_text",
     "use_context_as_prompt",
+    "speaker_setup",
+    "speakers_confirmed",
     "notes",
     "updated_at",
 ]
@@ -540,6 +542,16 @@ def normalize_project(project: dict[str, Any], paths: Paths, config: dict[str, A
     return result
 
 
+def default_speaker_labels(count: int) -> list[str]:
+    """Rotulos default por contagem: par entrevistador/entrevistado no 1:1,
+    Moderador + Participantes em grupo (plano D3.2)."""
+    if count == 2:
+        return ["Entrevistador", "Entrevistado"]
+    if count > 2:
+        return ["Moderador"] + [f"Participante {index}" for index in range(1, count)]
+    return ["Falante 1"]
+
+
 def default_transcription_settings(config: dict[str, Any]) -> dict[str, Any]:
     language = config.get("asr_language") or "auto"
     count = config.get("diarization_num_speakers") or config.get("min_speakers") or 2
@@ -547,7 +559,7 @@ def default_transcription_settings(config: dict[str, Any]) -> dict[str, Any]:
         count_int = int(count)
     except (TypeError, ValueError):
         count_int = 2
-    labels = ["Entrevistador", "Entrevistado"] if count_int == 2 else [f"Falante {index}" for index in range(1, count_int + 1)]
+    labels = default_speaker_labels(count_int)
     return {
         "language": str(language),
         "speaker_mode": "exact",

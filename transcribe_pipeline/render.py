@@ -38,7 +38,11 @@ def render_outputs(rows: list[dict[str, str]], config: dict, paths: Paths, ids: 
         diarization_source = "whisperx"
         external_segments = load_external_diarization(paths, interview_id, config)
         if external_segments:
-            data = apply_external_diarization(data, external_segments)
+            data = apply_external_diarization(
+                data,
+                external_segments,
+                containment_threshold=float(config.get("diarization_split_containment") or 0.5),
+            )
             diarization_source = str(config.get("diarization_source"))
         effective_speaker_map = speaker_map_from_labels(data, config.get("speaker_labels"))
         effective_speaker_map.update(speaker_map.get(interview_id, {}))
@@ -126,13 +130,17 @@ def load_external_diarization(paths: Paths, interview_id: str, config: dict) -> 
     return [segment for segment in payload.get("segments", []) if isinstance(segment, dict)]
 
 
-def apply_external_diarization(data: dict[str, Any], diarization_segments: list[dict[str, Any]]) -> dict[str, Any]:
+def apply_external_diarization(
+    data: dict[str, Any],
+    diarization_segments: list[dict[str, Any]],
+    containment_threshold: float = 0.5,
+) -> dict[str, Any]:
     result = dict(data)
     result["segments"] = []
     for segment in data.get("segments", []):
         if not isinstance(segment, dict):
             continue
-        split_segments = split_segment_by_word_diarization(segment, diarization_segments)
+        split_segments = split_segment_by_word_diarization(segment, diarization_segments, containment_threshold)
         if split_segments:
             result["segments"].extend(split_segments)
             continue
@@ -149,17 +157,26 @@ def apply_external_diarization(data: dict[str, Any], diarization_segments: list[
     return result
 
 
-def split_segment_by_word_diarization(segment: dict[str, Any], diarization_segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def split_segment_by_word_diarization(
+    segment: dict[str, Any],
+    diarization_segments: list[dict[str, Any]],
+    containment_threshold: float = 0.5,
+) -> list[dict[str, Any]]:
     words = usable_words(segment.get("words"))
     if len(words) < 2:
         return []
     groups: list[dict[str, Any]] = []
     for word in words:
-        speaker = best_overlap_speaker(float(word["start"]), float(word["end"]), diarization_segments) or str(segment.get("speaker", "SPEAKER_UNKNOWN"))
+        speaker = best_overlap_speaker(float(word["start"]), float(word["end"]), diarization_segments)
+        if speaker is None:
+            # Palavra em gap/silencio da diarizacao: continuar o turno em
+            # curso e mais coerente que herdar o speaker global do segmento.
+            speaker = groups[-1]["speaker"] if groups else str(segment.get("speaker", "SPEAKER_UNKNOWN"))
         if not groups or groups[-1]["speaker"] != speaker:
             groups.append({"speaker": speaker, "words": [word]})
         else:
             groups[-1]["words"].append(word)
+    groups = _absorb_marginal_single_word_groups(groups, diarization_segments, containment_threshold)
     if len(groups) < 2:
         return []
     result: list[dict[str, Any]] = []
@@ -177,6 +194,56 @@ def split_segment_by_word_diarization(segment: dict[str, Any], diarization_segme
         updated["diarization_split"] = True
         result.append(updated)
     return result
+
+
+def _absorb_marginal_single_word_groups(
+    groups: list[dict[str, Any]],
+    diarization_segments: list[dict[str, Any]],
+    containment_threshold: float,
+) -> list[dict[str, Any]]:
+    """Absorve grupos de 1 palavra cuja evidencia acustica e marginal.
+
+    Criterio (plano 2026-08-23, revisado com o usuario): NUNCA por contagem
+    de palavras isoladamente — um "Sim" solidamente dentro do turno do outro
+    falante e uma interjeicao real e permanece turno proprio. A absorcao so
+    ocorre quando a fracao da palavra dentro dos turnos do falante vencedor
+    fica abaixo do limiar (palavra de borda com timestamp impreciso).
+    """
+    if len(groups) < 2:
+        return groups
+    if len(groups[0]["words"]) == 1:
+        word = groups[0]["words"][0]
+        if _word_containment(word, groups[0]["speaker"], diarization_segments) < containment_threshold:
+            groups[0] = {"speaker": groups[1]["speaker"], "words": groups[0]["words"]}
+    result: list[dict[str, Any]] = []
+    for group in groups:
+        speaker = group["speaker"]
+        if len(group["words"]) == 1 and result:
+            word = group["words"][0]
+            if _word_containment(word, speaker, diarization_segments) < containment_threshold:
+                speaker = result[-1]["speaker"]
+        if result and result[-1]["speaker"] == speaker:
+            result[-1]["words"].extend(group["words"])
+        else:
+            result.append({"speaker": speaker, "words": list(group["words"])})
+    return result
+
+
+def _word_containment(word: dict[str, Any], speaker: str, diarization_segments: list[dict[str, Any]]) -> float:
+    """Fracao da duracao da palavra coberta pelos turnos do falante dado."""
+    start = float(word["start"])
+    end = float(word["end"])
+    duration = end - start
+    if duration <= 0:
+        return 0.0
+    covered = 0.0
+    for segment in diarization_segments:
+        if str(segment.get("speaker", "")).strip() != speaker:
+            continue
+        diar_start = float(segment.get("start", 0) or 0)
+        diar_end = float(segment.get("end", diar_start) or diar_start)
+        covered += max(0.0, min(end, diar_end) - max(start, diar_start))
+    return covered / duration
 
 
 def usable_words(raw_words: Any) -> list[dict[str, Any]]:

@@ -107,15 +107,7 @@ def run_pyannote_diarization(
         return len(rows_to_run) or 1
 
     # Apply custom hyperparameters if configured
-    custom_params: dict = {}
-    clustering_threshold = config.get("diarization_clustering_threshold")
-    min_duration_off = config.get("diarization_min_duration_off")
-    fa = float(config.get("diarization_fa") or 0.07)
-    fb = float(config.get("diarization_fb") or 0.8)
-    if clustering_threshold is not None:
-        custom_params["clustering"] = {"threshold": float(clustering_threshold), "Fa": fa, "Fb": fb}
-    if min_duration_off is not None:
-        custom_params["segmentation"] = {"min_duration_off": float(min_duration_off)}
+    custom_params = _custom_pipeline_params(config)
     if custom_params:
         pipeline.instantiate(custom_params)
         print(f"[{_ts()}] [diarize] Hiperparametros customizados: {custom_params}", flush=True)
@@ -175,9 +167,13 @@ def run_pyannote_diarization(
             print(f"[{_ts()}] [diarize] Pipeline concluido em {elapsed}s.", flush=True)
             regular = getattr(output, "speaker_diarization", output)
             exclusive = getattr(output, "exclusive_speaker_diarization", None)
+            try:
+                _persist_speaker_embeddings(paths, interview_id, output, model_name)
+            except Exception as exc:  # noqa: BLE001 - embeddings sao opcionais
+                print(f"[{_ts()}] [diarize] embeddings indisponiveis para {interview_id}: {exc}", flush=True)
             regular = _postprocess_annotation(regular, config)
             if exclusive is not None:
-                exclusive = _postprocess_annotation(exclusive, config)
+                exclusive = _postprocess_annotation(exclusive, config, preserve_exclusive=True)
             emit("diarize_progress", file_end_pct - 2, f"Gravando resultados de {interview_id}...")
             write_annotation_outputs(paths, interview_id, "regular", regular, model_name, audio_path)
             if exclusive is not None:
@@ -198,6 +194,56 @@ def run_pyannote_diarization(
 def diarization_audio_path(paths: Paths, row: dict[str, str]) -> Path:
     wav_path = row.get("wav_path", "")
     return paths.project_root / wav_path if wav_path else paths.project_root / row["source_path"]
+
+
+def _persist_speaker_embeddings(paths: Paths, interview_id: str, output, model_name: str) -> None:
+    """Grava os centroides por falante (DiarizeOutput.speaker_embeddings) —
+    insumo do reconhecimento local de vozes recorrentes (plano D2.5+X1a).
+
+    Mapeamento confirmado empiricamente (pyannote 4.0): embeddings[s]
+    corresponde a labels()[s] da annotation ANTES do pos-processamento (o
+    pos-processamento pode remover um falante inteiro e desalinharia os
+    indices). Vetores nao-finitos (falante sem fala util) sao descartados.
+    """
+    from .voice_recognition import write_speaker_embeddings
+
+    embeddings = getattr(output, "speaker_embeddings", None)
+    annotation = getattr(output, "speaker_diarization", None)
+    if embeddings is None or annotation is None:
+        return
+    labels = list(annotation.labels())
+    by_speaker: dict[str, list[float]] = {}
+    for index, label in enumerate(labels):
+        if index >= len(embeddings):
+            break
+        vector = [float(value) for value in embeddings[index]]
+        if vector and all(math.isfinite(value) for value in vector):
+            by_speaker[str(label)] = vector
+    if by_speaker:
+        write_speaker_embeddings(paths, interview_id, by_speaker, model_name)
+
+
+def _custom_pipeline_params(config: dict) -> dict:
+    """Hiperparametros customizados para pipeline.instantiate().
+
+    Cada chave setada vale por si (antes, fa/fb so eram aplicados se o
+    threshold tambem estivesse setado — config morto). instantiate() com
+    dict parcial preserva os demais parametros do config.yaml do modelo
+    (validado empiricamente no community-1 em 2026-08-23).
+    """
+    params: dict = {}
+    clustering: dict = {}
+    if config.get("diarization_clustering_threshold") is not None:
+        clustering["threshold"] = float(config["diarization_clustering_threshold"])
+    if config.get("diarization_fa") is not None:
+        clustering["Fa"] = float(config["diarization_fa"])
+    if config.get("diarization_fb") is not None:
+        clustering["Fb"] = float(config["diarization_fb"])
+    if clustering:
+        params["clustering"] = clustering
+    if config.get("diarization_min_duration_off") is not None:
+        params["segmentation"] = {"min_duration_off": float(config["diarization_min_duration_off"])}
+    return params
 
 
 def speaker_kwargs(config: dict) -> dict[str, int]:
@@ -231,8 +277,15 @@ def write_annotation_outputs(paths: Paths, interview_id: str, kind: str, annotat
         annotation.write_rttm(handle)
 
 
-def _postprocess_annotation(annotation, config: dict):
-    """Remove micro-segmentos e funde turnos proximos do mesmo falante."""
+def _postprocess_annotation(annotation, config: dict, preserve_exclusive: bool = False):
+    """Remove micro-segmentos e funde turnos proximos do mesmo falante.
+
+    preserve_exclusive: support(collar) funde POR ROTULO e, no padrao A-B-A
+    com gap < collar, estica A por cima do aparte curto de B — reintroduzindo
+    overlap na annotation exclusiva, cuja invariante e nao ter overlap
+    (finding C59). Nesse modo a fusao so ocorre entre segmentos consecutivos
+    na ordem global, nunca por cima da fala de outro falante.
+    """
     from pyannote.core import Annotation
 
     min_seg = float(config.get("diarization_min_segment") or 0.0)
@@ -246,9 +299,36 @@ def _postprocess_annotation(annotation, config: dict):
         annotation = cleaned
 
     if collar > 0:
-        annotation = annotation.support(collar=collar)
+        if preserve_exclusive:
+            annotation = _merge_collar_preserving_exclusivity(annotation, collar)
+        else:
+            annotation = annotation.support(collar=collar)
 
     return annotation
+
+
+def _merge_collar_preserving_exclusivity(annotation, collar: float):
+    """Funde segmentos consecutivos (ordem global) do mesmo falante com
+    gap < collar — semantica estrita identica ao support(), exceto que um
+    segmento de outro falante entre os dois sempre impede a fusao."""
+    from pyannote.core import Annotation, Segment
+
+    entries = sorted(
+        ((segment, speaker) for segment, _track, speaker in annotation.itertracks(yield_label=True)),
+        key=lambda item: (item[0].start, item[0].end),
+    )
+    merged: list[tuple[Segment, str]] = []
+    for segment, speaker in entries:
+        if merged:
+            prev_segment, prev_speaker = merged[-1]
+            if prev_speaker == speaker and (segment.start - prev_segment.end) < collar:
+                merged[-1] = (Segment(prev_segment.start, max(prev_segment.end, segment.end)), speaker)
+                continue
+        merged.append((segment, speaker))
+    result = Annotation(uri=annotation.uri)
+    for index, (segment, speaker) in enumerate(merged):
+        result[segment, index] = speaker
+    return result
 
 
 def annotation_to_segments(annotation) -> list[dict[str, Any]]:

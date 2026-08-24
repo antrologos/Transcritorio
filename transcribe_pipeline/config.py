@@ -57,6 +57,18 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "diarization_min_duration_off": 0.5,
     "diarization_min_segment": 0.3,
     "diarization_collar": 0.5,
+    # Split palavra->falante no render: grupo de 1 palavra so vira turno
+    # proprio se a fracao da palavra dentro dos turnos do falante vencedor
+    # for >= este limiar; abaixo disso a evidencia e marginal (palavra de
+    # borda com timestamp impreciso) e ela segue o turno vizinho.
+    "diarization_split_containment": 0.5,
+    # Perguntar "De quem e esta voz?" ao abrir transcricoes ainda nao
+    # confirmadas (por projeto; toggle no menu Transcrever).
+    "voice_naming_prompt": True,
+    # Similaridade minima (cosseno) para sugerir um nome de voz recorrente
+    # ja confirmada em outros arquivos do projeto. Conservador; calibrar
+    # com o acervo real.
+    "voice_match_threshold": 0.65,
     "diarization_fa": None,
     "diarization_fb": None,
     "model_download_token_env": "TRANSCRITORIO_MODEL_DOWNLOAD_TOKEN",

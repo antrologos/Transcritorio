@@ -313,6 +313,20 @@ def rebuild_review(context: ProjectContext, interview_id: str) -> JobResult:
     return JobResult("review", 0)
 
 
+def refresh_unedited_reviews(context: ProjectContext, ids: list[str]) -> JobResult:
+    """Recria a transcricao editavel a partir do canonical APENAS quando o
+    usuario ainda nao fez edicoes — edicoes humanas nunca sao descartadas."""
+    for interview_id in ids:
+        try:
+            review = load_review_transcript(context.paths, interview_id, create=False)
+        except FileNotFoundError:
+            continue
+        if review.get("edits"):
+            continue
+        create_review_from_canonical(context.paths, interview_id)
+    return JobResult("review", 0)
+
+
 def export_review(context: ProjectContext, interview_id: str, formats: list[str] | None = None) -> list[Path]:
     exported = export_review_outputs(context.paths, interview_id, formats=formats)
     # Mirror user-facing formats into {project_root}/Resultados/ (hardlink or copy fallback).

@@ -189,6 +189,57 @@ def set_turn_speaker_label(review: dict[str, Any], turn_id: str, human_label: st
     record_edit(review, "set_speaker", turn_id)
 
 
+def apply_label_to_speaker_key(review: dict[str, Any], reference_key: str, human_label: str) -> int:
+    """Aplica o rotulo a TODOS os turnos da voz identificada por reference_key.
+
+    reference_key e o turn_speaker_key da voz (rotulo humano normalizado, ou o
+    SPEAKER_XX tecnico quando ainda sem nome). Retorna quantos turnos mudaram.
+    """
+    label = " ".join(str(human_label).split())
+    if not label:
+        raise ValueError("Informe um nome de falante.")
+    changed = 0
+    for turn in review_turns(review):
+        if turn_speaker_key(turn) != reference_key:
+            continue
+        if str(turn.get("human_label") or "").strip() == label:
+            continue
+        turn["human_label"] = label
+        turn["edited"] = True
+        changed += 1
+    if changed:
+        record_edit(review, "set_speaker_all", reference_key)
+    return changed
+
+
+def apply_label_to_raw_speaker(review: dict[str, Any], speaker_id: str, human_label: str, dominant_key: str) -> int:
+    """Aplica o rotulo aos turnos da voz CRUA speaker_id (SPEAKER_NN).
+
+    So relabela turnos cujo turn_speaker_key atual e o dominant_key da voz —
+    um turno que o usuario ja reatribuiu a mao (key divergente) fica intocado.
+    Imune a rotulos nao-injetivos (dois SPEAKER_NN com o mesmo rotulo default);
+    duas vozes podem receber o MESMO nome (fusao legitima). Retorna quantos
+    turnos mudaram.
+    """
+    label = " ".join(str(human_label).split())
+    if not label:
+        raise ValueError("Informe um nome de falante.")
+    changed = 0
+    for turn in review_turns(review):
+        if str(turn.get("speaker") or "").strip() != speaker_id:
+            continue
+        if turn_speaker_key(turn) != dominant_key:
+            continue
+        if str(turn.get("human_label") or "").strip() == label:
+            continue
+        turn["human_label"] = label
+        turn["edited"] = True
+        changed += 1
+    if changed:
+        record_edit(review, "set_speaker_all", speaker_id)
+    return changed
+
+
 def set_turn_times(review: dict[str, Any], turn_id: str, start: float, end: float) -> None:
     if start < 0:
         raise ValueError("O tempo inicial nao pode ser negativo.")

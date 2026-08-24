@@ -13,6 +13,7 @@ from __future__ import annotations
 import io
 import json
 import sys
+import tempfile
 import types
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -63,9 +64,16 @@ def _fake_run(rows, config, paths, ids=None, dry_run=False, progress_callback=No
     return 0
 
 
+# cmd_diarize resolve metadados per-arquivo desde o fix D1.1 (2026-08-23):
+# paths precisa de um project_root real (sem metadados.csv -> config intacto)
+# e o manifest precisa conter a entrevista selecionada para o runner rodar.
+_tmp = tempfile.TemporaryDirectory()
+_paths = types.SimpleNamespace(project_root=Path(_tmp.name))
+_rows = [{"interview_id": "A01", "selected": "true", "wav_path": "a.wav", "source_path": "a.mp3"}]
+
 cli.run_pyannote_diarization = _fake_run
-cli.load_context = lambda args: ({}, None)
-cli.load_manifest_or_exit = lambda paths: []
+cli.load_context = lambda args: ({}, _paths)
+cli.load_manifest_or_exit = lambda paths: _rows
 
 args = types.SimpleNamespace(
     ids=["A01"], dry_run=False, progress_json=True,
@@ -91,4 +99,5 @@ with redirect_stdout(buf2):
 assert PROGRESS_JSON_PREFIX not in buf2.getvalue()
 print("PASS: sem --progress-json nao ha linhas @PROGRESS")
 
+_tmp.cleanup()
 print("PASS: toy_progress_json")
