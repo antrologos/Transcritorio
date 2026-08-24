@@ -9,7 +9,11 @@ description = "Transcricao local de entrevistas em portugues brasileiro, com sep
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Rogerio Jeronimo Barbosa" }]
-requires-python = ">=3.10"
+# Teto necessario: torchcodec/torch/PySide6 demoram a publicar wheels para
+# CPython novo — sem o teto, o uv escolhe o Python mais recente da maquina
+# (ex.: 3.14) e a resolucao falha (bug real de beta tester, 2026-08-24).
+# Com o teto, o uv baixa sozinho um 3.12/3.13 gerenciado.
+requires-python = ">=3.10,<3.14"
 keywords = ["transcricao", "whisper", "whisperx", "diarizacao", "entrevistas", "pesquisa-qualitativa", "asr"]
 classifiers = [
     "Development Status :: 4 - Beta",
