@@ -26,6 +26,16 @@ oficial passa a ser **PyPI + uv** (`uv tool install transcritorio`); ver
   divergência regular×exclusive. Desligável
   (`diarization_capture_signals`); falha na captura nunca interrompe a
   diarização.
+- Segurança: "Enviar para Lixeira" (Del) passa a mirar SOMENTE os
+  arquivos selecionados na lista (destaque) — as caixas de marcação, que
+  escolhem o que transcrever e vêm marcadas por padrão, não contam mais
+  como alvo de deleção (um Del com tudo marcado mandava o projeto inteiro
+  para a lixeira). Os diálogos de confirmação e de purga agora LISTAM os
+  nomes dos arquivos afetados, não só a contagem.
+- O fim de uma transcrição agora renova a mídia do player: quem abria o
+  arquivo antes de transcrever ficava preso ao áudio original (MP3 com
+  seek impreciso) no player e no diálogo de vozes — causa da
+  dessincronia crescente relatada em uso real.
 - Correção GRAVE de sincronia áudio×texto no Estúdio: o player abria o
   arquivo ORIGINAL (MP3/M4A, seek impreciso em VBR com desvio que cresce
   ao longo do arquivo) enquanto waveform e timestamps referem-se ao WAV

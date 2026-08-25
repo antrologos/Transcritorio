@@ -220,6 +220,23 @@ def _compute_effective_target_ids(
     return [iid for iid in all_ids_in_order if iid in visually_selected]
 
 
+def _compute_destructive_target_ids(
+    all_ids_in_order: list[str],
+    visually_selected: set[str],
+    cursor_row_id: str | None = None,
+) -> list[str]:
+    """Alvo de acoes DESTRUTIVAS (Lixeira): SO a selecao visual/cursor.
+
+    Nunca usa os checkboxes: eles significam "transcrever estes" (e vem
+    marcados por default) — usa-los como alvo de delecao mandou TODAS as
+    entrevistas de um projeto para a lixeira quando o usuario mirava uma
+    (incidente de 2026-08-25).
+    """
+    if cursor_row_id is not None and cursor_row_id not in visually_selected:
+        return [cursor_row_id]
+    return [iid for iid in all_ids_in_order if iid in visually_selected]
+
+
 def open_folder_in_explorer(path: Path) -> None:
     """Open a folder in the platform's file manager."""
     if sys.platform == "win32":
@@ -3314,7 +3331,10 @@ if QT_IMPORT_ERROR is None:
             self.trash_selected_action.setShortcut(QKeySequence(Qt.Key.Key_Delete))
             # ApplicationShortcut: Del dispara de qualquer lugar; effective_target_ids trata selecao.
             self.trash_selected_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
-            self.trash_selected_action.setToolTip("Enviar os arquivos selecionados (audio original + transcricao) para a Lixeira do projeto. Reversivel com Ctrl+Z nesta sessao. (Del)")
+            self.trash_selected_action.setToolTip(
+                "Enviar os arquivos SELECIONADOS na lista (destaque) para a Lixeira do projeto.\n"
+                "As caixas de marcacao nao contam — elas escolhem o que transcrever.\n"
+                "Reversivel com Ctrl+Z nesta sessao. (Del)")
             self.trash_selected_action.triggered.connect(self.trash_selected_interviews)
 
             self.trash_undo_action = QAction("Desfazer exclusao", self)
@@ -4646,6 +4666,19 @@ if QT_IMPORT_ERROR is None:
                     if iid:
                         ids.add(str(iid))
             return ids
+
+        def destructive_target_ids(self, cursor_row: int | None = None) -> list[str]:
+            """Alvo de acoes destrutivas: so selecao visual/cursor (S5)."""
+            cursor_row_id: str | None = None
+            if cursor_row is not None and cursor_row >= 0:
+                item = self.interview_table.item(cursor_row, COL_ARQUIVO)
+                if item:
+                    cursor_row_id = str(item.data(Qt.ItemDataRole.UserRole) or item.text())
+            return _compute_destructive_target_ids(
+                self._visible_interview_ids_in_order(),
+                self._visually_selected_interview_ids(),
+                cursor_row_id,
+            )
 
         def effective_target_ids(self, cursor_row: int | None = None) -> list[str]:
             """Targets for actions, following Windows Explorer precedence.
@@ -6226,21 +6259,30 @@ if QT_IMPORT_ERROR is None:
             if self.context is None or self._trash_busy:
                 _logger.info("  return: context None or busy")
                 return
-            ids = self.effective_target_ids(cursor_row)
-            _logger.info("  effective_target_ids: %s | checked=%s visual=%s",
-                         ids, sorted(self._checked_ids), sorted(self._visually_selected_interview_ids()))
+            # S5 (incidente 2026-08-25): acao destrutiva NUNCA usa o escopo
+            # dos checkboxes (que significam "transcrever estes") — so a
+            # selecao visual/cursor.
+            ids = self.destructive_target_ids(cursor_row)
+            _logger.info("  destructive_target_ids: %s | visual=%s",
+                         ids, sorted(self._visually_selected_interview_ids()))
             if not ids:
-                QMessageBox.information(self, "Selecione arquivos", "Selecione ao menos um arquivo para enviar a Lixeira.")
+                QMessageBox.information(
+                    self, "Selecione arquivos",
+                    "Selecione (destaque) ao menos um arquivo na lista para enviar a Lixeira.\n"
+                    "As caixas de marcacao nao contam para esta acao — elas escolhem o que transcrever.")
                 return
             busy_ids = [iid for iid in ids if (self.context.jobs.get(iid) or {}).get("status") in ("Rodando", "Na fila")]
             if busy_ids:
                 QMessageBox.information(self, "Acao bloqueada", "Nao e possivel enviar arquivos com transcricao em andamento. Aguarde ou cancele o job na fila de processamento.")
                 return
             n = len(ids)
+            listing = "\n".join(f"  • {iid}" for iid in ids[:10])
+            if n > 10:
+                listing += f"\n  • ... e mais {n - 10}"
             if n == 1:
-                text = "Enviar este arquivo para a Lixeira do projeto?"
+                text = f"Enviar este arquivo para a Lixeira do projeto?\n\n{listing}"
             else:
-                text = f"Enviar {n} arquivos para a Lixeira do projeto?"
+                text = f"Enviar estes {n} arquivos para a Lixeira do projeto?\n\n{listing}"
             box = QMessageBox(self)
             box.setIcon(QMessageBox.Icon.Warning)
             box.setWindowTitle("Enviar para Lixeira")
@@ -6534,10 +6576,19 @@ if QT_IMPORT_ERROR is None:
                 return
             size_mb = total_bytes / (1024 * 1024)
             n = len(existing_ids)
+            # S5: apagar definitivamente exige saber O QUE — listar nomes.
+            names: list[str] = []
+            for tid in existing_ids:
+                names.extend(self._trash_entry_interview_ids(tid))
+            listing = "\n".join(f"  • {name}" for name in names[:10])
+            if len(names) > 10:
+                listing += f"\n  • ... e mais {len(names) - 10}"
             box = QMessageBox(self)
             box.setIcon(QMessageBox.Icon.Question)
             box.setWindowTitle("Lixeira do projeto")
-            box.setText(f"Ha {n} item(ns) na lixeira desta sessao ({size_mb:.1f} MB). Manter em .trash/ ou apagar definitivamente?")
+            box.setText(
+                f"Ha {n} item(ns) na lixeira desta sessao ({size_mb:.1f} MB):\n\n{listing}\n\n"
+                "Manter em .trash/ ou apagar definitivamente?")
             keep = box.addButton("Manter", QMessageBox.ButtonRole.AcceptRole)
             purge = box.addButton("Apagar definitivamente", QMessageBox.ButtonRole.DestructiveRole)
             box.setDefaultButton(keep)
