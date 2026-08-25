@@ -77,6 +77,17 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "boundary_check": True,
     "boundary_check_threshold": 0.40,
     "boundary_check_window": 2.0,
+    # Captura de sinais intermediarios da diarizacao (hook do pyannote):
+    # silencios/sobreposicoes segundo o modelo + margem de confianca da
+    # atribuicao de voz por trecho (03_diarization/signals/).
+    "diarization_capture_signals": True,
+    # Margem (cos ao proprio centroide - cos ao 2o colocado) abaixo da qual
+    # a atribuicao de voz do trecho e marcada como incerta. Margem negativa
+    # = o proprio modelo prefere OUTRA voz no trecho. Calibrado em entrevista
+    # real (2026-08-25): margens corretas medianas ~0,55; negativas sao
+    # micro-trechos ambiguos; com a regra de cobertura >=50% do turno,
+    # limiar 0,0 flagra so turnos curtos genuinamente duvidosos.
+    "speaker_margin_threshold": 0.0,
     "diarization_fa": None,
     "diarization_fb": None,
     "model_download_token_env": "TRANSCRITORIO_MODEL_DOWNLOAD_TOKEN",

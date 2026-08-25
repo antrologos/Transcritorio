@@ -16,6 +16,16 @@ oficial passa a ser **PyPI + uv** (`uv tool install transcritorio`); ver
   cobertos por falas simultâneas. Banner "N trocas de falante com vozes
   parecidas" e tooltip explicativo na coluna Marcações do Estúdio.
   Configurável (`boundary_check`, limiar e janela em `run_config.yaml`).
+- Captura de sinais da diarização (`diar_signals`, hook do pyannote): a
+  diarização agora persiste derivados compactos em
+  `03_diarization/signals/` — silêncios e sobreposições segundo o próprio
+  modelo, e a margem de confiança da voz atribuída a cada trecho. A
+  verificação pós-render usa esses sinais para marcar blocos de voz
+  incerta (margem negativa = o modelo prefere outra voz) e melhorar a
+  detecção de sobreposição; arquivos antigos caem no fallback por
+  divergência regular×exclusive. Desligável
+  (`diarization_capture_signals`); falha na captura nunca interrompe a
+  diarização.
 - Defaults seguros: `asr_device/compute_type/batch_size: auto` — CPU usa
   int8/batch 2 (float16 em CPU era convertido p/ float32 pelo CTranslate2,
   ~2x RAM: travava máquinas sem GPU); float16 explícito em CPU é coagido.

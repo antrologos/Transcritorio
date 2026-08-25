@@ -157,8 +157,20 @@ def run_pyannote_diarization(
 
             heartbeat_thread = threading.Thread(target=_heartbeat, daemon=True)
             heartbeat_thread.start()
+            # Captura opcional de sinais intermediarios (plano 2026-08-25):
+            # o coletor so observa o hook; falha nele nunca afeta o pipeline.
+            collector = None
+            if bool(config.get("diarization_capture_signals", True)):
+                try:
+                    from .diar_signals import SignalCollector
+                    collector = SignalCollector()
+                except Exception:  # noqa: BLE001 - sinais sao opcionais
+                    collector = None
             try:
-                output = pipeline(audio_tensor, **speaker_kwargs(config))
+                if collector is not None:
+                    output = pipeline(audio_tensor, hook=collector.hook, **speaker_kwargs(config))
+                else:
+                    output = pipeline(audio_tensor, **speaker_kwargs(config))
             finally:
                 heartbeat_stop.set()
                 heartbeat_thread.join(timeout=2)
@@ -171,6 +183,12 @@ def run_pyannote_diarization(
                 _persist_speaker_embeddings(paths, interview_id, output, model_name)
             except Exception as exc:  # noqa: BLE001 - embeddings sao opcionais
                 print(f"[{_ts()}] [diarize] embeddings indisponiveis para {interview_id}: {exc}", flush=True)
+            if collector is not None:
+                try:
+                    from .diar_signals import persist_signals
+                    persist_signals(paths, interview_id, collector, output, model_name)
+                except Exception as exc:  # noqa: BLE001 - sinais sao opcionais
+                    print(f"[{_ts()}] [diarize] sinais indisponiveis para {interview_id}: {exc}", flush=True)
             regular = _postprocess_annotation(regular, config)
             if exclusive is not None:
                 exclusive = _postprocess_annotation(exclusive, config, preserve_exclusive=True)

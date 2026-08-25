@@ -70,4 +70,54 @@ waveform = np.zeros((1, 16000), dtype=np.float32)  # 1s @16k
 assert bc.embed_window(None, waveform, 16000, 0.0, 0.3) is None
 print("PASS: embed_window guarda de janela curta")
 
+# --- run_boundary_check consumindo signals.json (lote 2) ---
+# Sem nenhum par de falantes distintos, o embedder nunca e carregado; os
+# flags vem so dos sinais (sobreposicao + margem baixa). Roda sem torch.
+import json as json_mod
+import tempfile
+
+from transcribe_pipeline.boundary_check import run_boundary_check
+from transcribe_pipeline.config import ensure_directories, load_config, make_paths
+
+with tempfile.TemporaryDirectory() as tmp:
+    config = load_config(None)
+    paths = make_paths(config, base_dir=Path(tmp))
+    ensure_directories(paths)
+    iid = "TESTE_0001"
+    turns_data = [
+        {"start": 0.0, "end": 2.0, "speaker": "SPEAKER_00", "human_label": "A", "text": "ola tudo bem"},
+        {"start": 2.1, "end": 3.0, "speaker": "SPEAKER_00", "human_label": "A", "text": "sim"},
+    ]
+    canonical = {
+        "interview_id": iid, "source_path": "x.wav", "asr_model": "m",
+        "diarization_model": "d", "diarization_source": "pyannote_exclusive",
+        "speaker_labels": [], "turns": turns_data,
+    }
+    (paths.canonical_dir / "json" / f"{iid}.canonical.json").write_text(
+        json_mod.dumps(canonical), encoding="utf-8")
+    (paths.diarization_dir / "json" / f"{iid}.exclusive.json").write_text(
+        json_mod.dumps({"segments": [{"start": 0.0, "end": 3.0, "speaker": "SPEAKER_00"}]}),
+        encoding="utf-8")
+    signals = {
+        "overlaps": [[2.1, 3.0]],
+        # margem NEGATIVA = modelo prefere outra voz (limiar default 0.0)
+        "segment_margins": [{"start": 0.0, "end": 2.0, "speaker": "SPEAKER_00", "margin": -0.05}],
+    }
+    (paths.diarization_dir / "signals").mkdir(parents=True, exist_ok=True)
+    (paths.diarization_dir / "signals" / f"{iid}.signals.json").write_text(
+        json_mod.dumps(signals), encoding="utf-8")
+    rows = [{"interview_id": iid, "selected": "true", "source_path": "x.wav", "wav_path": ""}]
+    assert run_boundary_check(rows, config, paths) == 0
+    updated = json_mod.loads(
+        (paths.canonical_dir / "json" / f"{iid}.canonical.json").read_text(encoding="utf-8"))
+    first, second = updated["turns"]
+    assert "duvida" in first.get("flags", []) and "incerta" in str(first.get("notes"))
+    assert "sobreposicao" in second.get("flags", [])
+    # idempotencia: segunda rodada nao muda nada
+    assert run_boundary_check(rows, config, paths) == 0
+    again = json_mod.loads(
+        (paths.canonical_dir / "json" / f"{iid}.canonical.json").read_text(encoding="utf-8"))
+    assert again == updated
+print("PASS: run_boundary_check com signals (sem modelo)")
+
 print("PASS: toy_boundary_check")

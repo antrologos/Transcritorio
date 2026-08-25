@@ -40,6 +40,7 @@ ProgressCallback = Callable[[dict[str, Any]], None]
 # Marcadores fixos usados para idempotencia (re-rodar nao duplica notas).
 BOUNDARY_NOTE_MARKER = "parecem iguais"
 OVERLAP_NOTE = "Ha vozes sobrepostas neste trecho."
+MARGIN_NOTE = "A voz atribuida a este bloco ficou incerta - confira o falante."
 
 # Janela mais curta que isso nao rende embedding confiavel.
 MIN_WINDOW_SECONDS = 0.7
@@ -188,6 +189,32 @@ def _diarization_segments(paths: Paths, interview_id: str, kind: str) -> list[di
     return segments if isinstance(segments, list) else None
 
 
+def _load_signals(paths: Paths, interview_id: str) -> dict[str, Any] | None:
+    """Sinais capturados na diarizacao (diar_signals); None se ausentes."""
+    path = paths.diarization_dir / "signals" / f"{interview_id}.signals.json"
+    if not path.exists():
+        return None
+    try:
+        payload = read_json(path)
+    except Exception:  # noqa: BLE001 - arquivo corrompido = sem sinais
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def low_margin_intervals(
+    signals: dict[str, Any], threshold: float
+) -> list[tuple[float, float]]:
+    """Segmentos cuja atribuicao de voz ficou abaixo da margem minima."""
+    intervals = []
+    for item in signals.get("segment_margins") or []:
+        try:
+            if float(item["margin"]) < threshold:
+                intervals.append((float(item["start"]), float(item["end"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return intervals
+
+
 def _excerpt(text: str, words: int, tail: bool) -> str:
     parts = str(text).split()
     chosen = parts[-words:] if tail else parts[:words]
@@ -296,10 +323,20 @@ def run_boundary_check(
                             flag_turn(a, "duvida", boundary_note(similarity), BOUNDARY_NOTE_MARKER)
                         )
 
-            regular = _diarization_segments(paths, interview_id, "regular")
+            # Fonte primaria de sobreposicao: sinais capturados na diarizacao
+            # (contagem instantanea do proprio modelo). Fallback para arquivos
+            # antigos: divergencia entre as annotations regular e exclusive.
+            signals = _load_signals(paths, interview_id)
+            if signals and signals.get("overlaps"):
+                intervals = [
+                    (float(pair[0]), float(pair[1])) for pair in signals["overlaps"]
+                ]
+            else:
+                regular = _diarization_segments(paths, interview_id, "regular")
+                intervals = overlap_intervals(regular) if regular else []
             overlap_hits: list[int] = []
-            if regular:
-                overlap_hits = turns_overlapping_intervals(turns, overlap_intervals(regular))
+            if intervals:
+                overlap_hits = turns_overlapping_intervals(turns, intervals)
                 for i in overlap_hits:
                     if report:
                         turn = turns[i]
@@ -313,6 +350,29 @@ def run_boundary_check(
                             flag_turn(turns[i], "sobreposicao", OVERLAP_NOTE, OVERLAP_NOTE)
                         )
 
+            # Atribuicao incerta (margem baixa entre 1o e 2o centroide) — so
+            # existe quando a diarizacao capturou sinais (lote 2).
+            margin_hits: list[int] = []
+            if signals:
+                raw_threshold = config.get("speaker_margin_threshold")
+                # nao usar `or`: 0.0 e um limiar valido (margem negativa).
+                margin_threshold = 0.0 if raw_threshold is None else float(raw_threshold)
+                margin_intervals = low_margin_intervals(signals, margin_threshold)
+                if margin_intervals:
+                    margin_hits = turns_overlapping_intervals(turns, margin_intervals)
+                for i in margin_hits:
+                    if report:
+                        turn = turns[i]
+                        print(
+                            f"[atribuicao] {interview_id} "
+                            f"{float(turn['start']):.1f}-{float(turn['end']):.1f}s "
+                            f"{turn.get('speaker')}"
+                        )
+                    else:
+                        changed += int(
+                            flag_turn(turns[i], "duvida", MARGIN_NOTE, MARGIN_NOTE)
+                        )
+
             if changed and not report:
                 write_json(canonical_path, canonical)
                 write_markdown(paths.review_dir / "md" / f"{interview_id}.md", canonical)
@@ -322,6 +382,7 @@ def run_boundary_check(
             summary = (
                 f"{interview_id}: {len(pairs)} fronteiras analisadas, "
                 f"{suspects} suspeitas, {len(overlap_hits)} turnos com sobreposicao, "
+                f"{len(margin_hits)} com voz incerta, "
                 f"{skipped_short} curtas demais, {changed} turnos atualizados."
             )
             print(summary)
@@ -334,6 +395,7 @@ def run_boundary_check(
                     "boundaries": len(pairs),
                     "suspects": suspects,
                     "overlap_turns": len(overlap_hits),
+                    "margin_turns": len(margin_hits),
                     "updated_turns": changed,
                     "seconds": round(time.time() - started, 1),
                 },
