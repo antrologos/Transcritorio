@@ -26,6 +26,17 @@ oficial passa a ser **PyPI + uv** (`uv tool install transcritorio`); ver
   divergência regular×exclusive. Desligável
   (`diarization_capture_signals`); falha na captura nunca interrompe a
   diarização.
+- Correção GRAVE de sincronia áudio×texto no Estúdio: o player abria o
+  arquivo ORIGINAL (MP3/M4A, seek impreciso em VBR com desvio que cresce
+  ao longo do arquivo) enquanto waveform e timestamps referem-se ao WAV
+  preparado. Agora o player abre o WAV por padrão (vídeos continuam no
+  original, pelo painel de imagem) e todos os seeks ganharam a
+  confirmação anti-descarte do Windows (mesmo fix do diálogo de vozes).
+  Probe: desvio ≤ 29 ms em posições até 38 min.
+- Banner de trocas de falante integrado: navegação ‹ › pelos blocos
+  marcados (no lugar de "Ver primeira"), contagem que atualiza ao
+  desmarcar Dúvida (e o banner some ao zerar), e a explicação da
+  marcação agora aparece no painel do editor — não só como tooltip.
 - Infra da análise local (fase 2.0 do plano-programa): módulo
   `research_context` (contexto de pesquisa por projeto — roteiro,
   codebook, nomes conhecidos — grounding das ferramentas de análise);

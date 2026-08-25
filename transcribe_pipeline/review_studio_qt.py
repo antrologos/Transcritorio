@@ -107,6 +107,39 @@ else:
 SPEAKER_LABELS = {"Entrevistador": "ENTREVISTADOR", "Entrevistado": "ENTREVISTADO"}
 FLAG_LABELS = {"inaudivel": "Inaud\u00edvel", "duvida": "D\u00favida", "sobreposicao": "Sobreposi\u00e7\u00e3o"}
 VIDEO_SUFFIXES = {".avi", ".m4v", ".mkv", ".mov", ".mp4", ".webm"}
+
+
+def preferred_media_index(candidates: list[Path]) -> int:
+    """Indice da midia que o player deve abrir por padrao.
+
+    Os timestamps da transcricao referem-se ao WAV preparado (16 kHz); em
+    originais MP3/M4A (VBR) o seek e impreciso e o desvio ACUMULA ao longo
+    do arquivo — causa da dessincronia audio x texto vista em uso real
+    (2026-08-25). Regra: fonte de audio -> WAV preparado (fallback:
+    original); fonte de VIDEO -> original (o painel de video precisa da
+    imagem; drift em AAC e muito menor).
+    """
+    if not candidates:
+        return 0
+    if candidates[0].suffix.lower() in VIDEO_SUFFIXES:
+        return 0
+    for index, path in enumerate(candidates):
+        if path.suffix.lower() == ".wav":
+            return index
+    return 0
+
+
+def boundary_flagged_rows(turns: list[dict[str, Any]]) -> list[int]:
+    """Turnos da verificacao acustica de trocas que o usuario ainda NAO
+    tratou: precisam do marcador na nota (origem automatica) E do flag
+    'duvida' ainda presente — desmarcar Duvida no editor tira o bloco da
+    contagem do banner na hora (feedback de uso real, 2026-08-25)."""
+    rows: list[int] = []
+    for index, turn in enumerate(turns):
+        flags = {str(flag) for flag in (turn.get("flags") or [])}
+        if "duvida" in flags and BOUNDARY_NOTE_MARKER in str(turn.get("notes") or ""):
+            rows.append(index)
+    return rows
 APP_NAME = "Transcrit\u00f3rio"
 APP_CREDITS = "Rog\u00e9rio Jer\u00f4nimo Barbosa - https://antrologos.github.io/"
 APP_ICON_FILE = "transcritorio_icon.svg"
@@ -4323,10 +4356,16 @@ if QT_IMPORT_ERROR is None:
             self.boundary_banner_label = QLabel("")
             self.boundary_banner_label.setWordWrap(True)
             boundary_layout.addWidget(self.boundary_banner_label, 1)
-            boundary_button = QPushButton("Ver primeira")
-            boundary_button.setToolTip("Seleciona o primeiro bloco marcado para conferencia.")
-            boundary_button.clicked.connect(self._on_boundary_banner_clicked)
-            boundary_layout.addWidget(boundary_button)
+            boundary_prev = QPushButton("‹")
+            boundary_prev.setFixedWidth(28)
+            boundary_prev.setToolTip("Bloco marcado anterior")
+            boundary_prev.clicked.connect(lambda: self._on_boundary_nav(-1))
+            boundary_layout.addWidget(boundary_prev)
+            boundary_next = QPushButton("›")
+            boundary_next.setFixedWidth(28)
+            boundary_next.setToolTip("Proximo bloco marcado")
+            boundary_next.clicked.connect(lambda: self._on_boundary_nav(1))
+            boundary_layout.addWidget(boundary_next)
             turn_layout.addWidget(self.boundary_banner)
             turn_header = QHBoxLayout()
             turn_header.addWidget(QLabel("Blocos da transcricao"))
@@ -4381,6 +4420,13 @@ if QT_IMPORT_ERROR is None:
             flags_layout.addWidget(self.sobreposicao_checkbox)
             flags_layout.addStretch()
             grid.addLayout(flags_layout, 0, 2)
+            # Explicacao da marcacao do bloco selecionado (antes so existia
+            # como tooltip na tabela — descoberta ruim; feedback 2026-08-25).
+            self.turn_note_label = QLabel("")
+            self.turn_note_label.setWordWrap(True)
+            self.turn_note_label.setStyleSheet(_style_muted())
+            self.turn_note_label.setVisible(False)
+            grid.addWidget(self.turn_note_label, 1, 2)
 
             time_layout = QHBoxLayout()
             time_layout.addWidget(QLabel("Início:"))
@@ -5016,7 +5062,7 @@ if QT_IMPORT_ERROR is None:
                 return
             self.review_title.setText(f"Transcrição: {interview_id}")
             self.set_editor_enabled(True)
-            self.set_media_source(0)
+            self.set_media_source(preferred_media_index(self.media_candidates))
             self.load_waveform()
             self.load_turn_table()
             if self.turns:
@@ -5084,11 +5130,8 @@ if QT_IMPORT_ERROR is None:
             self._update_boundary_banner()
 
         def _boundary_suspect_rows(self) -> list[int]:
-            """Indices dos turnos marcados pela verificacao acustica de trocas."""
-            return [
-                i for i, turn in enumerate(self.turns)
-                if BOUNDARY_NOTE_MARKER in str(turn.get("notes") or "")
-            ]
+            """Indices dos turnos marcados e ainda nao tratados."""
+            return boundary_flagged_rows(self.turns)
 
         def _update_boundary_banner(self) -> None:
             if not hasattr(self, "boundary_banner"):
@@ -5101,12 +5144,19 @@ if QT_IMPORT_ERROR is None:
                 )
             self.boundary_banner.setVisible(bool(rows))
 
-        def _on_boundary_banner_clicked(self) -> None:
+        def _on_boundary_nav(self, step: int) -> None:
+            """Navega para o proximo/anterior bloco marcado (ciclico),
+            relativo a selecao atual da tabela."""
             rows = self._boundary_suspect_rows()
             if not rows:
                 return
-            self.turn_table.selectRow(rows[0])
-            item = self.turn_table.item(rows[0], 0)
+            current = self.turn_table.currentRow()
+            if step > 0:
+                target = next((row for row in rows if row > current), rows[0])
+            else:
+                target = next((row for row in reversed(rows) if row < current), rows[-1])
+            self.select_turn_by_index(target, seek=True)
+            item = self.turn_table.item(target, 0)
             if item is not None:
                 self.turn_table.scrollToItem(item)
 
@@ -5350,7 +5400,7 @@ if QT_IMPORT_ERROR is None:
             self.undo_stack.clear()
             self.review_title.setText(f"Midia: {interview_id} - ainda sem transcricao")
             self.set_editor_enabled(False)
-            self.set_media_source(0)
+            self.set_media_source(preferred_media_index(self.media_candidates))
             self.load_waveform()
             self.set_save_state("Arquivo sem transcricao. Use Transcrever este arquivo para gerar a transcricao editavel.")
             self.progress_label.setText("Arquivo aberto como midia. Use Transcrever este arquivo para criar a transcricao.")
@@ -5480,9 +5530,29 @@ if QT_IMPORT_ERROR is None:
             end = float(turn.get("end", start) or start)
             self.waveform_widget.zoom_to_range(start, end)
 
+        def seek_player(self, target_ms: int) -> None:
+            """Seek com confirmacao anti-WMF: o backend de midia do Windows
+            DESCARTA silenciosamente o setPosition feito com o player
+            pausado (mesmo bug corrigido no dialogo de vozes em 2026-08-24).
+            Reconfere em 80/300ms e reaplica se o player ignorou; um seek
+            novo invalida as conferencias do anterior via token."""
+            target_ms = max(0, int(target_ms))
+            self._seek_token = getattr(self, "_seek_token", 0) + 1
+            token = self._seek_token
+            self.player.setPosition(target_ms)
+
+            def _ensure() -> None:
+                if getattr(self, "_seek_token", 0) != token:
+                    return
+                if abs(self.player.position() - target_ms) > 1500:
+                    self.player.setPosition(target_ms)
+
+            QTimer.singleShot(80, _ensure)
+            QTimer.singleShot(300, _ensure)
+
         def seek_waveform(self, seconds: float) -> None:
             self.waveform_widget.set_edit_cursor(seconds)
-            self.player.setPosition(int(seconds * 1000))
+            self.seek_player(int(seconds * 1000))
 
         def load_turn_table(self) -> None:
             self.current_play_row = None
@@ -5566,7 +5636,7 @@ if QT_IMPORT_ERROR is None:
             self.waveform_widget.set_selected_range(start, end)
             if seek:
                 self.waveform_widget.set_edit_cursor(start)
-                self.player.setPosition(int(start * 1000))
+                self.seek_player(int(start * 1000))
             self.update_action_states()
 
         def load_turn_editor(self, turn: dict[str, Any]) -> None:
@@ -5594,6 +5664,10 @@ if QT_IMPORT_ERROR is None:
                 self.inaudivel_checkbox.setChecked("inaudivel" in turn.get("flags", []))
                 self.duvida_checkbox.setChecked("duvida" in turn.get("flags", []))
                 self.sobreposicao_checkbox.setChecked("sobreposicao" in turn.get("flags", []))
+                if hasattr(self, "turn_note_label"):
+                    note = str(turn.get("notes") or "").strip()
+                    self.turn_note_label.setText(note)
+                    self.turn_note_label.setVisible(bool(note))
                 self.start_time_edit.setText(format_timecode(float(turn.get("start", 0) or 0)))
                 self.end_time_edit.setText(format_timecode(float(turn.get("end", turn.get("start", 0)) or 0)))
                 self.text_edit.setPlainText(str(turn.get("text", "")))
@@ -5654,6 +5728,7 @@ if QT_IMPORT_ERROR is None:
                 app_service.save_review(self.context, self.current_interview_id, self.review)
                 self.turns = review_store.review_turns(self.review)
                 self.update_current_row_preview()
+                self._update_boundary_banner()
                 self._editor_dirty = False
                 self._save_failed = False
                 self.autosave_timer.stop()
@@ -5840,6 +5915,7 @@ if QT_IMPORT_ERROR is None:
                 self.select_turn_by_index(target_index, seek=False)
             self.set_save_state(saved_status_message())
             self.update_action_states()
+            self._update_boundary_banner()
 
         def update_current_row_preview(self) -> None:
             if not self.review or not self.current_turn_id:
@@ -6642,14 +6718,14 @@ if QT_IMPORT_ERROR is None:
             if self.player.source().isEmpty():
                 return
             target = max(0, min(self.player.duration(), self.player.position() + (seconds * 1000)))
-            self.player.setPosition(target)
+            self.seek_player(target)
 
         def repeat_current_turn(self) -> None:
             if not self.review or not self.current_turn_id:
                 return
             index = review_store.find_turn_index(self.review, self.current_turn_id)
             start = float(self.turns[index].get("start", 0) or 0)
-            self.player.setPosition(int(start * 1000))
+            self.seek_player(int(start * 1000))
             self.player.play()
 
         def update_playback_rate(self) -> None:
@@ -6692,7 +6768,7 @@ if QT_IMPORT_ERROR is None:
 
         def _slider_released(self) -> None:
             self._slider_dragging = False
-            self.player.setPosition(self.position_slider.value())
+            self.seek_player(self.position_slider.value())
 
         def highlight_turn_for_position(self, seconds: float) -> None:
             row = None
