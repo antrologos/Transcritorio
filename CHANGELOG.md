@@ -8,6 +8,14 @@ assinatura digital, e o SignPath recusou a assinatura gratuita. O canal
 oficial passa a ser **PyPI + uv** (`uv tool install transcritorio`); ver
 `docs/INSTALL_WINDOWS.md` e `docs/LEGACY_STANDALONE.md`.
 
+- Verificação acústica de trocas de falante (novo passo pós-render,
+  `check-boundaries`): compara a voz dos dois lados de cada troca com o
+  modelo de embedding da diarização (benchmark: AUC 0,961) e marca com
+  "Dúvida" os blocos em que a voz é a mesma dos dois lados (divisão
+  provavelmente errada); marca com "Sobreposição" blocos majoritariamente
+  cobertos por falas simultâneas. Banner "N trocas de falante com vozes
+  parecidas" e tooltip explicativo na coluna Marcações do Estúdio.
+  Configurável (`boundary_check`, limiar e janela em `run_config.yaml`).
 - Defaults seguros: `asr_device/compute_type/batch_size: auto` — CPU usa
   int8/batch 2 (float16 em CPU era convertido p/ float32 pelo CTranslate2,
   ~2x RAM: travava máquinas sem GPU); float16 explícito em CPU é coagido.

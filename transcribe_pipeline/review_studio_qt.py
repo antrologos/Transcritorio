@@ -144,6 +144,7 @@ def _sanitize_rename_title(raw: str) -> tuple[str, bool]:
 
 
 from .project_store import _reorder_move, _merge_interview_order  # re-export for tests
+from .boundary_check import BOUNDARY_NOTE_MARKER
 
 
 # Helpers de cor para tema escuro (Fusion dark bg #2d2d2d).
@@ -513,6 +514,21 @@ def saved_status_message() -> str:
 
 def saved_status_tooltip() -> str:
     return f"Ultimo salvamento: {datetime.now().strftime('%H:%M:%S')}"
+
+
+def format_job_time(value: str) -> str:
+    """ISO-8601 (UTC) -> hora local HH:MM:SS legivel; passa adiante o que nao
+    parsear (a fila mostrava timestamps ISO crus — plano U1.4)."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone()
+        return parsed.strftime("%H:%M:%S")
+    except ValueError:
+        return text
 
 
 def format_eta(seconds: float | None) -> str:
@@ -1781,10 +1797,10 @@ if QT_IMPORT_ERROR is None:
             self.speaker_count_spin.setValue(2)
             self.min_speakers_spin = QSpinBox()
             self.min_speakers_spin.setRange(1, 20)
-            self.min_speakers_spin.setValue(1)
+            self.min_speakers_spin.setValue(3)
             self.max_speakers_spin = QSpinBox()
             self.max_speakers_spin.setRange(1, 20)
-            self.max_speakers_spin.setValue(4)
+            self.max_speakers_spin.setValue(8)
             grid.addWidget(self.apply_speakers, 1, 0)
             grid.addWidget(self.speaker_mode_combo, 1, 1)
             grid.addWidget(QLabel("Exato:"), 1, 2)
@@ -2299,15 +2315,36 @@ if QT_IMPORT_ERROR is None:
             self.table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)
             self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
             layout.addWidget(self.table, stretch=1)
+            self._paths = context.paths
             self.populate(context)
             buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
             buttons.rejected.connect(self.reject)
             layout.addWidget(buttons)
+            # Auto-refresh (plano U1.4): a fila era um snapshot estatico —
+            # reler jobs.json (leitura pura, sem side effects) enquanto aberta.
+            self._refresh_timer = QTimer(self)
+            self._refresh_timer.setInterval(2000)
+            self._refresh_timer.timeout.connect(self._refresh)
+            self._refresh_timer.start()
 
         def populate(self, context: app_service.ProjectContext) -> None:
+            self._render(context.jobs)
+
+        def _refresh(self) -> None:
+            from .project_store import jobs_path
+            from .utils import read_json
+
+            try:
+                payload = read_json(jobs_path(self._paths))
+            except Exception:
+                return
+            if isinstance(payload, dict):
+                self._render(payload)
+
+        def _render(self, jobs: dict) -> None:
             self.table.setRowCount(0)
-            for file_id in sorted(context.jobs):
-                job = context.jobs[file_id]
+            for file_id in sorted(jobs):
+                job = jobs[file_id] if isinstance(jobs[file_id], dict) else {}
                 row = self.table.rowCount()
                 self.table.insertRow(row)
                 values = [
@@ -2315,9 +2352,9 @@ if QT_IMPORT_ERROR is None:
                     job.get("status", ""),
                     job.get("stage", ""),
                     f"{job.get('progress', 0)}%",
-                    job.get("started_at", ""),
-                    job.get("estimated_finish_at", ""),
-                    job.get("finished_at", ""),
+                    format_job_time(job.get("started_at", "")),
+                    format_job_time(job.get("estimated_finish_at", "")),
+                    format_job_time(job.get("finished_at", "")),
                     job.get("last_error", ""),
                 ]
                 for column, value in enumerate(values):
@@ -3578,7 +3615,7 @@ if QT_IMPORT_ERROR is None:
             QMessageBox.information(
                 self,
                 "Fluxo de trabalho",
-                "Use: Arquivos > Adicionar midia -> Transcrever selecionados -> Abrir arquivo -> Editar -> Salvar transcricao -> Exportar.",
+                "Use: Arquivo > Adicionar midia -> Transcrever selecionados -> Abrir transcricao -> Editar -> Salvar transcricao -> Exportar.",
             )
 
         def show_about(self) -> None:
@@ -3661,7 +3698,7 @@ if QT_IMPORT_ERROR is None:
                 "O Transcritorio esta instalado sem a aceleracao por placa "
                 "grafica. Ativando a aceleracao, a transcricao fica de 3 a 9 "
                 "vezes mais rapida, mas exige um download adicional de cerca "
-                "de 1 GB.\n\n"
+                "de 2,5 GB.\n\n"
                 "Clique em 'Baixar e instalar agora' para ativar; o "
                 "Transcritorio cuida do resto e avisa quando concluir."
             )
@@ -3878,6 +3915,10 @@ if QT_IMPORT_ERROR is None:
             answer = QMessageBox.question(self, title, msg)
             if answer == QMessageBox.StandardButton.Yes:
                 self.show_model_setup()
+                # U1.8: se o download concluiu, a acao original SEGUE — antes
+                # o usuario tinha que clicar em Transcrever de novo.
+                if app_service.required_models_ready(variants, include_diarization=include_dia):
+                    return True
             return False
 
         def _open_project_path(self, project_path: Path) -> None:
@@ -4072,7 +4113,7 @@ if QT_IMPORT_ERROR is None:
                 self,
                 "Nenhum projeto aberto",
                 f"{action_label} requer um projeto aberto.\n\n"
-                "Use Projeto > Novo projeto ou Projeto > Abrir projeto.",
+                "Use Arquivo > Novo projeto ou Arquivo > Abrir projeto.",
             )
             return False
 
@@ -4249,6 +4290,41 @@ if QT_IMPORT_ERROR is None:
             banner_dismiss.clicked.connect(self._on_banner_dismiss_clicked)
             banner_layout.addWidget(banner_dismiss)
             turn_layout.addWidget(self.voice_banner)
+            # Banner de diarizacao falhada (plano U1.7): o lote continua, mas
+            # o aviso ficava enterrado na coluna Erro da fila.
+            self.diar_failed_banner = QFrame()
+            self.diar_failed_banner.setVisible(False)
+            self.diar_failed_banner.setStyleSheet(
+                "QFrame { background: rgba(255,169,77,0.14); border: 1px solid rgba(255,169,77,0.45); border-radius: 6px; }"
+            )
+            diar_failed_layout = QHBoxLayout(self.diar_failed_banner)
+            diar_failed_layout.setContentsMargins(10, 6, 10, 6)
+            diar_failed_label = QLabel("⚠ A identificação de falantes desta transcrição não foi concluída — o texto está sem separação de vozes.")
+            diar_failed_label.setWordWrap(True)
+            diar_failed_layout.addWidget(diar_failed_label, 1)
+            diar_failed_button = QPushButton("Tentar novamente")
+            diar_failed_button.setToolTip("Refaz a identificação de falantes deste arquivo e remonta a transcrição.")
+            diar_failed_button.clicked.connect(self.improve_speakers_current_file)
+            diar_failed_layout.addWidget(diar_failed_button)
+            turn_layout.addWidget(self.diar_failed_banner)
+            # Banner de trocas de falante suspeitas (plano 2026-08-25): a
+            # verificacao acustica marca blocos cuja voz e igual a do bloco
+            # seguinte; o banner aponta para as marcacoes, sem depender de menu.
+            self.boundary_banner = QFrame()
+            self.boundary_banner.setVisible(False)
+            self.boundary_banner.setStyleSheet(
+                "QFrame { background: rgba(252,196,25,0.14); border: 1px solid rgba(252,196,25,0.45); border-radius: 6px; }"
+            )
+            boundary_layout = QHBoxLayout(self.boundary_banner)
+            boundary_layout.setContentsMargins(10, 6, 10, 6)
+            self.boundary_banner_label = QLabel("")
+            self.boundary_banner_label.setWordWrap(True)
+            boundary_layout.addWidget(self.boundary_banner_label, 1)
+            boundary_button = QPushButton("Ver primeira")
+            boundary_button.setToolTip("Seleciona o primeiro bloco marcado para conferencia.")
+            boundary_button.clicked.connect(self._on_boundary_banner_clicked)
+            boundary_layout.addWidget(boundary_button)
+            turn_layout.addWidget(self.boundary_banner)
             turn_header = QHBoxLayout()
             turn_header.addWidget(QLabel("Blocos da transcricao"))
             turn_header.addStretch()
@@ -4603,7 +4679,7 @@ if QT_IMPORT_ERROR is None:
                 QMessageBox.critical(self, "Não foi possível criar o projeto", sanitize_message(str(exc)))
                 return
             self.switch_project_context(context)
-            self.progress_label.setText("Projeto criado. Use Arquivos > Adicionar midia para comecar.")
+            self.progress_label.setText("Projeto criado. Use o botao + Adicionar midia para comecar.")
 
         def open_project(self) -> None:
             if not self.save_current_turn():
@@ -4992,6 +5068,44 @@ if QT_IMPORT_ERROR is None:
                     else:
                         visible = True
             self.voice_banner.setVisible(visible)
+            self._update_diar_failed_banner()
+
+        def _update_diar_failed_banner(self) -> None:
+            if not hasattr(self, "diar_failed_banner"):
+                return
+            visible = False
+            if self.review and self.current_interview_id and self.context is not None:
+                job = self.context.jobs.get(self.current_interview_id) or {}
+                visible = "Identificacao de falantes nao concluida" in str(job.get("last_error") or "")
+            self.diar_failed_banner.setVisible(visible)
+            self._update_boundary_banner()
+
+        def _boundary_suspect_rows(self) -> list[int]:
+            """Indices dos turnos marcados pela verificacao acustica de trocas."""
+            return [
+                i for i, turn in enumerate(self.turns)
+                if BOUNDARY_NOTE_MARKER in str(turn.get("notes") or "")
+            ]
+
+        def _update_boundary_banner(self) -> None:
+            if not hasattr(self, "boundary_banner"):
+                return
+            rows = self._boundary_suspect_rows() if self.review else []
+            if rows:
+                plural = "s" if len(rows) > 1 else ""
+                self.boundary_banner_label.setText(
+                    f"🔍 {len(rows)} troca{plural} de falante com vozes parecidas — confira as marcações."
+                )
+            self.boundary_banner.setVisible(bool(rows))
+
+        def _on_boundary_banner_clicked(self) -> None:
+            rows = self._boundary_suspect_rows()
+            if not rows:
+                return
+            self.turn_table.selectRow(rows[0])
+            item = self.turn_table.item(rows[0], 0)
+            if item is not None:
+                self.turn_table.scrollToItem(item)
 
         def _on_banner_identify_clicked(self) -> None:
             self.open_voice_naming_dialog()
@@ -5388,6 +5502,12 @@ if QT_IMPORT_ERROR is None:
                     item = QTableWidgetItem(value)
                     item.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
                     item.setToolTip(value)
+                    if column == 3:
+                        # A explicacao da marcacao (notes) so existia no JSON e
+                        # nos exports; o tooltip a torna visivel na revisao.
+                        notes = str(turn.get("notes") or "").strip()
+                        if notes:
+                            item.setToolTip(notes)
                     if column == 0:
                         item.setData(Qt.ItemDataRole.UserRole, turn.get("id"))
                     elif column == 1 and len(colors) > 1:
@@ -6656,13 +6776,19 @@ if QT_IMPORT_ERROR is None:
             from . import runtime as _runtime_w
             asr_device = _runtime_w.resolve_device(str(self.context.config.get("asr_device") or "auto"))[0]
             do_diarize = bool(self.context.config.get("diarize", True))
-            w = _pipeline_weights(asr_model, asr_device)
-            if not do_diarize:
-                w = [w[0], w[1], 0, w[3], w[4]]  # zero weight for skipped diarize
-            # Pesos POR STEP: sem diarizacao o arquivo tem 4 steps, entao a lista
-            # de pesos tambem precisa ter 4 itens — 5 pesos para 4 steps desalinha
-            # todo o progresso a partir do segundo arquivo.
-            step_w = w if do_diarize else [w[0], w[1], w[3], w[4]]
+            do_boundary = do_diarize and bool(self.context.config.get("boundary_check", True))
+            w5 = _pipeline_weights(asr_model, asr_device)
+            # 6 fases: [prepare, asr, diarize, render, conferir trocas, qc].
+            # A conferencia de trocas de falante (pos-render) tem peso pequeno
+            # e fixo: custa segundos por arquivo.
+            w = [
+                w5[0], w5[1], w5[2] if do_diarize else 0, w5[3],
+                1 if do_boundary else 0, w5[4],
+            ]
+            # Pesos POR STEP: a lista precisa ter exatamente um item por step
+            # montado — desalinhar quebra o progresso a partir do 2o arquivo.
+            included = [True, True, do_diarize, True, do_boundary, True]
+            step_w = [weight for used, weight in zip(included, w) if used]
             boundaries = [0]
             for v in w:
                 boundaries.append(boundaries[-1] + v)
@@ -6713,13 +6839,31 @@ if QT_IMPORT_ERROR is None:
                             optional=True,
                         ),
                     )
-                file_steps.extend([
+                file_steps.append(
                     # overrides decididos NA HORA do render: se a diarizacao
                     # (opcional) falhou, o exclusive.json nao existe e o render
                     # cai para o modo sem falantes em vez de falhar o lote.
                     self.job_step(f"{prefix}: montando transcricao editavel...", interview_id, "montar transcricao", r[3], r[4], lambda item=interview_id: app_service.render_interviews(self.context, ids=[item], overrides=(render_overrides if self._exclusive_diarization_exists(item) else {}))),
-                    self.job_step(f"{prefix}: verificando arquivos gerados...", interview_id, "verificar arquivos", r[4], r[5], lambda item=interview_id: app_service.qc_interviews(self.context, ids=[item])),
-                ])
+                )
+                if do_boundary:
+                    file_steps.append(
+                        self.job_step(
+                            f"{prefix}: conferindo trocas de falante...",
+                            interview_id,
+                            "conferir trocas",
+                            r[4],
+                            r[5],
+                            lambda progress, should_cancel, item=interview_id: self._boundary_check_via_subprocess(
+                                item, progress, should_cancel,
+                            ),
+                            accepts_progress=True,
+                            # Passo de conferencia: falha nunca derruba o lote.
+                            optional=True,
+                        ),
+                    )
+                file_steps.append(
+                    self.job_step(f"{prefix}: verificando arquivos gerados...", interview_id, "verificar arquivos", r[5], r[6], lambda item=interview_id: app_service.qc_interviews(self.context, ids=[item])),
+                )
                 steps.extend(file_steps)
                 weights.extend(step_w)
             self.refresh_interviews()
@@ -6904,6 +7048,45 @@ if QT_IMPORT_ERROR is None:
             return app_service.JobResult(
                 "diarize", failures,
                 "" if failures == 0 else f"{failures} arquivo(s) com falha na diarizacao.",
+            )
+
+        def _boundary_check_via_subprocess(
+            self,
+            ids: str | list[str],
+            progress_callback: Callable[[dict[str, Any]], None] | None = None,
+            should_cancel: Callable[[], bool] | None = None,
+        ) -> app_service.JobResult:
+            """Verificacao acustica de fronteiras via CLI em subprocesso.
+
+            Mesmo racional da diarizacao: torch/pyannote roda no processo
+            filho e um crash nunca derruba a GUI."""
+            from . import runtime as _rt
+            from .utils import parse_progress_json_line, run_command_stream
+            id_list = [ids] if isinstance(ids, str) else list(ids)
+            failures = 0
+            for iid in id_list:
+                if should_cancel is not None and should_cancel():
+                    break
+
+                def on_output(line: str) -> None:
+                    detail = parse_progress_json_line(line)
+                    if detail is not None and progress_callback is not None:
+                        progress_callback(detail)
+
+                command = _rt.cli_command(
+                    "--project", str(self.context.paths.project_root),
+                    "check-boundaries", "--ids", iid, "--progress-json",
+                )
+                completed = run_command_stream(command, on_output=on_output, should_cancel=should_cancel)
+                if completed.returncode != 0:
+                    failures += 1
+                    _logger.warning(
+                        "verificacao de fronteiras de %s saiu com codigo %s",
+                        iid, completed.returncode,
+                    )
+            return app_service.JobResult(
+                "boundary-check", failures,
+                "" if failures == 0 else f"{failures} arquivo(s) com falha na verificacao de fronteiras.",
             )
 
         def run_diarization_job(self) -> None:

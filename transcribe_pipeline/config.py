@@ -69,6 +69,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # ja confirmada em outros arquivos do projeto. Conservador; calibrar
     # com o acervo real.
     "voice_match_threshold": 0.65,
+    # Verificacao acustica pos-render (boundary_check): compara a voz dos
+    # dois lados de cada troca de falante; similaridade >= limiar marca o
+    # turno com "duvida". Limiar auditado em 2026-08-25 (benchmark AUC 0,961;
+    # em 8 arquivos reais, ~3,5% das fronteiras marcadas, maioria erros
+    # genuinos de divisao).
+    "boundary_check": True,
+    "boundary_check_threshold": 0.40,
+    "boundary_check_window": 2.0,
     "diarization_fa": None,
     "diarization_fb": None,
     "model_download_token_env": "TRANSCRITORIO_MODEL_DOWNLOAD_TOKEN",

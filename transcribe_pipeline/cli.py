@@ -71,6 +71,25 @@ def main(argv: list[str] | None = None) -> int:
     add_ids_arg(qc_parser)
     qc_parser.set_defaults(func=cmd_qc)
 
+    boundary_parser = subparsers.add_parser(
+        "check-boundaries",
+        help="Acoustic check of speaker-change boundaries and overlap after render.",
+    )
+    add_ids_arg(boundary_parser)
+    boundary_parser.add_argument("--dry-run", action="store_true")
+    boundary_parser.add_argument(
+        "--report",
+        action="store_true",
+        help="Roda e imprime os achados sem gravar nada (auditoria/calibracao).",
+    )
+    boundary_parser.add_argument(
+        "--progress-json",
+        action="store_true",
+        dest="progress_json",
+        help="Imprime linhas '@PROGRESS {json}' para consumo da GUI (subprocesso).",
+    )
+    boundary_parser.set_defaults(func=cmd_check_boundaries)
+
     models_parser = subparsers.add_parser("models", help="Manage local ASR/diarization models.")
     models_subparsers = models_parser.add_subparsers(dest="models_command", required=True)
     models_status_parser = models_subparsers.add_parser("status", help="Show required model cache status.")
@@ -290,6 +309,27 @@ def cmd_qc(args: argparse.Namespace) -> int:
     config, paths = load_context(args)
     rows = load_manifest_or_exit(paths)
     return run_qc(rows, config, paths, ids=args.ids)
+
+
+def cmd_check_boundaries(args: argparse.Namespace) -> int:
+    from .boundary_check import run_boundary_check
+
+    config, paths = load_context(args)
+    rows = load_manifest_or_exit(paths)
+    progress_callback = None
+    if getattr(args, "progress_json", False):
+        from .utils import PROGRESS_JSON_PREFIX
+
+        def progress_callback(detail: dict) -> None:
+            print(PROGRESS_JSON_PREFIX + json.dumps(detail, ensure_ascii=False), flush=True)
+
+    failures = 0
+    for interview_id, file_config in per_file_configs(config, paths, rows, args.ids):
+        failures += run_boundary_check(
+            rows, file_config, paths, ids=[interview_id], dry_run=args.dry_run,
+            report=getattr(args, "report", False), progress_callback=progress_callback,
+        )
+    return failures
 
 
 def cmd_models_status(args: argparse.Namespace) -> int:

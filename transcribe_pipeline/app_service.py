@@ -264,6 +264,25 @@ def qc_interviews(context: ProjectContext, ids: list[str] | None = None) -> JobR
     return JobResult("qc", failures)
 
 
+def boundary_check_interviews(
+    context: ProjectContext,
+    ids: list[str] | None = None,
+    overrides: dict[str, Any] | None = None,
+    progress_callback: ProgressCallback | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+) -> JobResult:
+    from .boundary_check import run_boundary_check
+
+    failures = 0
+    for interview_id in selected_ids(context, ids):
+        config = project_store.config_with_file_metadata(merged_config(context.config, overrides), context.metadata.get(interview_id))
+        failures += run_boundary_check(
+            context.rows, config, context.paths, ids=[interview_id], dry_run=False,
+            progress_callback=progress_callback, should_cancel=should_cancel,
+        )
+    return JobResult("boundary-check", failures)
+
+
 def models_status_text() -> str:
     return model_manager.status_text()
 
