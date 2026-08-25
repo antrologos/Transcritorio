@@ -64,6 +64,12 @@ mac = ["mlx-whisper>=0.4.0"]
 # que no Windows e CPU-only: o caminho seguro e o caminho default.
 # pip puro: pip install "transcritorio[cuda]" --extra-index-url https://download.pytorch.org/whl/cu128
 cuda = ["torch>=2.7", "torchaudio>=2.7", "torchvision>=0.22"]
+# NAO existe extra [llm], de proposito: transformers>=5.13 (necessario para
+# o Qwen3.5 da analise local) exige huggingface-hub>=1.5, e o whisperx
+# 3.8.5 trava hub<1.0 — irreconciliavel no mesmo ambiente (uv lock,
+# 2026-08-25). A analise local usa um AMBIENTE DEDICADO gerenciado pelo
+# app (transcribe_pipeline/llm_env.py), criado sob demanda via uv — mesmo
+# padrao do cuda_pack. O LLM ja roda em subprocesso por desenho.
 
 [tool.uv.sources]
 torch = [{ index = "pytorch-cu128", extra = "cuda" }]

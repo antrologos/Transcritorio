@@ -290,6 +290,32 @@ _FIXED_MODELS: tuple[ModelAsset, ...] = (
 )
 
 
+# Modelos OPCIONAIS da analise local (plano-programa v0.2.0, fase 2):
+# conhecidos pelo cache (nunca listados como orfaos pela UI de limpeza),
+# mas FORA de get_required_models — baixados sob demanda quando o usuario
+# ativa as ferramentas de analise. SHAs validadas no PoC de 2026-08-25
+# (Qwen3.5-4B vencedor do julgamento as cegas; GLiNER vencedor da regua
+# de nomes com recall 0,96).
+_OPTIONAL_MODELS: tuple[ModelAsset, ...] = (
+    ModelAsset(
+        "llm_qwen",
+        "Analise local (Qwen3.5-4B)",
+        "Qwen/Qwen3.5-4B",
+        "sumarios, codigos tematicos e verificacoes por conteudo",
+        estimated_gb=8.7,
+        revision="851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+    ),
+    ModelAsset(
+        "ner_gliner",
+        "Extracao de entidades (GLiNER)",
+        "urchade/gliner_multi_pii-v1",
+        "nomes, lugares e instituicoes citados",
+        estimated_gb=1.1,
+        revision="1fcf13e85f4eef5394e1fcd406cf2ca9ea82351d",
+    ),
+)
+
+
 def get_required_models(
     asr_variants: list[str] | None = None,
     include_diarization: bool = True,
@@ -612,13 +638,13 @@ def friendly_name(key: str) -> str:
 
 
 def _known_repos() -> set[str]:
-    """Conjunto de repo_ids conhecidos (ASR + fixos)."""
+    """Conjunto de repo_ids conhecidos (ASR + fixos + opcionais)."""
     known: set[str] = set()
     for info in ASR_VARIANTS.values():
         repo = info.get("repo")
         if repo:
             known.add(str(repo))
-    for asset in _FIXED_MODELS:
+    for asset in _FIXED_MODELS + _OPTIONAL_MODELS:
         if asset.repo_id:
             known.add(str(asset.repo_id))
     return known

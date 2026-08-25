@@ -26,6 +26,16 @@ oficial passa a ser **PyPI + uv** (`uv tool install transcritorio`); ver
   divergência regular×exclusive. Desligável
   (`diarization_capture_signals`); falha na captura nunca interrompe a
   diarização.
+- Infra da análise local (fase 2.0 do plano-programa): módulo
+  `research_context` (contexto de pesquisa por projeto — roteiro,
+  codebook, nomes conhecidos — grounding das ferramentas de análise);
+  módulo `llm_env` (ambiente dedicado criado sob demanda via uv para o
+  Qwen3.5-4B + GLiNER — separado porque o transformers>=5.13 exigido pelo
+  Qwen é irreconciliável com o pin de huggingface-hub do whisperx);
+  categoria `_OPTIONAL_MODELS` no gerenciador de modelos (Qwen3.5-4B e
+  GLiNER multi-PII com SHAs pinadas, fora dos obrigatórios e protegidos
+  da limpeza de órfãos). Modelo escolhido por julgamento às cegas do
+  usuário + benchmark com gabarito real (PoC 2026-08-25).
 - Segurança de dados: "Melhorar falantes deste arquivo" (e o "Tentar
   novamente" do banner) agora guarda automaticamente uma cópia de
   segurança da revisão em `05_transcripts_review/edits/backups/` antes de
