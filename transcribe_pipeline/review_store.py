@@ -4,6 +4,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 import re
+import time
 
 from .config import Paths
 from .render import write_docx_if_available, write_markdown, write_nvivo_tsv, write_srt, write_turns_csv, write_turns_tsv, write_vtt
@@ -29,7 +30,43 @@ def load_canonical_transcript(paths: Paths, interview_id: str) -> dict[str, Any]
     return read_json(path)
 
 
+def backup_review_file(paths: Paths, interview_id: str) -> Path | None:
+    """Copia de seguranca da revisao antes de qualquer sobrescrita.
+
+    So gera backup quando o arquivo existente carrega trabalho humano
+    (edits nao-vazio ou algum turno editado) ou esta ilegivel (corrompido:
+    preservar os bytes antes de substituir). Revisao pristina nao gera
+    backup — refresh_unedited_reviews recria revisoes intactas de rotina e
+    encheria a pasta.
+    """
+    path = review_path(paths, interview_id)
+    if not path.exists():
+        return None
+    worth_keeping = True
+    try:
+        review = read_json(path)
+        turns = (review.get("transcript") or {}).get("turns") or []
+        worth_keeping = bool(review.get("edits")) or any(
+            turn.get("edited") for turn in turns if isinstance(turn, dict)
+        )
+    except Exception:  # noqa: BLE001 - ilegivel: preservar os bytes mesmo assim
+        worth_keeping = True
+    if not worth_keeping:
+        return None
+    backup_dir = path.parent / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    target = backup_dir / f"{interview_id}.review.{stamp}.json"
+    suffix = 2
+    while target.exists():
+        target = backup_dir / f"{interview_id}.review.{stamp}-{suffix}.json"
+        suffix += 1
+    target.write_bytes(path.read_bytes())
+    return target
+
+
 def create_review_from_canonical(paths: Paths, interview_id: str, reviewer: str = "") -> dict[str, Any]:
+    backup_review_file(paths, interview_id)
     canonical = load_canonical_transcript(paths, interview_id)
     review = {
         "schema_version": REVIEW_SCHEMA_VERSION,

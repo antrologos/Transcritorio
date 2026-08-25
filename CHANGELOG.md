@@ -26,6 +26,11 @@ oficial passa a ser **PyPI + uv** (`uv tool install transcritorio`); ver
   divergência regular×exclusive. Desligável
   (`diarization_capture_signals`); falha na captura nunca interrompe a
   diarização.
+- Segurança de dados: "Melhorar falantes deste arquivo" (e o "Tentar
+  novamente" do banner) agora guarda automaticamente uma cópia de
+  segurança da revisão em `05_transcripts_review/edits/backups/` antes de
+  recriá-la — antes, todas as edições manuais eram descartadas sem aviso
+  fiel e sem backup. O diálogo de confirmação passou a dizer a verdade.
 - Defaults seguros: `asr_device/compute_type/batch_size: auto` — CPU usa
   int8/batch 2 (float16 em CPU era convertido p/ float32 pelo CTranslate2,
   ~2x RAM: travava máquinas sem GPU); float16 explícito em CPU é coagido.

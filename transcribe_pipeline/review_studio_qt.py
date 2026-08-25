@@ -3317,7 +3317,10 @@ if QT_IMPORT_ERROR is None:
             self.diarize_action.triggered.connect(self.run_diarization_job)
 
             self.improve_speakers_action = QAction("Melhorar falantes deste arquivo", self)
-            self.improve_speakers_action.setToolTip("Refazer a diarizacao local deste arquivo e remontar a transcricao editavel.")
+            self.improve_speakers_action.setToolTip(
+                "Refaz a identificacao de falantes deste arquivo e recria a transcricao editavel DO ZERO.\n"
+                "As edicoes manuais sao descartadas (uma copia de seguranca fica na pasta backups)."
+            )
             self.improve_speakers_action.triggered.connect(self.improve_speakers_current_file)
 
             self.name_voices_action = QAction("Identificar vozes (De quem é esta voz?)...", self)
@@ -7120,7 +7123,11 @@ if QT_IMPORT_ERROR is None:
             answer = QMessageBox.question(
                 self,
                 "Melhorar falantes deste arquivo",
-                "Esta acao refaz a diarizacao local e recria a transcricao editavel deste arquivo. Edicoes manuais ja feitas nesta transcricao podem ser substituidas. Continuar?",
+                "Esta acao refaz a identificacao de falantes e recria a transcricao "
+                "editavel deste arquivo DO ZERO.\n\n"
+                "As edicoes manuais serao descartadas da transcricao editavel. "
+                "Uma copia de seguranca da versao atual fica guardada em:\n"
+                "Transcricoes\\05_transcripts_review\\edits\\backups\n\nContinuar?",
             )
             if answer != QMessageBox.StandardButton.Yes:
                 return
