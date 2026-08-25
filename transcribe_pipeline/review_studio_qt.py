@@ -7341,6 +7341,24 @@ if QT_IMPORT_ERROR is None:
                         self.load_turn_table()
                         if self.turns:
                             self.select_turn_by_index(0, seek=False)
+                        # A transcricao pode ter acabado de criar o WAV
+                        # preparado: renovar a lista de midias e apontar o
+                        # player para ele. Sem isto, quem abriu o arquivo
+                        # ANTES de transcrever fica preso ao original (MP3
+                        # VBR = seek com desvio crescente) no player E no
+                        # dialogo de vozes — causa raiz da dessincronia
+                        # vista em uso real (2026-08-25, D05R).
+                        try:
+                            self.media_candidates = app_service.get_media_candidates(self.context, current_id)
+                            if self.media_candidates:
+                                preferred_index = preferred_media_index(self.media_candidates)
+                                preferred = self.media_candidates[preferred_index]
+                                current_source = Path(self.player.source().toLocalFile()) if self.player.source().isLocalFile() else None
+                                if current_source != preferred:
+                                    self.set_media_source(preferred_index)
+                                    self.load_waveform()
+                        except Exception as exc:  # noqa: BLE001 - midia e acessoria aqui
+                            _logger.warning("Falha ao renovar midia de %s: %s", current_id, exc)
                 except Exception as exc:
                     _logger.warning("Falha ao recarregar review de %s: %s", current_id, exc)
             self.update_action_states()
