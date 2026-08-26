@@ -79,6 +79,36 @@ with tempfile.TemporaryDirectory() as tmp:
     assert se.index_is_fresh(paths, iid) is False
 print("PASS: index_is_fresh")
 
+# --- context_window_text: fragmentos herdam o tema da vizinhanca ---
+ctx_turns = [
+    {"text": "Falamos sobre a remuneração dos recenseadores no Censo."},
+    {"text": "Mas isso"},
+    {"text": "  atrasou   muito  o pagamento das equipes. "},
+]
+window = se.context_window_text(ctx_turns, 1)
+assert "remuneração" in window and "Mas isso" in window and "atrasou" in window
+# bordas: primeiro e ultimo turno nao explodem
+assert se.context_window_text(ctx_turns, 0).startswith("Falamos")
+assert se.context_window_text(ctx_turns, 2).endswith("equipes.")
+# caps de cauda/cabeca respeitados
+long_turns = [{"text": "a" * 500}, {"text": "meio"}, {"text": "b" * 500}]
+capped = se.context_window_text(long_turns, 1, tail_chars=10, head_chars=5)
+assert capped == ("a" * 10) + " meio " + ("b" * 5)
+print("PASS: context_window_text")
+
+# --- collapse_adjacent: melhor hit representa o momento ---
+adj = [
+    {"interview_id": "A", "turn_index": 6, "similarity": 0.9},
+    {"interview_id": "A", "turn_index": 5, "similarity": 0.8},   # vizinho do 6
+    {"interview_id": "A", "turn_index": 7, "similarity": 0.7},   # vizinho do 6
+    {"interview_id": "B", "turn_index": 6, "similarity": 0.6},   # outra entrevista
+    {"interview_id": "A", "turn_index": 20, "similarity": 0.5},  # longe
+]
+collapsed = se.collapse_adjacent(adj)
+assert [(h["interview_id"], h["turn_index"]) for h in collapsed] == [
+    ("A", 6), ("B", 6), ("A", 20)]
+print("PASS: collapse_adjacent")
+
 # --- rank_semantic: cosseno, exclude, corte e top_n ---
 indexes = [{
     "interview_id": "A",
@@ -120,17 +150,13 @@ try:
     assert search_scope_text("all", 1, 1, "A busca") == (
         "A busca lê a transcrição do único arquivo do projeto.")
     assert "único arquivo" in search_scope_text("all", 1, 0, "A busca")
-    # checked: todas / parcial / nenhuma / vazio / singular
-    assert search_scope_text("checked", 2, 2, "A AI") == (
-        "A AI lê as transcrições de todas as 2 entrevistas marcadas.")
-    assert search_scope_text("checked", 3, 1, "A busca") == (
-        "A busca lê as transcrições de 1 das 3 entrevistas marcadas — "
-        "2 ainda sem transcrição ficam de fora.")
-    assert "não o áudio" in search_scope_text("checked", 2, 0, "A AI")
-    assert search_scope_text("checked", 0, 0, "A busca") == (
-        "Nenhuma entrevista marcada na lista.")
-    assert search_scope_text("checked", 1, 1, "A busca") == (
-        "A busca lê a transcrição da entrevista marcada.")
+    # choose: lista interna so tem transcritas (ready == total)
+    assert search_scope_text("choose", 2, 2, "A AI") == (
+        "A AI lê as transcrições das 2 entrevistas escolhidas.")
+    assert search_scope_text("choose", 0, 0, "A busca") == (
+        "Marque na lista acima quais entrevistas entram.")
+    assert search_scope_text("choose", 1, 1, "A busca") == (
+        "A busca lê a transcrição da entrevista escolhida.")
     # open: com e sem transcricao
     assert search_scope_text("open", 1, 1, "A AI") == (
         "A AI lê a transcrição da entrevista aberta.")

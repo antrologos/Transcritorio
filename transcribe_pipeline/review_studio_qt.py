@@ -56,7 +56,7 @@ from .runtime import resolve_executable
 from .utils import sanitize_message
 
 try:
-    from PySide6.QtCore import QPointF, QThread, QTimer, Qt, QUrl, Signal
+    from PySide6.QtCore import QEvent, QPointF, QThread, QTimer, Qt, QUrl, Signal
     from PySide6.QtGui import QAction, QBrush, QColor, QDesktopServices, QIcon, QKeySequence, QPainter, QPainterPath, QPen, QShortcut, QUndoCommand, QUndoStack
     from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
     from PySide6.QtMultimediaWidgets import QVideoWidget
@@ -186,8 +186,9 @@ def search_scope_text(scope: str, total: int, ready: int, subject: str) -> str:
 
     Diz ONDE a operacao busca e SOBRE O QUE (transcricoes, nunca o audio
     bruto) — feedback 2026-08-26: o usuario nao tinha como saber. scope:
-    "all" | "checked" | "open"; total = itens no escopo; ready = com
-    transcricao (revisada > canonica).
+    "all" | "choose" | "open"; total = itens no escopo; ready = com
+    transcricao (revisada > canonica). No modo choose a lista interna so
+    contem transcritas, entao ready == total por construcao.
     """
     missing = total - ready
     if scope == "open":
@@ -195,22 +196,12 @@ def search_scope_text(scope: str, total: int, ready: int, subject: str) -> str:
             return f"{subject} lê a transcrição da entrevista aberta."
         return (f"{subject} lê transcrições, não o áudio — "
                 "e a entrevista aberta ainda não foi transcrita.")
-    if scope == "checked":
+    if scope == "choose":
         if total == 0:
-            return "Nenhuma entrevista marcada na lista."
-        if ready == 0:
-            if total == 1:
-                return (f"{subject} lê transcrições, não o áudio — "
-                        "e a entrevista marcada ainda não foi transcrita.")
-            return (f"{subject} lê transcrições, não o áudio — e nenhuma das "
-                    f"{total} entrevistas marcadas foi transcrita ainda.")
-        if ready == total:
-            if total == 1:
-                return f"{subject} lê a transcrição da entrevista marcada."
-            return (f"{subject} lê as transcrições de todas as "
-                    f"{total} entrevistas marcadas.")
-        return (f"{subject} lê as transcrições de {ready} das {total} entrevistas "
-                f"marcadas — {missing} ainda sem transcrição ficam de fora.")
+            return "Marque na lista acima quais entrevistas entram."
+        if total == 1:
+            return f"{subject} lê a transcrição da entrevista escolhida."
+        return f"{subject} lê as transcrições das {total} entrevistas escolhidas."
     if total == 0:
         return "Este projeto ainda não tem arquivos."
     if ready == 0:
@@ -2312,6 +2303,25 @@ if QT_IMPORT_ERROR is None:
             combo = getattr(self, "scope_combo", None)
             return str(combo.currentData() or "all") if combo is not None else "all"
 
+        def _friendly_title(self, interview_id: str) -> str:
+            ctx = self._window.context
+            if ctx is None:
+                return interview_id
+            metadata = ctx.metadata.get(interview_id, {})
+            return str(metadata.get("title") or "").strip() or interview_id
+
+        def _chosen_ids(self) -> list[str]:
+            """Ids marcados na lista interna de escolha (modo choose)."""
+            chosen: list[str] = []
+            scope_list = getattr(self, "scope_list", None)
+            if scope_list is None:
+                return chosen
+            for row in range(scope_list.count()):
+                item = scope_list.item(row)
+                if item.checkState() == Qt.CheckState.Checked:
+                    chosen.append(str(item.data(Qt.ItemDataRole.UserRole)))
+            return chosen
+
         def _scope_counts(self) -> tuple[str, int, int]:
             """(chave, itens no escopo, itens com transcricao)."""
             scope = self._scope_key()
@@ -2319,9 +2329,9 @@ if QT_IMPORT_ERROR is None:
             if scope == "open":
                 open_id = self._window.current_interview_id
                 return scope, (1 if open_id else 0), (1 if open_id in transcribed else 0)
-            if scope == "checked":
-                checked = self._window.selected_interview_ids()
-                return scope, len(checked), sum(1 for i in checked if i in transcribed)
+            if scope == "choose":
+                chosen = [i for i in self._chosen_ids() if i in transcribed]
+                return scope, len(chosen), len(chosen)
             ctx = self._window.context
             return scope, (len(ctx.rows) if ctx is not None else 0), len(transcribed)
 
@@ -2332,8 +2342,8 @@ if QT_IMPORT_ERROR is None:
             if scope == "open":
                 open_id = self._window.current_interview_id
                 return [open_id] if open_id in transcribed else []
-            if scope == "checked":
-                return [i for i in self._window.selected_interview_ids() if i in transcribed]
+            if scope == "choose":
+                return [i for i in self._chosen_ids() if i in transcribed]
             return self._project_ids()
 
         def _scope_text(self) -> str:
@@ -2341,47 +2351,82 @@ if QT_IMPORT_ERROR is None:
             return search_scope_text(scope, total, ready, self._scope_subject)
 
         def _build_scope_widgets(self, layout: QVBoxLayout) -> None:
-            """Linha Onde: combo de escopo + explicacao dinamica (feedback
-            2026-08-26: o usuario nao sabia ONDE a busca opera nem que ela
-            le transcricoes, nao o audio). Itens por chave (userData) para
-            escopos futuros (codigo QDA, entidade) encaixarem sem redesenho."""
+            """Linha Onde: combo + lista interna de escolha + explicacao
+            dinamica (feedback 2026-08-26: o usuario nao sabia ONDE a busca
+            opera nem que ela le transcricoes, nao o audio). O escopo e
+            escolhido INTEIRAMENTE nesta janela — nunca referencia as
+            marcacoes ☑ do painel, que significam "o que transcrever".
+            Itens por chave (userData) para escopos futuros (codigo QDA,
+            entidade) encaixarem sem redesenho."""
             row = QHBoxLayout()
             row.addWidget(QLabel("Onde:"))
             self.scope_combo = QComboBox()
-            self.scope_combo.currentIndexChanged.connect(
-                lambda _index: self.scope_label.setText(self._scope_text()))
+            self.scope_combo.currentIndexChanged.connect(self._on_scope_changed)
             row.addWidget(self.scope_combo, 1)
             layout.addLayout(row)
+            self.scope_list = QListWidget()
+            self.scope_list.setMaximumHeight(120)
+            self.scope_list.setVisible(False)
+            self.scope_list.itemChanged.connect(
+                lambda _item: self.scope_label.setText(self._scope_text()))
+            layout.addWidget(self.scope_list)
             self.scope_label = QLabel("")
             self.scope_label.setWordWrap(True)
             self.scope_label.setStyleSheet(_style_muted())
             layout.addWidget(self.scope_label)
 
+        def _on_scope_changed(self, _index: int) -> None:
+            self.scope_list.setVisible(self._scope_key() == "choose")
+            self.scope_label.setText(self._scope_text())
+
         def _refresh_scope(self) -> None:
-            """Reconstroi o combo (janela cacheada; marcadas/aberta mudam)
-            preservando a escolha, e atualiza a linha de escopo."""
+            """Reconstroi combo e lista (janela cacheada; transcritas e a
+            aberta mudam por fora) preservando escolha e checks por id."""
             combo = getattr(self, "scope_combo", None)
             if combo is None or self._window.context is None:
                 return
+            transcribed = self._project_ids()
             current = self._scope_key()
             combo.blockSignals(True)
             combo.clear()
-            combo.addItem(
-                f"Todas as entrevistas transcritas ({len(self._project_ids())})", "all")
-            checked = self._window.selected_interview_ids()
-            if checked:
-                combo.addItem(f"Somente as marcadas ☑ ({len(checked)})", "checked")
+            combo.addItem(f"Todas as entrevistas transcritas ({len(transcribed)})", "all")
             open_id = self._window.current_interview_id
             if open_id:
-                combo.addItem(f"Somente a entrevista aberta ({open_id})", "open")
+                combo.addItem(
+                    f"Somente a entrevista aberta ({self._friendly_title(open_id)})", "open")
+            combo.addItem("Escolher quais…", "choose")
             index = combo.findData(current)
             combo.setCurrentIndex(index if index >= 0 else 0)
             combo.blockSignals(False)
+            checked_before = set(self._chosen_ids())
+            scope_list = self.scope_list
+            scope_list.blockSignals(True)
+            scope_list.clear()
+            for interview_id in transcribed:
+                title = self._friendly_title(interview_id)
+                text = title if title == interview_id else f"{title} ({interview_id})"
+                item = QListWidgetItem(text)
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setData(Qt.ItemDataRole.UserRole, interview_id)
+                item.setCheckState(
+                    Qt.CheckState.Checked if interview_id in checked_before
+                    else Qt.CheckState.Unchecked)
+                scope_list.addItem(item)
+            scope_list.blockSignals(False)
+            scope_list.setVisible(self._scope_key() == "choose")
             self.scope_label.setText(self._scope_text())
 
         def showEvent(self, event) -> None:  # noqa: N802 - assinatura Qt
             self._refresh_scope()
             super().showEvent(event)
+
+        def changeEvent(self, event) -> None:  # noqa: N802 - assinatura Qt
+            # Voltar do painel principal para a janela atualiza contagens e
+            # a opcao "aberta" — o print de 2026-08-26 mostrou o combo
+            # desatualizado por depender so do showEvent.
+            if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
+                self._refresh_scope()
+            super().changeEvent(event)
 
         def _make_results_list(self) -> QListWidget:
             results = QListWidget()
@@ -3904,7 +3949,7 @@ if QT_IMPORT_ERROR is None:
             self.project_search_action.setToolTip(
                 "Busca palavras e expressoes exatas nas transcricoes do projeto.\n"
                 "Le o texto transcrito (revisado, quando houver), nunca o audio;\n"
-                "na janela, da para restringir as marcadas ☑ ou a entrevista aberta.")
+                "na janela, da para restringir a entrevista aberta ou escolher quais entram.")
             self.project_search_action.triggered.connect(lambda: self.open_word_search())
 
             self.explore_action = QAction("✨ Perguntar às entrevistas com AI...", self)
@@ -3912,7 +3957,7 @@ if QT_IMPORT_ERROR is None:
                 "Faça perguntas e receba respostas citando os trechos, ou encontre\n"
                 "trechos pelo significado, mesmo sem as palavras exatas.\n"
                 "Lê as transcrições (não o áudio); o escopo é escolhível na janela:\n"
-                "todas, somente as marcadas ☑ ou a entrevista aberta.\n"
+                "todas, somente a entrevista aberta ou um conjunto escolhido.\n"
                 "AI local — nada sai do seu computador.")
             self.explore_action.triggered.connect(self.open_explore)
 

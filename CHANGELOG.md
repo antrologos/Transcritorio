@@ -59,12 +59,21 @@ oficial passa a ser **PyPI + uv** (`uv tool install transcritorio`); ver
   sai do seu computador"; resumo renomeado "✨ Resumir a entrevista com
   AI"; busca de palavras separada em janela própria e minimalista.
 - Escopo visível e escolhível nas buscas e no Perguntar: as janelas
-  ganham o seletor "Onde:" (todas as transcritas / somente as marcadas ☑
-  / somente a entrevista aberta) e uma linha que diz sempre quantos
-  arquivos entram e que a leitura é das TRANSCRIÇÕES, não do áudio —
-  arquivos sem transcrição nunca somem em silêncio, e projeto sem
-  transcrição alguma agora explica em vez de não fazer nada. Tooltips de
-  buscar/perguntar/resumir declaram o escopo.
+  ganham o seletor "Onde:" — todas as transcritas / somente a entrevista
+  aberta / escolher quais (lista interna com caixas de marcação, própria
+  da janela — sem relação com as marcações ☑ do painel, que significam
+  "o que transcrever") — e uma linha que diz sempre quantos arquivos
+  entram e que a leitura é das TRANSCRIÇÕES, não do áudio. Arquivos sem
+  transcrição nunca somem em silêncio; projeto sem transcrição alguma
+  explica em vez de não fazer nada; o seletor se atualiza ao voltar para
+  a janela. Tooltips de buscar/perguntar/resumir declaram o escopo.
+- Busca semântica mais limpa: o vetor de cada bloco passa a ser
+  calculado com janela de contexto (fim do bloco anterior + bloco +
+  início do seguinte), então falas curtas e interjeições só aparecem
+  quando a vizinhança é tematicamente próxima da consulta — nada é
+  excluído do índice; e blocos adjacentes do mesmo momento não se
+  repetem nos resultados (fica o melhor). Índices antigos são
+  reconstruídos automaticamente no próximo "Preparar".
 - Busca nas transcrições (fase 2.3): **Ctrl+F** filtra os blocos do
   arquivo aberto em tempo real (barra estilo navegador, ‹ › navegam, Esc
   fecha); **Ctrl+Shift+F** (ou Editar → Buscar nas transcrições) abre a

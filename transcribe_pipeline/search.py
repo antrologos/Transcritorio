@@ -27,10 +27,12 @@ from .utils import read_json, write_json
 ProgressCallback = Callable[[dict[str, Any]], None]
 
 ENCODER_REPO = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-INDEX_VERSION = 1
+INDEX_VERSION = 2  # v2: embeddings com janela de contexto (2026-08-26)
 MIN_SIMILARITY = 0.35
 TOP_N = 20
 EMBED_BATCH = 16
+CONTEXT_TAIL_CHARS = 150
+CONTEXT_HEAD_CHARS = 150
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +87,51 @@ def search_turns(turns: list[dict[str, Any]], query: str) -> list[dict[str, Any]
         if spans:
             hits.append({"turn_index": index, "spans": spans})
     return hits
+
+
+def context_window_text(
+    turns: list[dict[str, Any]],
+    index: int,
+    tail_chars: int = CONTEXT_TAIL_CHARS,
+    head_chars: int = CONTEXT_HEAD_CHARS,
+) -> str:
+    """Texto do EMBEDDING do turno index: cauda do turno anterior + turno +
+    cabeca do seguinte (pura, testavel).
+
+    Fragmentos e interjeicoes ("Eita", "Mas isso") herdam o TEMA da
+    vizinhanca em vez de virarem vetores espurios que pontuam contra
+    qualquer consulta (feedback 2026-08-26; corte por tamanho foi vetado
+    — pesquisador pode querer exatamente interjeicoes). O texto exibido
+    e ancorado segue sendo o do proprio turno.
+    """
+
+    def clean(position: int) -> str:
+        if 0 <= position < len(turns):
+            return " ".join(str(turns[position].get("text") or "").split())
+        return ""
+
+    before = clean(index - 1)[-tail_chars:] if tail_chars else ""
+    after = clean(index + 1)[:head_chars] if head_chars else ""
+    return " ".join(part for part in (before, clean(index), after) if part)
+
+
+def collapse_adjacent(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Mantem so o melhor hit de turnos adjacentes da mesma entrevista.
+
+    Com janelas de contexto, vizinhos do mesmo momento pontuam juntos;
+    espera hits em ordem decrescente de similaridade (pura, testavel).
+    """
+    kept: list[dict[str, Any]] = []
+    taken: set[tuple[str, int]] = set()
+    for hit in hits:
+        key = (str(hit.get("interview_id")), int(hit.get("turn_index", -1)))
+        if (key in taken
+                or (key[0], key[1] - 1) in taken
+                or (key[0], key[1] + 1) in taken):
+            continue
+        taken.add(key)
+        kept.append(hit)
+    return kept
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +287,7 @@ def build_indexes(
             if encoder is None:
                 encoder = load_encoder()
             vectors = embed_texts(
-                [" ".join(str(t.get("text") or "").split()) for t in turns], encoder)
+                [context_window_text(turns, i) for i in range(len(turns))], encoder)
             payload = build_index_payload(interview_id, turns, vectors, source.stat().st_mtime)
             target = index_path(paths, interview_id)
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -309,7 +356,7 @@ def rank_semantic(
                     "similarity": round(float(similarity), 3),
                 })
     scored.sort(key=lambda item: -item["similarity"])
-    return scored[:top_n]
+    return collapse_adjacent(scored)[:top_n]
 
 
 def project_semantic_search(
