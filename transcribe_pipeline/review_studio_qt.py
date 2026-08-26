@@ -7374,6 +7374,44 @@ if QT_IMPORT_ERROR is None:
                 for index, iid in enumerate(ids)
             ]
             self.start_worker(f"Gerar resumo de {total} arquivo(s)", steps)
+            # Ponte minima (feedback 2026-08-26: "nao sei onde salvou"):
+            # ao concluir, mostrar onde ficou com Abrir resumo/Abrir pasta.
+            self._pending_summary_ids = list(ids)
+
+        def _show_summary_results(self, ids: list[str]) -> None:
+            """Aviso de conclusao do resumo com acesso direto ao arquivo.
+
+            Resultado invisivel = falha de desenho (feedback 2026-08-26);
+            esta e a ponte minima ate a auditoria de design decidir a casa
+            definitiva (painel de documentos do arquivo)."""
+            from .summarize import resumo_path as _resumo_path
+            if self.context is None:
+                return
+            produced = [
+                _resumo_path(self.context.paths, iid)
+                for iid in ids
+                if _resumo_path(self.context.paths, iid).exists()
+            ]
+            if not produced:
+                return
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Information)
+            box.setWindowTitle("Resumo pronto")
+            listing = "\n".join(f"  • {path.name}" for path in produced[:10])
+            box.setText(
+                f"Resumo{'s' if len(produced) > 1 else ''} com temas "
+                f"salvo{'s' if len(produced) > 1 else ''} em:\n\n{listing}\n\n"
+                f"Pasta: {produced[0].parent}"
+            )
+            open_file = box.addButton("Abrir resumo", QMessageBox.ButtonRole.AcceptRole)
+            open_dir = box.addButton("Abrir pasta", QMessageBox.ButtonRole.ActionRole)
+            box.addButton("Fechar", QMessageBox.ButtonRole.RejectRole)
+            box.setDefaultButton(open_file)
+            box.exec()
+            if box.clickedButton() is open_file:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(produced[0])))
+            elif box.clickedButton() is open_dir:
+                open_folder_in_explorer(produced[0].parent)
 
         def run_qc_job(self) -> None:
             if not self.save_current_turn():
@@ -7398,6 +7436,7 @@ if QT_IMPORT_ERROR is None:
                 )
                 return
             self.current_job_label = label
+            self._pending_summary_ids = None  # notificacao so do job que a setar
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(0)
             self.progress_bar.setVisible(True)
@@ -7490,6 +7529,10 @@ if QT_IMPORT_ERROR is None:
                     _logger.warning("Falha ao recarregar review de %s: %s", current_id, exc)
             self.update_action_states()
             self._update_voice_banner()
+            pending_summaries = getattr(self, "_pending_summary_ids", None)
+            self._pending_summary_ids = None
+            if pending_summaries and "interrompido" not in message:
+                self._show_summary_results(pending_summaries)
             if self._close_after_worker:
                 self._close_after_worker = False
                 self.close()
