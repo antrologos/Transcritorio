@@ -90,4 +90,14 @@ ranked_all = se.rank_semantic([1.0, 0.0], indexes, min_similarity=-1.0, top_n=2)
 assert len(ranked_all) == 2 and ranked_all[0]["similarity"] >= ranked_all[1]["similarity"]
 print("PASS: rank_semantic")
 
+# --- similarity_label (UI sem numeros; precisa de PySide6 no ambiente) ---
+try:
+    from transcribe_pipeline.review_studio_qt import similarity_label
+    assert similarity_label(0.64) == "muito proximo"
+    assert similarity_label(0.50) == "proximo"
+    assert similarity_label(0.36) == "relacionado"
+    print("PASS: similarity_label")
+except ImportError:
+    print("SKIP: similarity_label (PySide6 ausente)")
+
 print("PASS: toy_search")
