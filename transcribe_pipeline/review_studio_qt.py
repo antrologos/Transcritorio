@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 import wave
+from bisect import bisect_left
 
 _logger = logging.getLogger("transcritorio.gui")
 
@@ -838,6 +839,20 @@ def samples_from_wave_bytes(raw: bytes, sample_width: int) -> list[int]:
 
 if QT_IMPORT_ERROR is None:
 
+    class TurnTextEdit(QTextEdit):
+        """Editor do bloco: duplo clique numa palavra tambem leva o audio
+        ate ela (fase 3; gesto escolhido pelo usuario em 2026-08-26). A
+        selecao padrao da palavra pelo duplo clique e preservada via
+        super()."""
+
+        word_seek_requested = Signal(int)
+
+        def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 - assinatura Qt
+            super().mouseDoubleClickEvent(event)
+            cursor = self.cursorForPosition(event.position().toPoint())
+            self.word_seek_requested.emit(int(cursor.position()))
+
+
     class WaveformWidget(QWidget):
         seek_requested = Signal(float)
 
@@ -851,6 +866,8 @@ if QT_IMPORT_ERROR is None:
             self.active_range: tuple[float, float] | None = None
             self.zoom = 1.0
             self.visible_start = 0.0
+            self.word_ticks: list[tuple[float, bool]] = []
+            self._word_starts: list[float] = []
             self._drag_start_x: float | None = None
             self._drag_start_visible_start = 0.0
             self._drag_moved = False
@@ -874,9 +891,17 @@ if QT_IMPORT_ERROR is None:
             self.active_range = None
             self.zoom = 1.0
             self.visible_start = 0.0
+            self.word_ticks = []
+            self._word_starts = []
             self._drag_start_x = None
             self._drag_start_visible_start = 0.0
             self._drag_moved = False
+            self.update()
+
+        def set_words(self, ticks: list[tuple[float, bool]]) -> None:
+            """Ticks de palavras (start, posicao_incerta) — fase 3."""
+            self.word_ticks = sorted(ticks)
+            self._word_starts = [tick[0] for tick in self.word_ticks]
             self.update()
 
         def set_position(self, seconds: float) -> None:
@@ -1045,6 +1070,20 @@ if QT_IMPORT_ERROR is None:
             painter.setPen(QPen(QColor("#5cb7ee"), 1))
             painter.setBrush(QBrush(QColor("#2f9bd3")))
             painter.drawPath(waveform_path)
+            if self._word_starts and self.duration > 0:
+                low = bisect_left(self._word_starts, visible_start)
+                high = bisect_left(self._word_starts, visible_end)
+                count = high - low
+                # Ticks de inicio de palavra (fase 3), logo abaixo da regua.
+                # Guarda de densidade: so com >= ~6 px por palavra visivel;
+                # afastado, virariam ruido continuo. Ambar = score do decil
+                # inferior do alinhamento (posicao incerta).
+                if count and (width / count) >= 6:
+                    for tick_start, uncertain in self.word_ticks[low:high]:
+                        x = seconds_to_x(tick_start)
+                        painter.setPen(QPen(
+                            QColor("#e0a83c") if uncertain else QColor("#4d5d6c"), 1))
+                        painter.drawLine(x, ruler_height + 1, x, ruler_height + 9)
             if self.duration > 0:
                 if self.edit_cursor is not None and visible_start <= self.edit_cursor <= visible_end:
                     cursor_x = seconds_to_x(self.edit_cursor)
@@ -3719,6 +3758,8 @@ if QT_IMPORT_ERROR is None:
             self.review: dict[str, Any] | None = None
             self.current_interview_id: str | None = None
             self.turns: list[dict[str, Any]] = []
+            self.word_index: list[dict[str, Any]] = []
+            self._word_uncertain_cutoff: float | None = None
             self.current_turn_id: str | None = None
             self.current_play_row: int | None = None
             self.media_candidates: list[Path] = []
@@ -5119,10 +5160,11 @@ if QT_IMPORT_ERROR is None:
             time_layout.addStretch()
             grid.addLayout(time_layout, 1, 0, 1, 4)
 
-            self.text_edit = QTextEdit()
+            self.text_edit = TurnTextEdit()
             self.text_edit.setMinimumHeight(120)
             self.text_edit.setAccessibleName("Texto do bloco selecionado")
             self.text_edit.textChanged.connect(self.editor_changed)
+            self.text_edit.word_seek_requested.connect(self._seek_word_at_char)
             # Ancorar undo/redo do editor no text_edit (WidgetWithChildrenShortcut).
             # Com foco no editor, Ctrl+Z aciona QUndoStack; fora dele, trash_undo_action (ApplicationShortcut).
             self.text_edit.addAction(self.undo_action)
@@ -5139,7 +5181,9 @@ if QT_IMPORT_ERROR is None:
             self.merge_button.clicked.connect(self.merge_current_turn)
             button_row.addWidget(self.merge_button)
             self.split_button = QPushButton("Dividir bloco")
-            self.split_button.setToolTip("Divide o bloco pelo cursor de edição na onda ou pelo cursor do texto.")
+            self.split_button.setToolTip(
+                "Divide o bloco pelo cursor de edição na onda, pela posição do player\n"
+                "ou no tempo exato da palavra sob o cursor do texto.")
             self.split_button.clicked.connect(self.split_current_turn)
             button_row.addWidget(self.split_button)
             button_row.addStretch()
@@ -5148,7 +5192,9 @@ if QT_IMPORT_ERROR is None:
             line = QFrame()
             line.setFrameShape(QFrame.Shape.HLine)
             grid.addWidget(line, 4, 0, 1, 4)
-            hint = QLabel("Dica: clique no texto para editar; clique no tempo ou de duplo clique na linha para ir ao audio.")
+            hint = QLabel(
+                "Dica: clique no texto para editar; duplo clique numa palavra leva o audio ate ela; "
+                "clique no tempo ou duplo clique na linha para ir ao inicio do bloco.")
             hint.setStyleSheet(_style_muted())
             grid.addWidget(hint, 5, 0, 1, 4)
             return group
@@ -5771,6 +5817,14 @@ if QT_IMPORT_ERROR is None:
                 self.turns = review_store.review_turns(self.review)
                 self.media_candidates = app_service.get_media_candidates(self.context, interview_id)
                 self.undo_stack.clear()
+                # Fase 3: tempos por palavra direto do ASR raw (fail-soft:
+                # sem ASR/words, as features de palavra somem em silencio).
+                from . import words as words_mod
+                try:
+                    self.word_index = words_mod.load_word_index(self.context.paths, interview_id)
+                except Exception:  # noqa: BLE001 - palavras sao opcionais
+                    self.word_index = []
+                self._word_uncertain_cutoff = words_mod.uncertain_threshold(self.word_index)
             except Exception as exc:
                 QMessageBox.critical(self, "Não foi possível abrir", sanitize_message(str(exc)))
                 # Falha pode ocorrer apos atribuicoes parciais (review/id novos
@@ -5785,6 +5839,11 @@ if QT_IMPORT_ERROR is None:
             self.set_editor_enabled(True)
             self.set_media_source(preferred_media_index(self.media_candidates))
             self.load_waveform()
+            cutoff = self._word_uncertain_cutoff
+            self.waveform_widget.set_words([
+                (word["start"],
+                 cutoff is not None and word["score"] is not None and word["score"] <= cutoff)
+                for word in self.word_index])
             self.load_turn_table()
             if self.turns:
                 self.select_turn_by_index(0, seek=False)
@@ -6166,6 +6225,8 @@ if QT_IMPORT_ERROR is None:
             self.current_turn_id = None
             self.current_play_row = None
             self.turns = []
+            self.word_index = []
+            self._word_uncertain_cutoff = None
             self.turn_table.setRowCount(0)
             self.text_edit.clear()
             self.undo_stack.clear()
@@ -6189,6 +6250,8 @@ if QT_IMPORT_ERROR is None:
             self.media_candidates = []
             self.media_candidate_index = 0
             self.turns = []
+            self.word_index = []
+            self._word_uncertain_cutoff = None
             self.review_title.setText("Abra um arquivo para editar a transcricao.")
             self.turn_table.setRowCount(0)
             self.waveform_widget.set_waveform([], 0)
@@ -6324,6 +6387,28 @@ if QT_IMPORT_ERROR is None:
         def seek_waveform(self, seconds: float) -> None:
             self.waveform_widget.set_edit_cursor(seconds)
             self.seek_player(int(seconds * 1000))
+
+        def _seek_word_at_char(self, char_pos: int) -> None:
+            """Duplo clique no texto: leva o audio ate a palavra (fase 3).
+
+            Sem indice de palavras (arquivo so-midia, ASR ausente), o gesto
+            degrada para a selecao padrao da palavra, sem seek.
+            """
+            if not self.review or not self.current_turn_id or not self.word_index:
+                return
+            try:
+                index = review_store.find_turn_index(self.review, self.current_turn_id)
+            except KeyError:
+                return
+            from . import words as words_mod
+            turn = self.turns[index]
+            turn_start = float(turn.get("start", 0) or 0)
+            turn_end = float(turn.get("end", turn_start) or turn_start)
+            time_s, _exact = words_mod.word_time_for_char(
+                words_mod.words_in_range(self.word_index, turn_start, turn_end),
+                self.text_edit.toPlainText(), char_pos)
+            if time_s is not None:
+                self.seek_waveform(float(time_s))
 
         def load_turn_table(self) -> None:
             self.current_play_row = None
@@ -6772,10 +6857,23 @@ if QT_IMPORT_ERROR is None:
                 split_time = player_time
                 split_note = "tempo definido pela posição do player"
             else:
-                text_length = max(1, len(self.text_edit.toPlainText().strip()))
-                ratio = max(0.01, min(0.99, split_char / text_length))
-                split_time = turn_start + ((turn_end - turn_start) * ratio)
-                split_note = "tempo estimado pela posição do cursor no texto"
+                # Fase 3: a palavra sob o cursor de texto da o tempo exato;
+                # a interpolacao linear vira ultimo recurso (sem palavras).
+                from . import words as words_mod
+                stripped = self.text_edit.toPlainText().strip()
+                word_time, word_exact = words_mod.word_time_for_char(
+                    words_mod.words_in_range(self.word_index, turn_start, turn_end),
+                    stripped, split_char)
+                if word_time is not None and turn_start < word_time < turn_end:
+                    split_time = float(word_time)
+                    split_note = (
+                        "tempo exato da palavra sob o cursor" if word_exact
+                        else "tempo aproximado pela palavra mais próxima")
+                else:
+                    text_length = max(1, len(stripped))
+                    ratio = max(0.01, min(0.99, split_char / text_length))
+                    split_time = turn_start + ((turn_end - turn_start) * ratio)
+                    split_note = "tempo estimado pela posição do cursor no texto"
             try:
                 new_id = review_store.split_turn(self.review, self.current_turn_id, split_time=split_time, split_char=split_char)
                 app_service.save_review(self.context, self.current_interview_id, self.review)

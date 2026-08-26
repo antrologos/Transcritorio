@@ -67,6 +67,14 @@ oficial passa a ser **PyPI + uv** (`uv tool install transcritorio`); ver
   transcrição nunca somem em silêncio; projeto sem transcrição alguma
   explica em vez de não fazer nada; o seletor se atualiza ao voltar para
   a janela. Tooltips de buscar/perguntar/resumir declaram o escopo.
+- Tempos por palavra no Estúdio (fase 3): o alinhamento do Whisper
+  sempre produziu o tempo de cada palavra — agora o editor os usa.
+  Duplo clique numa palavra do texto leva o áudio exatamente até ela;
+  "Dividir bloco" corta no tempo exato da palavra sob o cursor (a nota
+  do rodapé diz qual fonte foi usada); com zoom na onda sonora aparecem
+  ticks no início de cada palavra, e os do decil inferior de confiança
+  do alinhamento ficam âmbar (posição incerta). Tudo degrada em
+  silêncio quando não há transcrição/palavras (ex.: arquivos só-mídia).
 - Busca semântica mais limpa: o vetor de cada bloco passa a ser
   calculado com janela de contexto (fim do bloco anterior + bloco +
   início do seguinte), então falas curtas e interjeições só aparecem
