@@ -47,6 +47,17 @@ oficial passa a ser **PyPI + uv** (`uv tool install transcritorio`); ver
   marcados (no lugar de "Ver primeira"), contagem que atualiza ao
   desmarcar Dúvida (e o banner some ao zerar), e a explicação da
   marcação agora aparece no painel do editor — não só como tooltip.
+- **✨ Perguntar às entrevistas com AI** (fase 2.7): faça uma pergunta e
+  receba uma resposta composta APENAS a partir dos trechos das
+  transcrições, com citações [n] clicáveis que abrem cada trecho no
+  áudio; sem base suficiente, a resposta é a recusa honesta ("isso não
+  aparece nas entrevistas") — resposta sem citação válida é descartada
+  por construção. Janela própria (botão na barra principal) que também
+  encontra trechos por significado sem compor resposta. Requer GPU
+  NVIDIA; AI 100% local. CLI: `transcritorio-cli ask --question "..."`.
+- Identidade de AI: ações assistivas ganham ✨ e o selo "AI local — nada
+  sai do seu computador"; resumo renomeado "✨ Resumir a entrevista com
+  AI"; busca de palavras separada em janela própria e minimalista.
 - Busca nas transcrições (fase 2.3): **Ctrl+F** filtra os blocos do
   arquivo aberto em tempo real (barra estilo navegador, ‹ › navegam, Esc
   fecha); **Ctrl+Shift+F** (ou Editar → Buscar nas transcrições) abre a

@@ -96,6 +96,44 @@ def merge_notes(window_notes: list[list[dict]]) -> str:
     return "\n".join(lines)
 
 
+def format_trechos(trechos: list[dict]) -> str:
+    """Trechos numerados [1..n] para o prompt de pergunta (puro, testavel)."""
+    lines = []
+    for index, trecho in enumerate(trechos, start=1):
+        label = str(trecho.get("label") or "?")
+        inicio = str(trecho.get("inicio") or "")
+        texto = " ".join(str(trecho.get("text") or "").split())
+        lines.append(f"[{index}] ({trecho.get('interview_id')}, {inicio}, {label}) {texto}")
+    return "\n".join(lines)
+
+
+SEM_RESPOSTA = "Isso nao aparece nas entrevistas disponiveis."
+
+
+def validate_answer(resposta: str, n_trechos: int) -> bool:
+    """Resposta valida = cita ao menos um [n] existente OU e a recusa exata.
+
+    Ancoragem por construcao: afirmacao sem citacao nao passa (puro,
+    testavel)."""
+    import re as _re
+
+    if SEM_RESPOSTA.lower() in resposta.lower():
+        return True
+    cited = {int(m) for m in _re.findall(r"\[(\d+)\]", resposta)}
+    return bool(cited) and all(1 <= c <= n_trechos for c in cited)
+
+
+PERGUNTA_PROMPT = (
+    "Voce responde perguntas de um pesquisador sobre entrevistas transcritas, usando "
+    "APENAS os trechos numerados abaixo. Regras OBRIGATORIAS:\n"
+    "1. Toda afirmacao deve citar o(s) trecho(s) que a sustentam, no formato [n].\n"
+    "2. Nao use nenhum conhecimento externo; nao invente.\n"
+    f"3. Se os trechos nao contem a resposta, escreva exatamente: {SEM_RESPOSTA}\n"
+    "4. Responda em portugues, direto, em ate 200 palavras.\n\n"
+    "{contexto}=== TRECHOS ===\n{trechos}\n\n=== PERGUNTA ===\n{pergunta}"
+)
+
+
 MAP_PROMPT = (
     "Voce recebera um TRECHO de uma entrevista academica transcrita (portugues "
     "brasileiro), com timestamps. Liste os temas tratados NESTE trecho.\n"
@@ -117,46 +155,14 @@ REDUCE_PROMPT = (
 )
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--task", required=True, choices=["sumario"])
-    parser.add_argument("--review", required=True)
-    parser.add_argument("--out", required=True)
-    parser.add_argument("--model-repo", required=True)
-    parser.add_argument("--context-file", default="")
-    parser.add_argument("--hf-cache", default="")
-    args = parser.parse_args()
-
-    if args.hf_cache:
-        # Cache do app; offline: o modelo ja esta pinado e baixado.
-        os.environ["HF_HUB_CACHE"] = args.hf_cache
-        os.environ["HF_HOME"] = str(Path(args.hf_cache).parent)
-        os.environ["HF_HUB_OFFLINE"] = "1"
-
-    payload = json.loads(Path(args.review).read_text(encoding="utf-8"))
-    turns = load_turns(payload)
-    if not turns:
-        print("Transcricao vazia; nada a resumir.")
-        return 1
-    windows = build_windows(turns)
-
-    contexto = ""
-    fora_do_roteiro = ""
-    if args.context_file:
-        context_path = Path(args.context_file)
-        if context_path.exists():
-            raw = context_path.read_text(encoding="utf-8").strip()
-            if raw:
-                contexto = f"=== CONTEXTO DA PESQUISA ===\n{raw[:6000]}\n\n"
-                fora_do_roteiro = " fora do roteiro"
-
-    emit(5, "Carregando o modelo de analise local...")
+def _make_asker(model_repo: str):
+    """Carrega o modelo 4-bit e devolve ask(prompt, max_new_tokens)."""
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
-    tokenizer = AutoTokenizer.from_pretrained(args.model_repo)
+    tokenizer = AutoTokenizer.from_pretrained(model_repo)
     model = AutoModelForCausalLM.from_pretrained(
-        args.model_repo,
+        model_repo,
         quantization_config=BitsAndBytesConfig(
             load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16, bnb_4bit_quant_type="nf4"),
         device_map="cuda:0",
@@ -176,10 +182,95 @@ def main() -> int:
             output = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
         return tokenizer.decode(output[0][inputs.input_ids.shape[1]:], skip_special_tokens=True).strip()
 
+    return ask
+
+
+def _run_perguntar(args) -> int:
+    """Resposta ancorada nos trechos recuperados, com citacoes [n]."""
+    trechos = json.loads(Path(args.trechos_file).read_text(encoding="utf-8"))
+    out_path = Path(args.out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    if not trechos:
+        out_path.write_text(json.dumps(
+            {"resposta": SEM_RESPOSTA, "valida": True}, ensure_ascii=False), encoding="utf-8")
+        emit(100, "Sem trechos relevantes.")
+        return 0
+    contexto = ""
+    if args.context_file:
+        context_path = Path(args.context_file)
+        if context_path.exists():
+            raw = context_path.read_text(encoding="utf-8").strip()
+            if raw:
+                contexto = f"=== CONTEXTO DA PESQUISA ===\n{raw[:4000]}\n\n"
+    emit(15, "Carregando o Qwen 3.5, nosso modelo de AI local...")
+    ask = _make_asker(args.model_repo)
+    emit(55, "Escrevendo a resposta com base nos trechos...")
+    resposta = ask(
+        PERGUNTA_PROMPT.format(
+            contexto=contexto, trechos=format_trechos(trechos), pergunta=args.question),
+        max_new_tokens=600,
+    )
+    valida = validate_answer(resposta, len(trechos))
+    if not valida:
+        # Ancoragem por construcao: resposta sem citacao nao e entregue
+        # como resposta — vira recusa honesta.
+        resposta = SEM_RESPOSTA
+        valida = True
+    out_path.write_text(json.dumps(
+        {"resposta": resposta, "valida": valida}, ensure_ascii=False, indent=1),
+        encoding="utf-8")
+    emit(100, "Resposta pronta.")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--task", required=True, choices=["sumario", "perguntar"])
+    parser.add_argument("--question", default="")
+    parser.add_argument("--trechos-file", default="")
+    parser.add_argument("--review", default="")
+    parser.add_argument("--out", required=True)
+    parser.add_argument("--model-repo", required=True)
+    parser.add_argument("--context-file", default="")
+    parser.add_argument("--hf-cache", default="")
+    args = parser.parse_args()
+
+    if args.hf_cache:
+        # Cache do app; offline: o modelo ja esta pinado e baixado.
+        os.environ["HF_HUB_CACHE"] = args.hf_cache
+        os.environ["HF_HOME"] = str(Path(args.hf_cache).parent)
+        os.environ["HF_HUB_OFFLINE"] = "1"
+
+    if args.task == "perguntar":
+        return _run_perguntar(args)
+
+    if not args.review:
+        print("--review e obrigatorio para a tarefa sumario.")
+        return 1
+    payload = json.loads(Path(args.review).read_text(encoding="utf-8"))
+    turns = load_turns(payload)
+    if not turns:
+        print("Transcricao vazia; nada a resumir.")
+        return 1
+    windows = build_windows(turns)
+
+    contexto = ""
+    fora_do_roteiro = ""
+    if args.context_file:
+        context_path = Path(args.context_file)
+        if context_path.exists():
+            raw = context_path.read_text(encoding="utf-8").strip()
+            if raw:
+                contexto = f"=== CONTEXTO DA PESQUISA ===\n{raw[:6000]}\n\n"
+                fora_do_roteiro = " fora do roteiro"
+
+    emit(5, "Carregando o Qwen 3.5, nosso modelo de AI local...")
+    ask = _make_asker(args.model_repo)
+
     window_notes: list[list[dict]] = []
     for index, window in enumerate(windows, start=1):
         emit(5 + int(75 * index / max(1, len(windows))),
-             f"Lendo a entrevista ({index}/{len(windows)})...")
+             f"O Qwen esta lendo a entrevista e anotando os temas ({index}/{len(windows)})...")
         answer = ask(MAP_PROMPT.format(contexto=contexto, janela=window), max_new_tokens=500)
         window_notes.append(extract_json_list(answer))
 

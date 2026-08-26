@@ -227,7 +227,10 @@ def build_indexes(
             progress_callback({
                 "event": "index_progress",
                 "progress": int(100 * position / len(stale)),
-                "message": f"Preparando busca por sentido: {interview_id} ({position + 1}/{len(stale)})",
+                "message": (
+                    f"Lendo {interview_id} com o modelo de busca semantica "
+                    f"({position + 1}/{len(stale)})..."
+                ),
             })
         try:
             source = source_path_for(paths, interview_id)

@@ -2356,25 +2356,34 @@ if QT_IMPORT_ERROR is None:
             self.setMinimumSize(720, 500)
             layout = QVBoxLayout(self)
             intro = QLabel(
-                "Descreva um tema com as suas palavras — a AI encontra os trechos pelo "
-                "significado, mesmo quando as palavras exatas não aparecem.\n"
-                "Em breve: faça perguntas e receba respostas citando os trechos.\n"
+                "Faça uma pergunta e receba a resposta citando os trechos [n] — ou "
+                "descreva um tema para encontrá-los pelo significado.\n"
                 "AI 100% local — nada sai do seu computador.")
             intro.setWordWrap(True)
             intro.setStyleSheet(_style_muted())
             layout.addWidget(intro)
             row = QHBoxLayout()
             self.query_input = QLineEdit()
-            self.query_input.setPlaceholderText("um tema, uma situação, uma ideia…")
-            self.query_input.returnPressed.connect(self.run_explore)
+            self.query_input.setPlaceholderText("uma pergunta, um tema, uma situação…")
+            self.query_input.returnPressed.connect(self.run_question)
             row.addWidget(self.query_input, 1)
-            explore_button = QPushButton("Explorar")
+            ask_button = QPushButton("✨ Perguntar")
+            ask_button.setToolTip("A AI responde com base nos trechos, citando-os (pode levar ~1 min).")
+            ask_button.clicked.connect(self.run_question)
+            row.addWidget(ask_button)
+            explore_button = QPushButton("Encontrar trechos")
+            explore_button.setToolTip("So encontra os trechos pelo significado, sem compor resposta (rapido).")
             explore_button.clicked.connect(self.run_explore)
             row.addWidget(explore_button)
             layout.addLayout(row)
+            self.answer_view = QTextEdit()
+            self.answer_view.setReadOnly(True)
+            self.answer_view.setVisible(False)
+            self.answer_view.setMaximumHeight(180)
+            layout.addWidget(self.answer_view)
             self.results = self._make_results_list()
             layout.addWidget(self.results, 1)
-            self.prepare_button = QPushButton("Preparar exploração")
+            self.prepare_button = QPushButton("Preparar")
             self.prepare_button.setVisible(False)
             self.prepare_button.clicked.connect(self._prepare)
             layout.addWidget(self.prepare_button)
@@ -2392,32 +2401,42 @@ if QT_IMPORT_ERROR is None:
             bottom.addWidget(close_button)
             layout.addLayout(bottom)
 
-        def run_explore(self) -> None:
+        def _ready_query(self) -> tuple[list[str], str] | None:
+            """Gating comum de perguntar/explorar: contexto, consulta,
+            encoder baixado e indices frescos. None = ainda nao da."""
             from . import search as _search
             ctx = self._window.context
             query = self.query_input.text().strip()
             if ctx is None or not query or (self._worker and self._worker.isRunning()):
-                return
+                return None
             ids = self._project_ids()
             self.results.clear()
+            self.answer_view.setVisible(False)
             self.prepare_button.setVisible(False)
             self.exact_hint_button.setVisible(False)
             self.status_label.setText("")
             if not _search.encoder_cached():
-                self.prepare_button.setText("Preparar exploração (baixa um modelo de ~0,5 GB, uma vez)")
+                self.prepare_button.setText("Preparar (baixa um modelo de ~0,5 GB, uma vez)")
                 self.prepare_button.setVisible(True)
                 self.status_label.setText(
-                    "A exploração usa um modelo pequeno e local que ainda não foi baixado.")
-                return
+                    "Esta janela usa um modelo pequeno e local que ainda não foi baixado.")
+                return None
             stale = [iid for iid in ids if not _search.index_is_fresh(ctx.paths, iid)]
             if stale:
-                self.prepare_button.setText(
-                    f"Preparar exploração ({len(stale)} arquivo(s), ~1 min)")
+                self.prepare_button.setText(f"Preparar ({len(stale)} arquivo(s), ~1 min)")
                 self.prepare_button.setVisible(True)
             if len(stale) >= len(ids):
+                return None
+            return ids, query
+
+        def run_explore(self) -> None:
+            from . import search as _search
+            ready = self._ready_query()
+            if ready is None:
                 return
+            ids, query = ready
+            paths = self._window.context.paths
             self.status_label.setText("Explorando…")
-            paths = ctx.paths
 
             def fn(_emit):
                 similar = _search.project_semantic_search(paths, ids, query)
@@ -2425,6 +2444,44 @@ if QT_IMPORT_ERROR is None:
                 return similar, exact_count
 
             self._start_worker(fn, self._on_explore_done)
+
+        def run_question(self) -> None:
+            from . import ask as _ask
+            ready = self._ready_query()
+            if ready is None:
+                return
+            ids, query = ready
+            paths = self._window.context.paths
+            self.status_label.setText("Perguntando à AI local (pode levar ~1 minuto)…")
+
+            def fn(emit):
+                return _ask.run_ask(paths, ids, query, progress_callback=emit)
+
+            self._start_worker(
+                fn, self._on_question_done,
+                on_progress=lambda d: self.status_label.setText(str(d.get("message") or "")))
+
+        def _on_question_done(self, result, error: str) -> None:
+            self.status_label.setText("")
+            if error:
+                self.status_label.setText(f"Não foi possível responder: {error}")
+                return
+            payload = result or {}
+            if payload.get("erro"):
+                self.status_label.setText(str(payload["erro"]))
+                return
+            self.answer_view.setPlainText(str(payload.get("resposta") or ""))
+            self.answer_view.setVisible(True)
+            for trecho in payload.get("trechos") or []:
+                self._add_hit(self.results, f"[{trecho['n']}]  ", {
+                    "interview_id": trecho["interview_id"],
+                    "start": trecho["start"],
+                    "label": trecho["label"],
+                    "text": trecho["text"],
+                })
+            if not payload.get("trechos"):
+                self.status_label.setText(
+                    "Nenhum trecho próximo o suficiente — a resposta acima reflete isso.")
 
         def _on_explore_done(self, result, error: str) -> None:
             self.status_label.setText("")
@@ -3709,8 +3766,8 @@ if QT_IMPORT_ERROR is None:
 
             self.explore_action = QAction("✨ Perguntar às entrevistas com AI...", self)
             self.explore_action.setToolTip(
-                "Encontra trechos pelo SIGNIFICADO, mesmo sem as palavras exatas.\n"
-                "Em breve: perguntas com respostas citando os trechos.\n"
+                "Faça perguntas e receba respostas citando os trechos, ou encontre\n"
+                "trechos pelo significado, mesmo sem as palavras exatas.\n"
                 "AI local — nada sai do seu computador.")
             self.explore_action.triggered.connect(self.open_explore)
 
@@ -7434,9 +7491,9 @@ if QT_IMPORT_ERROR is None:
             for index, interview_id in enumerate(ids, start=1):
                 prefix = f"{index}/{len(ids)} {interview_id}"
                 file_steps = [
-                    self.job_step(f"{prefix}: preparando audio...", interview_id, "preparar audio", r[0], r[1], lambda item=interview_id: app_service.prepare_interviews(self.context, ids=[item])),
+                    self.job_step(f"{prefix}: convertendo o audio para WAV 16 kHz...", interview_id, "preparar audio", r[0], r[1], lambda item=interview_id: app_service.prepare_interviews(self.context, ids=[item])),
                     self.job_step(
-                        f"{prefix}: transcrevendo fala...",
+                        f"{prefix}: transcrevendo com o Whisper ({asr_model})...",
                         interview_id,
                         "transcrever",
                         r[1],
@@ -7454,7 +7511,7 @@ if QT_IMPORT_ERROR is None:
                 if do_diarize:
                     file_steps.append(
                         self.job_step(
-                            f"{prefix}: identificando falantes...",
+                            f"{prefix}: separando as vozes (pyannote)...",
                             interview_id,
                             "identificar falantes",
                             r[2],

@@ -111,6 +111,12 @@ def main(argv: list[str] | None = None) -> int:
         help="(Re)constroi os indices desatualizados antes de buscar.")
     search_parser.set_defaults(func=cmd_search)
 
+    ask_parser = subparsers.add_parser(
+        "ask", help="Ask the transcripts a question (local LLM, cited answer).")
+    add_ids_arg(ask_parser)
+    ask_parser.add_argument("--question", required=True)
+    ask_parser.set_defaults(func=cmd_ask)
+
     models_parser = subparsers.add_parser("models", help="Manage local ASR/diarization models.")
     models_subparsers = models_parser.add_subparsers(dest="models_command", required=True)
     models_status_parser = models_subparsers.add_parser("status", help="Show required model cache status.")
@@ -399,6 +405,31 @@ def cmd_search(args: argparse.Namespace) -> int:
                   f"{hit['label']}: {hit['text'][:100]}")
     else:
         print("(busca por sentido indisponivel: modelo ainda nao baixado)")
+    return 0
+
+
+def cmd_ask(args: argparse.Namespace) -> int:
+    from . import search as search_mod
+    from .ask import run_ask
+
+    config, paths = load_context(args)
+    rows = load_manifest_or_exit(paths)
+    ids = [
+        r["interview_id"] for r in rows
+        if search_mod.source_path_for(paths, r["interview_id"]) is not None
+        and (not args.ids or r["interview_id"] in set(args.ids))
+    ]
+    search_mod.build_indexes(paths, ids)
+    result = run_ask(paths, ids, args.question,
+                     progress_callback=lambda d: print(d.get("message", ""), flush=True))
+    if result.get("erro"):
+        print(result["erro"])
+        return 1
+    print("\n" + str(result.get("resposta") or ""))
+    print("\nTrechos citados:")
+    for trecho in result.get("trechos") or []:
+        print(f"  [{trecho['n']}] {trecho['interview_id']} {trecho['inicio']} "
+              f"{trecho['label']}: {trecho['text'][:80]}")
     return 0
 
 
