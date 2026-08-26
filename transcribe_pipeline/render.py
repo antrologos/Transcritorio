@@ -120,6 +120,19 @@ def speaker_sort_key(label: str) -> tuple[int, int | str]:
 
 def load_external_diarization(paths: Paths, interview_id: str, config: dict) -> list[dict[str, Any]]:
     source = str(config.get("diarization_source", "whisperx")).lower()
+    if source == "channels":
+        # Fase 4: segmentos por dominancia de canal (channels.py), mesmo
+        # contrato {start, end, speaker}. So valem quando a analise
+        # decidiu que os canais sao informativos; senao, lista vazia e o
+        # render segue o fluxo atual.
+        path = paths.diarization_dir / "json" / f"{interview_id}.channels.json"
+        if not path.exists():
+            print(f"Aviso: diarização por canais configurada mas arquivo não encontrado: {path.name}", flush=True)
+            return []
+        payload = read_json(path)
+        if str(payload.get("decision")) != "informative":
+            return []
+        return [segment for segment in payload.get("segments", []) if isinstance(segment, dict)]
     if source not in {"pyannote_exclusive", "exclusive"}:
         return []
     path = paths.diarization_dir / "json" / f"{interview_id}.exclusive.json"

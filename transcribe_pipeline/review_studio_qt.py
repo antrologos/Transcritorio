@@ -7805,7 +7805,7 @@ if QT_IMPORT_ERROR is None:
                             "identificar falantes",
                             r[2],
                             r[3],
-                            lambda progress, should_cancel, item=interview_id: self._diarize_via_subprocess(
+                            lambda progress, should_cancel, item=interview_id: self._diarize_then_channels(
                                 item, progress, should_cancel,
                             ),
                             accepts_progress=True,
@@ -7818,7 +7818,12 @@ if QT_IMPORT_ERROR is None:
                     # overrides decididos NA HORA do render: se a diarizacao
                     # (opcional) falhou, o exclusive.json nao existe e o render
                     # cai para o modo sem falantes em vez de falhar o lote.
-                    self.job_step(f"{prefix}: montando transcricao editavel...", interview_id, "montar transcricao", r[3], r[4], lambda item=interview_id: app_service.render_interviews(self.context, ids=[item], overrides=(render_overrides if self._exclusive_diarization_exists(item) else {}))),
+                    # Fonte do render decidida NA HORA: canais informativos
+                    # (fase 4) tem prioridade; senao pyannote_exclusive; senao
+                    # modo sem falantes.
+                    self.job_step(f"{prefix}: montando transcricao editavel...", interview_id, "montar transcricao", r[3], r[4], lambda item=interview_id: app_service.render_interviews(self.context, ids=[item], overrides=(
+                        {"diarization_source": "channels"} if self._channels_diarization_exists(item)
+                        else (render_overrides if self._exclusive_diarization_exists(item) else {})))),
                 )
                 if do_boundary:
                     file_steps.append(
@@ -7983,6 +7988,79 @@ if QT_IMPORT_ERROR is None:
                 return (self.context.paths.diarization_dir / "json" / f"{interview_id}.exclusive.json").exists()
             except Exception:
                 return False
+
+        def _channels_diarization_exists(self, interview_id: str) -> bool:
+            """channels.json com decisao informative (fase 4): os canais
+            carregam microfones distintos e viram a fonte do render."""
+            try:
+                path = self.context.paths.diarization_dir / "json" / f"{interview_id}.channels.json"
+                if not path.exists():
+                    return False
+                from .utils import read_json as _read_json
+                return str(_read_json(path).get("decision")) == "informative"
+            except Exception:
+                return False
+
+        def _diarize_then_channels(
+            self,
+            interview_id: str,
+            progress_callback: Callable[[dict[str, Any]], None] | None = None,
+            should_cancel: Callable[[], bool] | None = None,
+        ) -> app_service.JobResult:
+            """Diarizacao + analise de canais no MESMO passo (fase 4).
+
+            A analise le os {id}.ch{n}.wav extraidos no preparo e casa os
+            rotulos com os centroides do pyannote; e best-effort (nunca
+            muda o resultado da diarizacao) e, em arquivos mono, nem o
+            subprocesso e lancado.
+            """
+            result = self._diarize_via_subprocess(interview_id, progress_callback, should_cancel)
+            channels_result = self._channels_via_subprocess(interview_id, progress_callback, should_cancel)
+            if channels_result.failures:
+                _logger.warning("analise de canais de %s falhou", interview_id)
+            return result
+
+        def _channels_via_subprocess(
+            self,
+            ids: str | list[str],
+            progress_callback: Callable[[dict[str, Any]], None] | None = None,
+            should_cancel: Callable[[], bool] | None = None,
+        ) -> app_service.JobResult:
+            """Analise de canais via CLI em subprocesso (fase 4).
+
+            Mesmo racional da diarizacao: a fusao de rotulos usa torch/
+            pyannote e roda no processo filho. Arquivos sem {id}.ch{n}.wav
+            sao pulados aqui mesmo, sem custo de subprocesso.
+            """
+            from . import runtime as _rt
+            from .channels import channel_wav_paths as _channel_wav_paths
+            from .utils import parse_progress_json_line, run_command_stream
+            id_list = [ids] if isinstance(ids, str) else list(ids)
+            failures = 0
+            for iid in id_list:
+                if should_cancel is not None and should_cancel():
+                    break
+                row = next((r for r in self.context.rows if r["interview_id"] == iid), None)
+                if row is None or not _channel_wav_paths(self.context.paths, row):
+                    continue
+
+                def on_output(line: str) -> None:
+                    detail = parse_progress_json_line(line)
+                    if detail is not None and progress_callback is not None:
+                        progress_callback(detail)
+
+                command = _rt.cli_command(
+                    "--project", str(self.context.paths.project_root),
+                    "channels", "--ids", iid, "--progress-json",
+                )
+                completed = run_command_stream(command, on_output=on_output, should_cancel=should_cancel)
+                if completed.returncode != 0:
+                    failures += 1
+                    _logger.warning("analise de canais de %s saiu com codigo %s", iid, completed.returncode)
+            return app_service.JobResult(
+                "channels", failures,
+                "" if failures == 0 else f"{failures} arquivo(s) com falha na analise de canais.",
+            )
 
         def _diarize_via_subprocess(
             self,

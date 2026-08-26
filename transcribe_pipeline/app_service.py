@@ -298,6 +298,26 @@ def boundary_check_interviews(
     return JobResult("boundary-check", failures)
 
 
+def analyze_channels_interviews(
+    context: ProjectContext,
+    ids: list[str] | None = None,
+    overrides: dict[str, Any] | None = None,
+    progress_callback: ProgressCallback | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+) -> JobResult:
+    """Fase 4: analise de canais (microfones separados) das selecionadas."""
+    from .channels import run_channel_analysis
+
+    failures = 0
+    for interview_id in selected_ids(context, ids):
+        config = project_store.config_with_file_metadata(merged_config(context.config, overrides), context.metadata.get(interview_id))
+        failures += run_channel_analysis(
+            context.rows, config, context.paths, ids=[interview_id],
+            progress_callback=progress_callback, should_cancel=should_cancel,
+        )
+    return JobResult("channels", failures)
+
+
 def models_status_text() -> str:
     return model_manager.status_text()
 
