@@ -4258,8 +4258,17 @@ if QT_IMPORT_ERROR is None:
             self.transcribe_current_button.setVisible(False)
             self.improve_speakers_button = self.action_button(self.improve_speakers_action)
             self.improve_speakers_button.setVisible(False)
+            # Presenca contextual do resumo (feedback 2026-08-26): o botao so
+            # existe quando ESTE arquivo tem resumo salvo — um clique, abre.
+            self.open_resumo_button = QPushButton("Abrir resumo com temas")
+            self.open_resumo_button.setToolTip(
+                "Abre o resumo com indice tematico ja gerado para este arquivo\n"
+                "(05_transcripts_review/final/md/).")
+            self.open_resumo_button.setVisible(False)
+            self.open_resumo_button.clicked.connect(self._open_current_resumo)
             self.open_file_action_row.addWidget(self.transcribe_current_button)
             self.open_file_action_row.addWidget(self.improve_speakers_button)
+            self.open_file_action_row.addWidget(self.open_resumo_button)
             self.open_file_action_row.addStretch()
             layout.addLayout(self.open_file_action_row)
 
@@ -5973,6 +5982,12 @@ if QT_IMPORT_ERROR is None:
             if hasattr(self, "improve_speakers_button"):
                 self.improve_speakers_button.setVisible(has_review)
                 self.improve_speakers_button.setEnabled(not busy and has_review)
+            if hasattr(self, "open_resumo_button"):
+                has_resumo = False
+                if self.current_interview_id and self.context is not None:
+                    from .summarize import resumo_path as _resumo_path
+                    has_resumo = _resumo_path(self.context.paths, self.current_interview_id).exists()
+                self.open_resumo_button.setVisible(has_resumo)
 
         def restore_review_snapshot(self, snapshot: dict[str, Any], selected_turn_id: str | None = None) -> None:
             if not self.current_interview_id:
@@ -7377,6 +7392,14 @@ if QT_IMPORT_ERROR is None:
             # Ponte minima (feedback 2026-08-26: "nao sei onde salvou"):
             # ao concluir, mostrar onde ficou com Abrir resumo/Abrir pasta.
             self._pending_summary_ids = list(ids)
+
+        def _open_current_resumo(self) -> None:
+            if not self.current_interview_id or self.context is None:
+                return
+            from .summarize import resumo_path as _resumo_path
+            path = _resumo_path(self.context.paths, self.current_interview_id)
+            if path.exists():
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
         def _show_summary_results(self, ids: list[str]) -> None:
             """Aviso de conclusao do resumo com acesso direto ao arquivo.
