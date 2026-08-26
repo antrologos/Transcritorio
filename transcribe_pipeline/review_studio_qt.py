@@ -129,6 +129,43 @@ def preferred_media_index(candidates: list[Path]) -> int:
     return 0
 
 
+def _promote_staging_to_files(
+    staging: Path,
+    files_dir: Path,
+    delays: tuple[float, ...] = (0.0, 0.2, 0.4, 0.8, 1.6, 3.2),
+) -> None:
+    """Conclui a promocao staging/ -> files/ tolerando o lock do Dropbox.
+
+    O rename de diretorio falha com WinError 5 quando o cliente Dropbox
+    segura handles dos arquivos recem-copiados para sincroniza-los
+    (incidente de 2026-08-25 — mesma familia da regra "sem renames
+    atomicos" do pipeline). Tenta o rename com recuos; se persistir,
+    promove arquivo a arquivo (moves individuais nao sofrem o lock do
+    diretorio) preservando a estrutura relativa.
+    """
+    import shutil
+    import time as _time
+
+    last_error: Exception | None = None
+    for delay in delays:
+        if delay:
+            _time.sleep(delay)
+        try:
+            staging.rename(files_dir)
+            return
+        except OSError as exc:
+            last_error = exc
+    for src in sorted(staging.rglob("*")):
+        if not src.is_file():
+            continue
+        dest = files_dir / src.relative_to(staging)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src), str(dest))
+    shutil.rmtree(staging, ignore_errors=True)
+    if not files_dir.exists():
+        raise last_error or OSError("nao foi possivel promover staging para files")
+
+
 def boundary_flagged_rows(turns: list[dict[str, Any]]) -> list[int]:
     """Turnos da verificacao acustica de trocas que o usuario ainda NAO
     tratou: precisam do marcador na nota (origem automatica) E do flag
@@ -1233,9 +1270,9 @@ if QT_IMPORT_ERROR is None:
                     shutil.rmtree(trash_dir, ignore_errors=True)
                     self.finished_result.emit(None, "cancelado")
                     return
-                # Rename staging -> files (atomico, mesmo dir)
+                # Promover staging -> files (tolerante ao lock do Dropbox)
                 files_dir = trash_dir / "files"
-                staging.rename(files_dir)
+                _promote_staging_to_files(staging, files_dir)
                 # Ajustar trashed paths: "staging/..." -> "files/..."
                 for mf in moved_files:
                     mf["trashed"] = mf["trashed"].replace("staging/", "files/", 1)
@@ -6362,7 +6399,7 @@ if QT_IMPORT_ERROR is None:
                         "mtime": float(src.stat().st_mtime),
                     })
                 files_dir = trash_dir / "files"
-                staging.rename(files_dir)
+                _promote_staging_to_files(staging, files_dir)
                 for mf in moved_files:
                     mf["trashed"] = mf["trashed"].replace("staging/", "files/", 1)
                 entry_dict = project_store._build_undo_entry(
