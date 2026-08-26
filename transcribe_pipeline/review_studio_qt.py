@@ -2252,9 +2252,27 @@ if QT_IMPORT_ERROR is None:
             self.prepare_button.setVisible(False)
             self.prepare_button.clicked.connect(self._prepare_semantic)
             layout.addWidget(self.prepare_button)
+            bottom = QHBoxLayout()
             self.status_label = QLabel("")
             self.status_label.setWordWrap(True)
-            layout.addWidget(self.status_label)
+            bottom.addWidget(self.status_label, 1)
+            close_button = QPushButton("Fechar")
+            close_button.clicked.connect(self.close)
+            bottom.addWidget(close_button)
+            layout.addLayout(bottom)
+
+        def closeEvent(self, event) -> None:  # noqa: N802 - assinatura Qt
+            # Fechar SEMPRE fecha: se um worker segue rodando, solta os
+            # sinais (o resultado tardio nao reabre nem atualiza nada) e
+            # deixa a thread terminar sozinha em background.
+            worker = self._worker
+            if worker is not None and worker.isRunning():
+                try:
+                    worker.done.disconnect()
+                    worker.progress.disconnect()
+                except (RuntimeError, TypeError):
+                    pass
+            event.accept()
 
         # -- helpers ------------------------------------------------------
         def _ids(self) -> list[str]:
