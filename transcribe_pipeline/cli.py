@@ -90,6 +90,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     boundary_parser.set_defaults(func=cmd_check_boundaries)
 
+    summarize_parser = subparsers.add_parser(
+        "summarize",
+        help="Generate a thematic summary of reviewed transcripts (local LLM).",
+    )
+    add_ids_arg(summarize_parser)
+    summarize_parser.add_argument("--dry-run", action="store_true")
+    summarize_parser.add_argument(
+        "--progress-json", action="store_true", dest="progress_json",
+        help="Imprime linhas '@PROGRESS {json}' para consumo da GUI (subprocesso).",
+    )
+    summarize_parser.set_defaults(func=cmd_summarize)
+
     models_parser = subparsers.add_parser("models", help="Manage local ASR/diarization models.")
     models_subparsers = models_parser.add_subparsers(dest="models_command", required=True)
     models_status_parser = models_subparsers.add_parser("status", help="Show required model cache status.")
@@ -328,6 +340,27 @@ def cmd_check_boundaries(args: argparse.Namespace) -> int:
         failures += run_boundary_check(
             rows, file_config, paths, ids=[interview_id], dry_run=args.dry_run,
             report=getattr(args, "report", False), progress_callback=progress_callback,
+        )
+    return failures
+
+
+def cmd_summarize(args: argparse.Namespace) -> int:
+    from .summarize import run_summarize
+
+    config, paths = load_context(args)
+    rows = load_manifest_or_exit(paths)
+    progress_callback = None
+    if getattr(args, "progress_json", False):
+        from .utils import PROGRESS_JSON_PREFIX
+
+        def progress_callback(detail: dict) -> None:
+            print(PROGRESS_JSON_PREFIX + json.dumps(detail, ensure_ascii=False), flush=True)
+
+    failures = 0
+    for interview_id, file_config in per_file_configs(config, paths, rows, args.ids):
+        failures += run_summarize(
+            rows, file_config, paths, ids=[interview_id], dry_run=args.dry_run,
+            progress_callback=progress_callback,
         )
     return failures
 

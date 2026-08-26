@@ -264,6 +264,21 @@ def qc_interviews(context: ProjectContext, ids: list[str] | None = None) -> JobR
     return JobResult("qc", failures)
 
 
+def summarize_interviews(
+    context: ProjectContext,
+    ids: list[str] | None = None,
+    progress_callback: ProgressCallback | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+) -> JobResult:
+    from .summarize import run_summarize
+
+    failures = run_summarize(
+        context.rows, context.config, context.paths, ids=ids,
+        progress_callback=progress_callback, should_cancel=should_cancel,
+    )
+    return JobResult("summarize", failures)
+
+
 def boundary_check_interviews(
     context: ProjectContext,
     ids: list[str] | None = None,

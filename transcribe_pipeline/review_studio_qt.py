@@ -3426,6 +3426,12 @@ if QT_IMPORT_ERROR is None:
             )
             self.voice_prompt_action.toggled.connect(self._on_voice_prompt_toggled)
 
+            self.summarize_action = QAction("Gerar resumo com temas (beta)", self)
+            self.summarize_action.setToolTip(
+                "Gera um resumo com indice tematico da transcricao (analise 100% local,\n"
+                "requer placa NVIDIA). Sai em 05_transcripts_review/final/md/ e em Resultados/.")
+            self.summarize_action.triggered.connect(self.run_summarize_job)
+
             self.render_action = QAction("Atualizar transcricao editavel", self)
             self.render_action.setToolTip("Remontar a transcrição editável a partir dos dados brutos (ASR + diarização).\nSelecione ao menos um arquivo.")
             self.render_action.triggered.connect(self.run_render_job)
@@ -3594,6 +3600,8 @@ if QT_IMPORT_ERROR is None:
             transcrever_menu.addAction(self.name_voices_action)
             transcrever_menu.addAction(self.voice_prompt_action)
             transcrever_menu.addAction(self.render_action)
+            transcrever_menu.addSeparator()
+            transcrever_menu.addAction(self.summarize_action)
             transcrever_menu.addSeparator()
             transcrever_menu.addAction(self.qc_action)
             transcrever_menu.addAction(self.queue_action)
@@ -7335,6 +7343,37 @@ if QT_IMPORT_ERROR is None:
                 QMessageBox.information(self, "Selecione uma entrevista", "Selecione uma entrevista para montar a transcrição editável.")
                 return
             self.start_worker("Montar transcrição editável", [("Montando transcrição editável...", lambda: app_service.render_interviews(self.context, ids=ids, overrides={"diarization_source": "pyannote_exclusive"}))])
+
+        def run_summarize_job(self) -> None:
+            """Resumo com indice tematico (fase 2.1) — analise 100% local."""
+            if not self.save_current_turn():
+                return
+            from .summarize import summarize_ready
+            ready, reason = summarize_ready()
+            if not ready:
+                QMessageBox.information(self, "Analise local indisponivel", reason)
+                return
+            ids = self.selected_ids_for_job(fallback_current=True)
+            if not ids:
+                QMessageBox.information(self, "Selecione uma entrevista", "Abra ou selecione uma entrevista transcrita para gerar o resumo.")
+                return
+            total = len(ids)
+            steps = [
+                self.job_step(
+                    f"{index + 1}/{total} {iid}: gerando resumo com temas...",
+                    iid,
+                    "gerar resumo",
+                    int(100 * index / total),
+                    int(100 * (index + 1) / total),
+                    lambda progress, should_cancel, item=iid: app_service.summarize_interviews(
+                        self.context, ids=[item], progress_callback=progress, should_cancel=should_cancel,
+                    ),
+                    accepts_progress=True,
+                    optional=True,
+                )
+                for index, iid in enumerate(ids)
+            ]
+            self.start_worker(f"Gerar resumo de {total} arquivo(s)", steps)
 
         def run_qc_job(self) -> None:
             if not self.save_current_turn():
