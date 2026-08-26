@@ -2352,13 +2352,14 @@ if QT_IMPORT_ERROR is None:
         perguntas com respostas citadas (fase 2.7)."""
 
         def __init__(self, window) -> None:
-            super().__init__(window, "Explorar as entrevistas")
+            super().__init__(window, "✨ Perguntar às entrevistas com AI")
             self.setMinimumSize(720, 500)
             layout = QVBoxLayout(self)
             intro = QLabel(
-                "Descreva um tema com as suas palavras — o Transcritório encontra os "
-                "trechos pelo significado, mesmo quando as palavras exatas não aparecem.\n"
-                "Em breve: faça perguntas e receba respostas citando os trechos.")
+                "Descreva um tema com as suas palavras — a AI encontra os trechos pelo "
+                "significado, mesmo quando as palavras exatas não aparecem.\n"
+                "Em breve: faça perguntas e receba respostas citando os trechos.\n"
+                "AI 100% local — nada sai do seu computador.")
             intro.setWordWrap(True)
             intro.setStyleSheet(_style_muted())
             layout.addWidget(intro)
@@ -3706,16 +3707,18 @@ if QT_IMPORT_ERROR is None:
                 "Busca palavras e expressoes exatas em todas as transcricoes do projeto.")
             self.project_search_action.triggered.connect(lambda: self.open_word_search())
 
-            self.explore_action = QAction("Explorar entrevistas...", self)
+            self.explore_action = QAction("✨ Perguntar às entrevistas com AI...", self)
             self.explore_action.setToolTip(
                 "Encontra trechos pelo SIGNIFICADO, mesmo sem as palavras exatas.\n"
-                "Em breve: perguntas com respostas citando os trechos.")
+                "Em breve: perguntas com respostas citando os trechos.\n"
+                "AI local — nada sai do seu computador.")
             self.explore_action.triggered.connect(self.open_explore)
 
-            self.summarize_action = QAction("Gerar resumo com temas (beta)", self)
+            self.summarize_action = QAction("✨ Resumir a entrevista com AI", self)
             self.summarize_action.setToolTip(
-                "Gera um resumo com indice tematico da transcricao (analise 100% local,\n"
-                "requer placa NVIDIA). Sai em 05_transcripts_review/final/md/ e em Resultados/.")
+                "Gera um resumo com indice tematico da transcricao (requer placa NVIDIA).\n"
+                "Sai em 05_transcripts_review/final/md/ e em Resultados/.\n"
+                "AI local — nada sai do seu computador.")
             self.summarize_action.triggered.connect(self.run_summarize_job)
 
             self.render_action = QAction("Atualizar transcricao editavel", self)
@@ -4559,16 +4562,16 @@ if QT_IMPORT_ERROR is None:
             self.improve_speakers_button.setVisible(False)
             # Presenca contextual do resumo (feedback 2026-08-26): o botao so
             # existe quando ESTE arquivo tem resumo salvo — um clique, abre.
-            self.open_resumo_button = QPushButton("Abrir resumo com temas")
+            self.open_resumo_button = QPushButton("✨ Abrir resumo com temas")
             self.open_resumo_button.setToolTip(
                 "Abre o resumo com indice tematico ja gerado para este arquivo\n"
-                "(05_transcripts_review/final/md/).")
+                "(05_transcripts_review/final/md/). Gerado com AI local.")
             self.open_resumo_button.setVisible(False)
             self.open_resumo_button.clicked.connect(self._open_current_resumo)
             # Par gerar/abrir (exigencia 2026-08-26: "ficar so no menu nao
             # da"): sem resumo -> Gerar; com resumo -> Abrir. A faixa toda
             # sera repensada na revisao de UI (Fase 5).
-            self.generate_resumo_button = QPushButton("Gerar resumo com temas")
+            self.generate_resumo_button = QPushButton("✨ Resumir a entrevista com AI")
             self.generate_resumo_button.setToolTip(self.summarize_action.toolTip())
             self.generate_resumo_button.setVisible(False)
             self.generate_resumo_button.clicked.connect(self.run_summarize_job)
