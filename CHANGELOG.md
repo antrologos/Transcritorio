@@ -47,6 +47,19 @@ oficial passa a ser **PyPI + uv** (`uv tool install transcritorio`); ver
   marcados (no lugar de "Ver primeira"), contagem que atualiza ao
   desmarcar Dúvida (e o banner some ao zerar), e a explicação da
   marcação agora aparece no painel do editor — não só como tooltip.
+- Busca nas transcrições (fase 2.3): **Ctrl+F** filtra os blocos do
+  arquivo aberto em tempo real (barra estilo navegador, ‹ › navegam, Esc
+  fecha); **Ctrl+Shift+F** (ou Editar → Buscar nas transcrições) abre a
+  busca do projeto inteiro com duas seções — "Resultados exatos" e
+  "Trechos com sentido parecido" (encoder multilíngue local pequeno, roda
+  em CPU, sem GPU e sem conta) — e clique no resultado abre a entrevista
+  no bloco certo com o áudio posicionado. Índice por arquivo em
+  `07_index/`, atualizado sozinho quando a transcrição muda; preparo e
+  download do modelo (~0,5 GB, uma vez) oferecidos no próprio diálogo.
+  CLI: `transcritorio-cli search --query "..."`.
+- Botão contextual "Gerar resumo com temas" na área do arquivo aberto
+  (par com "Abrir resumo com temas": sem resumo → gerar; com resumo →
+  abrir).
 - Infra da análise local (fase 2.0 do plano-programa): módulo
   `research_context` (contexto de pesquisa por projeto — roteiro,
   codebook, nomes conhecidos — grounding das ferramentas de análise);

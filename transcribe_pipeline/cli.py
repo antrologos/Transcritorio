@@ -102,6 +102,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     summarize_parser.set_defaults(func=cmd_summarize)
 
+    search_parser = subparsers.add_parser(
+        "search", help="Search transcripts (exact + by meaning) from the terminal.")
+    add_ids_arg(search_parser)
+    search_parser.add_argument("--query", required=True)
+    search_parser.add_argument(
+        "--build-index", action="store_true",
+        help="(Re)constroi os indices desatualizados antes de buscar.")
+    search_parser.set_defaults(func=cmd_search)
+
     models_parser = subparsers.add_parser("models", help="Manage local ASR/diarization models.")
     models_subparsers = models_parser.add_subparsers(dest="models_command", required=True)
     models_status_parser = models_subparsers.add_parser("status", help="Show required model cache status.")
@@ -363,6 +372,34 @@ def cmd_summarize(args: argparse.Namespace) -> int:
             progress_callback=progress_callback,
         )
     return failures
+
+
+def cmd_search(args: argparse.Namespace) -> int:
+    from . import search as search_mod
+
+    config, paths = load_context(args)
+    rows = load_manifest_or_exit(paths)
+    ids = [
+        r["interview_id"] for r in rows
+        if search_mod.source_path_for(paths, r["interview_id"]) is not None
+        and (not args.ids or r["interview_id"] in set(args.ids))
+    ]
+    if args.build_index:
+        search_mod.build_indexes(paths, ids, progress_callback=lambda d: print(d.get("message", "")))
+    exact = search_mod.project_literal_search(paths, ids, args.query)
+    print(f"== Resultados exatos ({len(exact)}) ==")
+    for hit in exact:
+        print(f"  {hit['interview_id']} {hit['start']:8.1f}s {hit['label']}: {hit['text'][:100]}")
+    if search_mod.encoder_cached():
+        exclude = {(h["interview_id"], h["turn_index"]) for h in exact}
+        similar = search_mod.project_semantic_search(paths, ids, args.query, exclude=exclude)
+        print(f"== Trechos com sentido parecido ({len(similar)}) ==")
+        for hit in similar:
+            print(f"  sim={hit['similarity']:.2f} {hit['interview_id']} {hit['start']:8.1f}s "
+                  f"{hit['label']}: {hit['text'][:100]}")
+    else:
+        print("(busca por sentido indisponivel: modelo ainda nao baixado)")
+    return 0
 
 
 def cmd_models_status(args: argparse.Namespace) -> int:

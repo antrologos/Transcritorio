@@ -57,7 +57,7 @@ from .utils import sanitize_message
 
 try:
     from PySide6.QtCore import QPointF, QThread, QTimer, Qt, QUrl, Signal
-    from PySide6.QtGui import QAction, QBrush, QColor, QDesktopServices, QIcon, QKeySequence, QPainter, QPainterPath, QPen, QUndoCommand, QUndoStack
+    from PySide6.QtGui import QAction, QBrush, QColor, QDesktopServices, QIcon, QKeySequence, QPainter, QPainterPath, QPen, QShortcut, QUndoCommand, QUndoStack
     from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
     from PySide6.QtMultimediaWidgets import QVideoWidget
     from PySide6.QtWidgets import (
@@ -93,6 +93,8 @@ try:
         QTableWidget,
         QTableWidgetItem,
         QTextEdit,
+        QTreeWidget,
+        QTreeWidgetItem,
         QVBoxLayout,
         QWidget,
         QWizard,
@@ -2199,6 +2201,174 @@ if QT_IMPORT_ERROR is None:
         def labels(self) -> list[str]:
             return [" ".join(combo.currentText().split()) for combo in self.combos]
 
+
+    class CallableWorker(QThread):
+        """Roda um callable em thread; progresso e resultado viram sinais."""
+        progress = Signal(dict)
+        done = Signal(object, str)
+
+        def __init__(self, fn, parent=None) -> None:
+            super().__init__(parent)
+            self._fn = fn  # fn(progress_emit) -> result
+
+        def run(self) -> None:  # noqa: D102
+            try:
+                self.done.emit(self._fn(self.progress.emit), "")
+            except Exception as exc:  # noqa: BLE001 - GUI boundary
+                self.done.emit(None, str(exc)[:500])
+
+
+    class ProjectSearchDialog(QDialog):
+        """Buscar nas transcricoes do projeto (fase 2.3, UI do plano).
+
+        Duas secoes SEM jargao: "Resultados exatos" (literal, imediato) e
+        "Trechos com sentido parecido" (indice + encoder local, em thread).
+        Nao-modal; clique num resultado abre a entrevista no bloco certo e
+        posiciona o audio (via janela-mae)."""
+
+        def __init__(self, window) -> None:
+            super().__init__(window)
+            self._window = window
+            self._worker: CallableWorker | None = None
+            self.setWindowTitle("Buscar nas transcricoes")
+            self.setMinimumSize(700, 480)
+            self.setModal(False)
+            layout = QVBoxLayout(self)
+            row = QHBoxLayout()
+            self.query_input = QLineEdit()
+            self.query_input.setPlaceholderText("o que voce procura…")
+            self.query_input.returnPressed.connect(self.run_search)
+            row.addWidget(self.query_input, 1)
+            self.search_button = QPushButton("Buscar")
+            self.search_button.clicked.connect(self.run_search)
+            row.addWidget(self.search_button)
+            layout.addLayout(row)
+            self.results = QTreeWidget()
+            self.results.setHeaderHidden(True)
+            self.results.itemActivated.connect(self._open_hit)
+            self.results.itemClicked.connect(self._open_hit)
+            layout.addWidget(self.results, 1)
+            self.prepare_button = QPushButton("Preparar busca por sentido")
+            self.prepare_button.setVisible(False)
+            self.prepare_button.clicked.connect(self._prepare_semantic)
+            layout.addWidget(self.prepare_button)
+            self.status_label = QLabel("")
+            self.status_label.setWordWrap(True)
+            layout.addWidget(self.status_label)
+
+        # -- helpers ------------------------------------------------------
+        def _ids(self) -> list[str]:
+            from . import search as _search
+            ctx = self._window.context
+            if ctx is None:
+                return []
+            return [
+                r["interview_id"] for r in ctx.rows
+                if _search.source_path_for(ctx.paths, r["interview_id"]) is not None
+            ]
+
+        def _add_section(self, title: str, hits: list[dict]) -> None:
+            top = QTreeWidgetItem([title])
+            self.results.addTopLevelItem(top)
+            for hit in hits:
+                text = hit["text"]
+                if len(text) > 110:
+                    first_span = (hit.get("spans") or [(0, 0)])[0]
+                    left = max(0, first_span[0] - 40)
+                    text = ("…" if left else "") + text[left:left + 110] + "…"
+                label = f"{hit['interview_id']}  {format_clock(hit['start'])}  {hit['label']}: {text}"
+                child = QTreeWidgetItem([label])
+                child.setData(0, Qt.ItemDataRole.UserRole, (hit["interview_id"], hit["start"]))
+                top.addChild(child)
+            top.setExpanded(True)
+
+        # -- fluxo --------------------------------------------------------
+        def run_search(self) -> None:
+            from . import search as _search
+            ctx = self._window.context
+            query = self.query_input.text().strip()
+            if ctx is None or not query or (self._worker and self._worker.isRunning()):
+                return
+            ids = self._ids()
+            exact = _search.project_literal_search(ctx.paths, ids, query)
+            self.results.clear()
+            self._add_section(f"Resultados exatos ({len(exact)})", exact)
+            self.prepare_button.setVisible(False)
+            self.status_label.setText("")
+            if not _search.encoder_cached():
+                self.prepare_button.setText("Baixar busca por sentido (~0,5 GB, uma vez)")
+                self.prepare_button.setVisible(True)
+                self.status_label.setText(
+                    "A busca por sentido usa um modelo pequeno que ainda nao foi baixado.")
+                return
+            stale = [iid for iid in ids if not _search.index_is_fresh(ctx.paths, iid)]
+            if stale:
+                self.prepare_button.setText(
+                    f"Preparar busca por sentido ({len(stale)} arquivo(s), ~1 min)")
+                self.prepare_button.setVisible(True)
+            if len(stale) < len(ids):
+                exclude = {(h["interview_id"], h["turn_index"]) for h in exact}
+                placeholder = QTreeWidgetItem(["Trechos com sentido parecido (buscando…)"])
+                self.results.addTopLevelItem(placeholder)
+                paths = ctx.paths
+
+                def fn(_emit):
+                    return _search.project_semantic_search(paths, ids, query, exclude=exclude)
+
+                self._start_worker(fn, self._on_semantic_done)
+
+        def _on_semantic_done(self, result, error: str) -> None:
+            if self.results.topLevelItemCount():
+                last = self.results.topLevelItem(self.results.topLevelItemCount() - 1)
+                if "buscando" in last.text(0):
+                    self.results.takeTopLevelItem(self.results.topLevelItemCount() - 1)
+            if error:
+                self.status_label.setText(f"Busca por sentido indisponivel: {error}")
+                return
+            hits = result or []
+            self._add_section(f"Trechos com sentido parecido ({len(hits)})", hits)
+
+        def _prepare_semantic(self) -> None:
+            from . import search as _search
+            ctx = self._window.context
+            if ctx is None or (self._worker and self._worker.isRunning()):
+                return
+            ids = self._ids()
+            paths = ctx.paths
+            need_download = not _search.encoder_cached()
+            self.prepare_button.setEnabled(False)
+
+            def fn(emit):
+                if need_download:
+                    from . import model_manager as _mm
+                    if _mm.download_optional_model("search_encoder", progress_callback=emit) != 0:
+                        raise RuntimeError("download do modelo de busca falhou")
+                return _search.build_indexes(paths, ids, progress_callback=emit)
+
+            self._start_worker(fn, self._on_prepare_done)
+
+        def _on_prepare_done(self, result, error: str) -> None:
+            self.prepare_button.setEnabled(True)
+            if error:
+                self.status_label.setText(f"Nao foi possivel preparar: {error}")
+                return
+            self.prepare_button.setVisible(False)
+            self.status_label.setText("Busca por sentido pronta.")
+            self.run_search()
+
+        def _start_worker(self, fn, on_done) -> None:
+            self._worker = CallableWorker(fn, self)
+            self._worker.progress.connect(
+                lambda d: self.status_label.setText(str(d.get("message") or "")))
+            self._worker.done.connect(on_done)
+            self._worker.start()
+
+        def _open_hit(self, item, _column: int = 0) -> None:
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data:
+                interview_id, start = data
+                self._window.open_search_hit(str(interview_id), float(start))
+
         def dont_ask(self) -> bool:
             return self.dont_ask_checkbox.isChecked()
 
@@ -3426,6 +3596,17 @@ if QT_IMPORT_ERROR is None:
             )
             self.voice_prompt_action.toggled.connect(self._on_voice_prompt_toggled)
 
+            self.find_action = QAction("Buscar neste arquivo", self)
+            self.find_action.setShortcut(QKeySequence("Ctrl+F"))
+            self.find_action.setToolTip("Filtra os blocos da transcricao aberta pelo termo digitado.")
+            self.find_action.triggered.connect(self.show_find_bar)
+
+            self.project_search_action = QAction("Buscar nas transcricoes...", self)
+            self.project_search_action.setShortcut(QKeySequence("Ctrl+Shift+F"))
+            self.project_search_action.setToolTip(
+                "Busca em todas as transcricoes do projeto — resultados exatos e trechos com sentido parecido.")
+            self.project_search_action.triggered.connect(self.open_project_search)
+
             self.summarize_action = QAction("Gerar resumo com temas (beta)", self)
             self.summarize_action.setToolTip(
                 "Gera um resumo com indice tematico da transcricao (analise 100% local,\n"
@@ -3583,6 +3764,9 @@ if QT_IMPORT_ERROR is None:
             editar_menu.addAction(self.rename_interview_action)
             editar_menu.addAction(self.move_up_action)
             editar_menu.addAction(self.move_down_action)
+            editar_menu.addSeparator()
+            editar_menu.addAction(self.find_action)
+            editar_menu.addAction(self.project_search_action)
             editar_menu.addSeparator()
             editar_menu.addAction(self.delete_transcription_action)
             editar_menu.addAction(self.trash_selected_action)
@@ -4266,8 +4450,16 @@ if QT_IMPORT_ERROR is None:
                 "(05_transcripts_review/final/md/).")
             self.open_resumo_button.setVisible(False)
             self.open_resumo_button.clicked.connect(self._open_current_resumo)
+            # Par gerar/abrir (exigencia 2026-08-26: "ficar so no menu nao
+            # da"): sem resumo -> Gerar; com resumo -> Abrir. A faixa toda
+            # sera repensada na revisao de UI (Fase 5).
+            self.generate_resumo_button = QPushButton("Gerar resumo com temas")
+            self.generate_resumo_button.setToolTip(self.summarize_action.toolTip())
+            self.generate_resumo_button.setVisible(False)
+            self.generate_resumo_button.clicked.connect(self.run_summarize_job)
             self.open_file_action_row.addWidget(self.transcribe_current_button)
             self.open_file_action_row.addWidget(self.improve_speakers_button)
+            self.open_file_action_row.addWidget(self.generate_resumo_button)
             self.open_file_action_row.addWidget(self.open_resumo_button)
             self.open_file_action_row.addStretch()
             layout.addLayout(self.open_file_action_row)
@@ -4441,6 +4633,35 @@ if QT_IMPORT_ERROR is None:
             boundary_next.clicked.connect(lambda: self._on_boundary_nav(1))
             boundary_layout.addWidget(boundary_next)
             turn_layout.addWidget(self.boundary_banner)
+            # Barra de busca no arquivo (Ctrl+F) — so existe enquanto usada.
+            self.find_bar = QFrame()
+            self.find_bar.setVisible(False)
+            find_layout = QHBoxLayout(self.find_bar)
+            find_layout.setContentsMargins(6, 4, 6, 4)
+            self.find_input = QLineEdit()
+            self.find_input.setPlaceholderText("🔍 buscar neste arquivo…")
+            self.find_input.textChanged.connect(self._apply_find_filter)
+            self.find_input.returnPressed.connect(lambda: self._find_step(1))
+            find_layout.addWidget(self.find_input, 1)
+            self.find_count_label = QLabel("")
+            find_layout.addWidget(self.find_count_label)
+            find_prev = QPushButton("‹")
+            find_prev.setFixedWidth(28)
+            find_prev.setToolTip("Bloco anterior com o termo")
+            find_prev.clicked.connect(lambda: self._find_step(-1))
+            find_layout.addWidget(find_prev)
+            find_next = QPushButton("›")
+            find_next.setFixedWidth(28)
+            find_next.setToolTip("Proximo bloco com o termo")
+            find_next.clicked.connect(lambda: self._find_step(1))
+            find_layout.addWidget(find_next)
+            find_close = QPushButton("✕")
+            find_close.setFixedWidth(28)
+            find_close.setToolTip("Fechar a busca (Esc)")
+            find_close.clicked.connect(self._close_find_bar)
+            find_layout.addWidget(find_close)
+            QShortcut(QKeySequence("Escape"), self.find_input, activated=self._close_find_bar)
+            turn_layout.addWidget(self.find_bar)
             turn_header = QHBoxLayout()
             turn_header.addWidget(QLabel("Blocos da transcricao"))
             turn_header.addStretch()
@@ -5124,6 +5345,34 @@ if QT_IMPORT_ERROR is None:
                 return
             self.open_review(interview_id)
 
+        def open_project_search(self) -> None:
+            """Dialogo de busca do projeto (Ctrl+Shift+F / menu Editar)."""
+            if self.context is None:
+                QMessageBox.information(self, "Abra um projeto", "Abra um projeto para buscar nas transcrições.")
+                return
+            if getattr(self, "_project_search_dialog", None) is None:
+                self._project_search_dialog = ProjectSearchDialog(self)
+            self._project_search_dialog.show()
+            self._project_search_dialog.raise_()
+            self._project_search_dialog.query_input.setFocus()
+
+        def open_search_hit(self, interview_id: str, start: float) -> None:
+            """Abre a entrevista no bloco mais proximo do tempo dado (busca)."""
+            if interview_id != self.current_interview_id:
+                self.open_review(interview_id)
+                if self.current_interview_id != interview_id:
+                    return  # abertura falhou/cancelada
+            if not self.turns:
+                return
+            target = min(
+                range(len(self.turns)),
+                key=lambda i: abs(float(self.turns[i].get("start", 0) or 0) - start),
+            )
+            self.select_turn_by_index(target, seek=True)
+            item = self.turn_table.item(target, 0)
+            if item is not None:
+                self.turn_table.scrollToItem(item)
+
         def open_review(self, interview_id: str) -> None:
             if not self.save_current_turn():
                 return
@@ -5230,6 +5479,56 @@ if QT_IMPORT_ERROR is None:
                     f"🔍 {len(rows)} troca{plural} de falante com vozes parecidas — confira as marcações."
                 )
             self.boundary_banner.setVisible(bool(rows))
+
+        def show_find_bar(self) -> None:
+            if not self.review:
+                QMessageBox.information(self, "Abra uma transcrição", "Abra uma transcrição para buscar nela.")
+                return
+            self.find_bar.setVisible(True)
+            self.find_input.setFocus()
+            self.find_input.selectAll()
+
+        def _close_find_bar(self) -> None:
+            if not hasattr(self, "find_bar"):
+                return
+            self.find_bar.setVisible(False)
+            self.find_input.blockSignals(True)
+            self.find_input.clear()
+            self.find_input.blockSignals(False)
+            self._find_matches = []
+            self.find_count_label.setText("")
+            for row in range(self.turn_table.rowCount()):
+                self.turn_table.setRowHidden(row, False)
+
+        def _apply_find_filter(self, text: str) -> None:
+            from .search import search_turns
+            query = text.strip()
+            if not query:
+                self._find_matches = []
+                self.find_count_label.setText("")
+                for row in range(self.turn_table.rowCount()):
+                    self.turn_table.setRowHidden(row, False)
+                return
+            match_rows = {hit["turn_index"] for hit in search_turns(self.turns, query)}
+            self._find_matches = sorted(match_rows)
+            for row in range(self.turn_table.rowCount()):
+                self.turn_table.setRowHidden(row, row not in match_rows)
+            plural = "s" if len(match_rows) != 1 else ""
+            self.find_count_label.setText(f"{len(match_rows)} bloco{plural}")
+
+        def _find_step(self, step: int) -> None:
+            matches = getattr(self, "_find_matches", [])
+            if not matches:
+                return
+            current = self.turn_table.currentRow()
+            if step > 0:
+                target = next((row for row in matches if row > current), matches[0])
+            else:
+                target = next((row for row in reversed(matches) if row < current), matches[-1])
+            self.select_turn_by_index(target, seek=True)
+            item = self.turn_table.item(target, 0)
+            if item is not None:
+                self.turn_table.scrollToItem(item)
 
         def _on_boundary_nav(self, step: int) -> None:
             """Navega para o proximo/anterior bloco marcado (ciclico),
@@ -5988,6 +6287,9 @@ if QT_IMPORT_ERROR is None:
                     from .summarize import resumo_path as _resumo_path
                     has_resumo = _resumo_path(self.context.paths, self.current_interview_id).exists()
                 self.open_resumo_button.setVisible(has_resumo)
+                if hasattr(self, "generate_resumo_button"):
+                    self.generate_resumo_button.setVisible(has_review and not has_resumo)
+                    self.generate_resumo_button.setEnabled(not busy and has_review)
 
         def restore_review_snapshot(self, snapshot: dict[str, Any], selected_turn_id: str | None = None) -> None:
             if not self.current_interview_id:

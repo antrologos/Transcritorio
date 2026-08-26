@@ -313,7 +313,72 @@ _OPTIONAL_MODELS: tuple[ModelAsset, ...] = (
         estimated_gb=1.1,
         revision="1fcf13e85f4eef5394e1fcd406cf2ca9ea82351d",
     ),
+    ModelAsset(
+        "search_encoder",
+        "Busca por sentido (encoder multilingue)",
+        "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        "encontrar trechos por significado nas transcricoes",
+        estimated_gb=0.5,
+        revision="86741b4e3f5cb7765a600d3a3d55a0f6a6cb443d",
+    ),
 )
+
+
+def optional_model(key: str) -> ModelAsset:
+    for asset in _OPTIONAL_MODELS:
+        if asset.key == key:
+            return asset
+    raise KeyError(f"Modelo opcional desconhecido: {key}")
+
+
+def download_optional_model(
+    key: str,
+    progress_callback: ProgressCallback | None = None,
+    should_cancel: ShouldCancel | None = None,
+) -> int:
+    """Baixa um modelo OPCIONAL (ungated) sob demanda; 0 = sucesso.
+
+    Reutiliza o downloader manual (Xet-proof, SHA-pinada). Checagem de
+    disco POR modelo — a global de 10 GB nao cobre downloads grandes.
+    """
+    asset = optional_model(key)
+    cache_dir = runtime.model_cache_dir()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    if cached_snapshot_path(asset.repo_id, cache_dir, revision=asset.revision) is not None:
+        return 0
+    needed_gb = asset.estimated_gb * 1.2 + 1.0
+    free_gb = _free_disk_gb(cache_dir)
+    if free_gb is not None and free_gb < needed_gb:
+        print(f"Espaco em disco insuficiente para {asset.label}: "
+              f"{free_gb:.1f} GB livres, ~{needed_gb:.1f} GB necessarios.")
+        return 1
+    runtime.apply_secure_hf_environment(offline=False, token=None)
+    try:
+        _manual_snapshot_download(
+            repo_id=asset.repo_id,
+            revision=asset.revision or "main",
+            cache_dir=cache_dir,
+            token=None,
+            label=asset.label,
+            start_pct=0,
+            end_pct=100,
+            estimated_bytes=int(asset.estimated_gb * (1024 ** 3)),
+            progress_callback=progress_callback,
+            should_cancel=should_cancel,
+        )
+    except Exception as exc:  # noqa: BLE001 - download e opcional, nunca crash
+        print(f"Falha ao baixar {asset.label}: {exc}")
+        return 1
+    return 0
+
+
+def _free_disk_gb(path: Path) -> float | None:
+    try:
+        import shutil as _shutil
+
+        return _shutil.disk_usage(path).free / (1024 ** 3)
+    except OSError:
+        return None
 
 
 def get_required_models(
