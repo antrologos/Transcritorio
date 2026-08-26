@@ -181,6 +181,52 @@ def similarity_label(similarity: float) -> str:
     return "relacionado"
 
 
+def search_scope_text(scope: str, total: int, ready: int, subject: str) -> str:
+    """Linha de escopo das janelas de busca/AI (pura, testavel sem Qt).
+
+    Diz ONDE a operacao busca e SOBRE O QUE (transcricoes, nunca o audio
+    bruto) — feedback 2026-08-26: o usuario nao tinha como saber. scope:
+    "all" | "checked" | "open"; total = itens no escopo; ready = com
+    transcricao (revisada > canonica).
+    """
+    missing = total - ready
+    if scope == "open":
+        if ready:
+            return f"{subject} lê a transcrição da entrevista aberta."
+        return (f"{subject} lê transcrições, não o áudio — "
+                "e a entrevista aberta ainda não foi transcrita.")
+    if scope == "checked":
+        if total == 0:
+            return "Nenhuma entrevista marcada na lista."
+        if ready == 0:
+            if total == 1:
+                return (f"{subject} lê transcrições, não o áudio — "
+                        "e a entrevista marcada ainda não foi transcrita.")
+            return (f"{subject} lê transcrições, não o áudio — e nenhuma das "
+                    f"{total} entrevistas marcadas foi transcrita ainda.")
+        if ready == total:
+            if total == 1:
+                return f"{subject} lê a transcrição da entrevista marcada."
+            return (f"{subject} lê as transcrições de todas as "
+                    f"{total} entrevistas marcadas.")
+        return (f"{subject} lê as transcrições de {ready} das {total} entrevistas "
+                f"marcadas — {missing} ainda sem transcrição ficam de fora.")
+    if total == 0:
+        return "Este projeto ainda não tem arquivos."
+    if ready == 0:
+        if total == 1:
+            return (f"{subject} lê transcrições, não o áudio — "
+                    "e o único arquivo do projeto ainda não foi transcrito.")
+        return (f"{subject} lê transcrições, não o áudio — e nenhum dos "
+                f"{total} arquivos do projeto foi transcrito ainda.")
+    if ready == total:
+        if total == 1:
+            return f"{subject} lê a transcrição do único arquivo do projeto."
+        return f"{subject} lê as transcrições de todos os {total} arquivos do projeto."
+    return (f"{subject} lê as transcrições de {ready} dos {total} arquivos do "
+            f"projeto — {missing} ainda sem transcrição ficam de fora.")
+
+
 def boundary_flagged_rows(turns: list[dict[str, Any]]) -> list[int]:
     """Turnos da verificacao acustica de trocas que o usuario ainda NAO
     tratou: precisam do marcador na nota (origem automatica) E do flag
@@ -2250,6 +2296,8 @@ if QT_IMPORT_ERROR is None:
             self.setWindowTitle(title)
             self.setModal(False)
 
+        _scope_subject = "A busca"
+
         def _project_ids(self) -> list[str]:
             from . import search as _search
             ctx = self._window.context
@@ -2259,6 +2307,81 @@ if QT_IMPORT_ERROR is None:
                 r["interview_id"] for r in ctx.rows
                 if _search.source_path_for(ctx.paths, r["interview_id"]) is not None
             ]
+
+        def _scope_key(self) -> str:
+            combo = getattr(self, "scope_combo", None)
+            return str(combo.currentData() or "all") if combo is not None else "all"
+
+        def _scope_counts(self) -> tuple[str, int, int]:
+            """(chave, itens no escopo, itens com transcricao)."""
+            scope = self._scope_key()
+            transcribed = set(self._project_ids())
+            if scope == "open":
+                open_id = self._window.current_interview_id
+                return scope, (1 if open_id else 0), (1 if open_id in transcribed else 0)
+            if scope == "checked":
+                checked = self._window.selected_interview_ids()
+                return scope, len(checked), sum(1 for i in checked if i in transcribed)
+            ctx = self._window.context
+            return scope, (len(ctx.rows) if ctx is not None else 0), len(transcribed)
+
+        def _scope_ids(self) -> list[str]:
+            """Ids do escopo escolhido que TEM transcricao (ordem da lista)."""
+            scope = self._scope_key()
+            transcribed = set(self._project_ids())
+            if scope == "open":
+                open_id = self._window.current_interview_id
+                return [open_id] if open_id in transcribed else []
+            if scope == "checked":
+                return [i for i in self._window.selected_interview_ids() if i in transcribed]
+            return self._project_ids()
+
+        def _scope_text(self) -> str:
+            scope, total, ready = self._scope_counts()
+            return search_scope_text(scope, total, ready, self._scope_subject)
+
+        def _build_scope_widgets(self, layout: QVBoxLayout) -> None:
+            """Linha Onde: combo de escopo + explicacao dinamica (feedback
+            2026-08-26: o usuario nao sabia ONDE a busca opera nem que ela
+            le transcricoes, nao o audio). Itens por chave (userData) para
+            escopos futuros (codigo QDA, entidade) encaixarem sem redesenho."""
+            row = QHBoxLayout()
+            row.addWidget(QLabel("Onde:"))
+            self.scope_combo = QComboBox()
+            self.scope_combo.currentIndexChanged.connect(
+                lambda _index: self.scope_label.setText(self._scope_text()))
+            row.addWidget(self.scope_combo, 1)
+            layout.addLayout(row)
+            self.scope_label = QLabel("")
+            self.scope_label.setWordWrap(True)
+            self.scope_label.setStyleSheet(_style_muted())
+            layout.addWidget(self.scope_label)
+
+        def _refresh_scope(self) -> None:
+            """Reconstroi o combo (janela cacheada; marcadas/aberta mudam)
+            preservando a escolha, e atualiza a linha de escopo."""
+            combo = getattr(self, "scope_combo", None)
+            if combo is None or self._window.context is None:
+                return
+            current = self._scope_key()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItem(
+                f"Todas as entrevistas transcritas ({len(self._project_ids())})", "all")
+            checked = self._window.selected_interview_ids()
+            if checked:
+                combo.addItem(f"Somente as marcadas ☑ ({len(checked)})", "checked")
+            open_id = self._window.current_interview_id
+            if open_id:
+                combo.addItem(f"Somente a entrevista aberta ({open_id})", "open")
+            index = combo.findData(current)
+            combo.setCurrentIndex(index if index >= 0 else 0)
+            combo.blockSignals(False)
+            self.scope_label.setText(self._scope_text())
+
+        def showEvent(self, event) -> None:  # noqa: N802 - assinatura Qt
+            self._refresh_scope()
+            super().showEvent(event)
 
         def _make_results_list(self) -> QListWidget:
             results = QListWidget()
@@ -2318,6 +2441,7 @@ if QT_IMPORT_ERROR is None:
             search_button.clicked.connect(self.run_search)
             row.addWidget(search_button)
             layout.addLayout(row)
+            self._build_scope_widgets(layout)
             self.results = self._make_results_list()
             layout.addWidget(self.results, 1)
             bottom = QHBoxLayout()
@@ -2338,8 +2462,15 @@ if QT_IMPORT_ERROR is None:
             query = self.query_input.text().strip()
             if ctx is None or not query:
                 return
-            hits = _search.project_literal_search(ctx.paths, self._project_ids(), query)
+            self._refresh_scope()
+            ids = self._scope_ids()
             self.results.clear()
+            if not ids:
+                # Nunca o enganoso "0 ocorrencias" quando o problema e
+                # falta de transcricao no escopo.
+                self.count_label.setText(self._scope_text())
+                return
+            hits = _search.project_literal_search(ctx.paths, ids, query)
             for hit in hits:
                 self._add_hit(self.results, "", hit)
             plural = "s" if len(hits) != 1 else ""
@@ -2350,6 +2481,8 @@ if QT_IMPORT_ERROR is None:
         """Explorar as entrevistas (identidade B): busca por SENTIDO, com
         preparo/download do modelo vivendo aqui — e o futuro lar das
         perguntas com respostas citadas (fase 2.7)."""
+
+        _scope_subject = "A AI"
 
         def __init__(self, window) -> None:
             super().__init__(window, "✨ Perguntar às entrevistas com AI")
@@ -2376,6 +2509,7 @@ if QT_IMPORT_ERROR is None:
             explore_button.clicked.connect(self.run_explore)
             row.addWidget(explore_button)
             layout.addLayout(row)
+            self._build_scope_widgets(layout)
             self.answer_view = QTextEdit()
             self.answer_view.setReadOnly(True)
             self.answer_view.setVisible(False)
@@ -2402,19 +2536,26 @@ if QT_IMPORT_ERROR is None:
             layout.addLayout(bottom)
 
         def _ready_query(self) -> tuple[list[str], str] | None:
-            """Gating comum de perguntar/explorar: contexto, consulta,
-            encoder baixado e indices frescos. None = ainda nao da."""
+            """Gating comum de perguntar/explorar: contexto, consulta, escopo
+            com transcricao, encoder baixado e indices frescos. None = ainda
+            nao da — sempre com o motivo visivel, nunca clique-morto."""
             from . import search as _search
             ctx = self._window.context
             query = self.query_input.text().strip()
             if ctx is None or not query or (self._worker and self._worker.isRunning()):
                 return None
-            ids = self._project_ids()
+            self._refresh_scope()
+            ids = self._scope_ids()
             self.results.clear()
             self.answer_view.setVisible(False)
             self.prepare_button.setVisible(False)
             self.exact_hint_button.setVisible(False)
             self.status_label.setText("")
+            if not ids:
+                # Antes de oferecer download de modelo: sem transcricao no
+                # escopo, nada ha o que preparar.
+                self.status_label.setText(self._scope_text())
+                return None
             if not _search.encoder_cached():
                 self.prepare_button.setText("Preparar (baixa um modelo de ~0,5 GB, uma vez)")
                 self.prepare_button.setVisible(True)
@@ -3761,19 +3902,24 @@ if QT_IMPORT_ERROR is None:
             self.project_search_action = QAction("Buscar palavras...", self)
             self.project_search_action.setShortcut(QKeySequence("Ctrl+Shift+F"))
             self.project_search_action.setToolTip(
-                "Busca palavras e expressoes exatas em todas as transcricoes do projeto.")
+                "Busca palavras e expressoes exatas nas transcricoes do projeto.\n"
+                "Le o texto transcrito (revisado, quando houver), nunca o audio;\n"
+                "na janela, da para restringir as marcadas ☑ ou a entrevista aberta.")
             self.project_search_action.triggered.connect(lambda: self.open_word_search())
 
             self.explore_action = QAction("✨ Perguntar às entrevistas com AI...", self)
             self.explore_action.setToolTip(
                 "Faça perguntas e receba respostas citando os trechos, ou encontre\n"
                 "trechos pelo significado, mesmo sem as palavras exatas.\n"
+                "Lê as transcrições (não o áudio); o escopo é escolhível na janela:\n"
+                "todas, somente as marcadas ☑ ou a entrevista aberta.\n"
                 "AI local — nada sai do seu computador.")
             self.explore_action.triggered.connect(self.open_explore)
 
             self.summarize_action = QAction("✨ Resumir a entrevista com AI", self)
             self.summarize_action.setToolTip(
-                "Gera um resumo com indice tematico da transcricao (requer placa NVIDIA).\n"
+                "Gera um resumo com indice tematico da entrevista aberta — ou de\n"
+                "cada entrevista marcada ☑ na lista (requer placa NVIDIA).\n"
                 "Sai em 05_transcripts_review/final/md/ e em Resultados/.\n"
                 "AI local — nada sai do seu computador.")
             self.summarize_action.triggered.connect(self.run_summarize_job)

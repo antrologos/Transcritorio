@@ -58,6 +58,13 @@ oficial passa a ser **PyPI + uv** (`uv tool install transcritorio`); ver
 - Identidade de AI: ações assistivas ganham ✨ e o selo "AI local — nada
   sai do seu computador"; resumo renomeado "✨ Resumir a entrevista com
   AI"; busca de palavras separada em janela própria e minimalista.
+- Escopo visível e escolhível nas buscas e no Perguntar: as janelas
+  ganham o seletor "Onde:" (todas as transcritas / somente as marcadas ☑
+  / somente a entrevista aberta) e uma linha que diz sempre quantos
+  arquivos entram e que a leitura é das TRANSCRIÇÕES, não do áudio —
+  arquivos sem transcrição nunca somem em silêncio, e projeto sem
+  transcrição alguma agora explica em vez de não fazer nada. Tooltips de
+  buscar/perguntar/resumir declaram o escopo.
 - Busca nas transcrições (fase 2.3): **Ctrl+F** filtra os blocos do
   arquivo aberto em tempo real (barra estilo navegador, ‹ › navegam, Esc
   fecha); **Ctrl+Shift+F** (ou Editar → Buscar nas transcrições) abre a

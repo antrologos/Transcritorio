@@ -65,8 +65,12 @@ with tempfile.TemporaryDirectory() as tmp:
     target.parent.mkdir(parents=True, exist_ok=True)
     write_json(target, payload)
     assert se.index_is_fresh(paths, iid) is True
-    # fonte mudou -> stale
+    # fonte mudou -> stale (utime explicito: reescrita rapida pode cair
+    # no MESMO mtime e o teste flakearia)
     write_json(canonical_path(paths, iid), dict(canonical, extra=1))
+    import os
+    bumped = source.stat().st_mtime + 2
+    os.utime(source, (bumped, bumped))
     assert se.index_is_fresh(paths, iid) is False
     # versao errada -> stale
     payload["version"] = -1
@@ -99,5 +103,40 @@ try:
     print("PASS: similarity_label")
 except ImportError:
     print("SKIP: similarity_label (PySide6 ausente)")
+
+# --- search_scope_text (linha de escopo das janelas de busca/AI) ---
+try:
+    from transcribe_pipeline.review_studio_qt import search_scope_text
+
+    # all: todos / parcial / nenhum / vazio / singular
+    assert search_scope_text("all", 12, 12, "A busca") == (
+        "A busca lê as transcrições de todos os 12 arquivos do projeto.")
+    assert search_scope_text("all", 12, 9, "A AI") == (
+        "A AI lê as transcrições de 9 dos 12 arquivos do projeto — "
+        "3 ainda sem transcrição ficam de fora.")
+    assert "não o áudio" in search_scope_text("all", 5, 0, "A busca")
+    assert search_scope_text("all", 0, 0, "A busca") == (
+        "Este projeto ainda não tem arquivos.")
+    assert search_scope_text("all", 1, 1, "A busca") == (
+        "A busca lê a transcrição do único arquivo do projeto.")
+    assert "único arquivo" in search_scope_text("all", 1, 0, "A busca")
+    # checked: todas / parcial / nenhuma / vazio / singular
+    assert search_scope_text("checked", 2, 2, "A AI") == (
+        "A AI lê as transcrições de todas as 2 entrevistas marcadas.")
+    assert search_scope_text("checked", 3, 1, "A busca") == (
+        "A busca lê as transcrições de 1 das 3 entrevistas marcadas — "
+        "2 ainda sem transcrição ficam de fora.")
+    assert "não o áudio" in search_scope_text("checked", 2, 0, "A AI")
+    assert search_scope_text("checked", 0, 0, "A busca") == (
+        "Nenhuma entrevista marcada na lista.")
+    assert search_scope_text("checked", 1, 1, "A busca") == (
+        "A busca lê a transcrição da entrevista marcada.")
+    # open: com e sem transcricao
+    assert search_scope_text("open", 1, 1, "A AI") == (
+        "A AI lê a transcrição da entrevista aberta.")
+    assert "não foi transcrita" in search_scope_text("open", 1, 0, "A busca")
+    print("PASS: search_scope_text")
+except ImportError:
+    print("SKIP: search_scope_text (PySide6 ausente)")
 
 print("PASS: toy_search")
