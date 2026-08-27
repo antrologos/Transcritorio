@@ -69,12 +69,15 @@ oficial passa a ser **PyPI + uv** (`uv tool install transcritorio`); ver
   a janela. Tooltips de buscar/perguntar/resumir declaram o escopo.
 - Áudio multicanal (fase 4, núcleo): quando a gravação tem 2+ canais
   com microfones distintos (lapelas, gravador de 2 mics), o pipeline
-  agora extrai um WAV por canal, mede a dominância de energia e — se os
-  canais forem de fato informativos (estéreo-ambiente segue o fluxo
-  normal) — usa os canais como fonte da separação de falantes, com os
-  rótulos casados às vozes do pyannote por semelhança de voz. Sinal
-  muito mais confiável que qualquer pós-processamento; arquivos mono
-  não mudam em nada. CLI: `transcritorio-cli channels`.
+  passa a usar os canais como fonte da separação de falantes, com os
+  rótulos casados às vozes do pyannote por semelhança de voz — sinal
+  muito mais confiável que qualquer pós-processamento. A verificação
+  é barata: três amostras de 1 minuto decidem em menos de 1 segundo se
+  os canais são mesmo microfones separados; gravações "falso-estéreo"
+  (canais idênticos, o caso comum em gravador de celular) seguem o
+  fluxo normal. O áudio por canal é intermediário e fica na pasta
+  temporária do sistema, nunca dentro do projeto. Arquivos mono não
+  mudam em nada. CLI: `transcritorio-cli channels`.
 - Tempos por palavra no Estúdio (fase 3): o alinhamento do Whisper
   sempre produziu o tempo de cada palavra — agora o editor os usa.
   Duplo clique numa palavra do texto leva o áudio exatamente até ela;

@@ -18,10 +18,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "prefer_source_kinds": ["A", "audio", "unknown", "V"],
     "wav_sample_rate": 16000,
     "wav_channels": 1,
-    # Fase 4 (multicanal): alem do WAV mono, extrair {id}.ch{n}.wav quando
-    # a fonte tem >= 2 canais, e analisar se eles carregam microfones
-    # distintos (dominancia de energia por canal).
-    "wav_split_channels": True,
+    # Fase 4 (multicanal): sondar fontes com >= 2 canais para saber se os
+    # canais carregam microfones distintos (dominancia de energia). O
+    # audio por canal e intermediario e vive fora do projeto.
     "channels_analysis": True,
     "channels_dominance_threshold": 0.65,
     "asr_model": "large-v3-turbo",

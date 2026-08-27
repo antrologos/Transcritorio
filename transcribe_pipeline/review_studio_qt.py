@@ -8029,11 +8029,11 @@ if QT_IMPORT_ERROR is None:
             """Analise de canais via CLI em subprocesso (fase 4).
 
             Mesmo racional da diarizacao: a fusao de rotulos usa torch/
-            pyannote e roda no processo filho. Arquivos sem {id}.ch{n}.wav
-            sao pulados aqui mesmo, sem custo de subprocesso.
+            pyannote e roda no processo filho. Fontes mono sao puladas
+            aqui mesmo, sem custo de subprocesso.
             """
             from . import runtime as _rt
-            from .channels import channel_wav_paths as _channel_wav_paths
+            from .channels import source_channels as _source_channels
             from .utils import parse_progress_json_line, run_command_stream
             id_list = [ids] if isinstance(ids, str) else list(ids)
             failures = 0
@@ -8041,7 +8041,7 @@ if QT_IMPORT_ERROR is None:
                 if should_cancel is not None and should_cancel():
                     break
                 row = next((r for r in self.context.rows if r["interview_id"] == iid), None)
-                if row is None or not _channel_wav_paths(self.context.paths, row):
+                if row is None or _source_channels(row) < 2:
                     continue
 
                 def on_output(line: str) -> None:
