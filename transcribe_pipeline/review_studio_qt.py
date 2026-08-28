@@ -3860,6 +3860,9 @@ if QT_IMPORT_ERROR is None:
             self.turns: list[dict[str, Any]] = []
             self.word_index: list[dict[str, Any]] = []
             self._word_uncertain_cutoff: float | None = None
+            # Retrato (hardware + modelos em cache) que decide o que fica
+            # disponivel; None = recalcular na proxima consulta.
+            self._caps_cache: tuple[Any, set[str], dict[str, float]] | None = None
             self.current_turn_id: str | None = None
             self.current_play_row: int | None = None
             self.media_candidates: list[Path] = []
@@ -4601,6 +4604,7 @@ if QT_IMPORT_ERROR is None:
             if not _models_ready():
                 wizard = FirstRunWizard(self)
                 result = wizard.exec()
+                self._caps_cache = None  # o assistente pode ter mudado o que existe
                 if result == QDialog.DialogCode.Accepted and wizard.download_completed:
                     # Components installed — show project chooser
                     self.progress_label.setText("Componentes de IA instalados.")
@@ -6817,6 +6821,36 @@ if QT_IMPORT_ERROR is None:
             action.setToolTip(f"{base}\n({disabled_reason})"
                               if (not enabled and disabled_reason) else str(base))
 
+        def _capability_state(self, key: str) -> tuple[str, str, float]:
+            """Estado da capacidade NESTA maquina, com cache.
+
+            update_action_states roda a cada troca de selecao; sondar GPU
+            e disco toda vez seria caro. O cache e invalidado quando algo
+            que muda a resposta acontece (download concluido, assistente).
+            """
+            from . import capabilities as _caps
+            estado_cache = getattr(self, "_caps_cache", None)
+            if estado_cache is None:
+                variante = None
+                try:
+                    if self.context is not None:
+                        variante = str(self.context.config.get("asr_model") or "") or None
+                except Exception:  # noqa: BLE001
+                    variante = None
+                estado_cache = (
+                    _caps.hardware_snapshot(),
+                    _caps.cached_model_keys(variante),
+                    _caps.model_sizes_from_registry(variante),
+                )
+                self._caps_cache = estado_cache
+            hardware, em_cache, tamanhos = estado_cache
+            return _caps.capability_status(
+                _caps.capability(key), hardware, em_cache, tamanhos)
+
+        def _invalidate_capability_cache(self) -> None:
+            self._caps_cache = None
+            self.update_action_states()
+
         def update_action_states(self) -> None:
             if not hasattr(self, "save_action"):
                 return
@@ -6896,6 +6930,23 @@ if QT_IMPORT_ERROR is None:
             self._set_action(self.voice_prompt_action, not busy and has_project, reason_busy if busy else "Abra ou crie um projeto primeiro.")
             self._set_action(self.render_action, not busy and has_selected, reason_busy if busy else reason_select)
             self._set_action(self.qc_action, not busy, reason_busy)
+            # Acoes de AI (etapa 2 do plano de perfis): a regra e simples e
+            # vale para todas — INCOMPATIVEL com a maquina desabilita e diz
+            # por que; falta só baixar mantem habilitada, porque o clique
+            # oferece o download. Nunca clique-morto, nunca erro.
+            resumo_estado, resumo_motivo, _gb = self._capability_state("resumo_perguntar")
+            resumo_travado = resumo_estado == "incompativel"
+            self._set_action(
+                self.summarize_action,
+                not busy and has_review and not resumo_travado,
+                reason_busy if busy else (resumo_motivo if resumo_travado else reason_open),
+            )
+            self._set_action(self.explore_action, not busy and has_project,
+                             reason_busy if busy else reason_project)
+            self._set_action(self.glossario_action, not busy and has_project,
+                             reason_busy if busy else reason_project)
+            self._set_action(self.spelling_action, not busy and has_project,
+                             reason_busy if busy else reason_project)
             self.cancel_job_action.setEnabled(busy)
             if hasattr(self, "progress_bar"):
                 self.progress_bar.setVisible(busy)
@@ -6923,7 +6974,13 @@ if QT_IMPORT_ERROR is None:
                 self.open_resumo_button.setVisible(has_resumo)
                 if hasattr(self, "generate_resumo_button"):
                     self.generate_resumo_button.setVisible(has_review and not has_resumo)
-                    self.generate_resumo_button.setEnabled(not busy and has_review)
+                    # Mesma regra da acao: maquina incompativel desabilita o
+                    # botao e explica no tooltip, em vez de deixar clicar
+                    # para so entao dizer que nao da.
+                    self.generate_resumo_button.setEnabled(
+                        not busy and has_review and not resumo_travado)
+                    self.generate_resumo_button.setToolTip(
+                        resumo_motivo if resumo_travado else self.summarize_action.toolTip())
 
         def restore_review_snapshot(self, snapshot: dict[str, Any], selected_turn_id: str | None = None) -> None:
             if not self.current_interview_id:
@@ -8499,6 +8556,7 @@ if QT_IMPORT_ERROR is None:
                     self, "Download nao concluido",
                     f"Nao foi possivel baixar {titulo}. Verifique a conexao e tente de novo.")
                 return False
+            self._invalidate_capability_cache()  # o que estava indisponivel virou disponivel
             return True
 
         def _ensure_ner_model(self) -> bool:
