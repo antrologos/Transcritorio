@@ -378,9 +378,9 @@ def glossary_ready() -> tuple[bool, str]:
     from . import model_manager, runtime
 
     asset = model_manager.optional_model(NER_ASSET_KEY)
-    cached = model_manager.cached_snapshot_path(
-        asset.repo_id, runtime.model_cache_dir(), revision=asset.revision)
-    if cached is None:
+    # Inclui o repo acompanhante do tokenizador: sem ele o worker roda
+    # offline e quebra na hora de carregar o modelo.
+    if not model_manager.optional_model_cached(asset, runtime.model_cache_dir()):
         return False, (
             f"O modelo de nomes ({asset.label}, ~{asset.estimated_gb:.1f} GB) "
             "ainda nao foi baixado neste computador.")

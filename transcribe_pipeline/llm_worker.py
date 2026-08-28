@@ -193,6 +193,7 @@ NER_LABELS = ("person", "location", "organization")
 NER_TIPOS = {"person": "pessoa", "location": "lugar", "organization": "instituicao"}
 NER_THRESHOLD = 0.5
 NER_STOPLIST = frozenset([
+    # --- da PoC 2.0.b (medidos como falsos positivos) ---
     "eu", "voce", "voces", "ele", "ela", "eles", "elas",
     "gente", "a gente", "pessoa", "pessoas", "a pessoa",
     "casa", "rua", "lugar", "bairro", "la", "domicilio",
@@ -201,6 +202,25 @@ NER_STOPLIST = frozenset([
     "prefeitura", "universidade", "colegio", "escola", "igreja",
     "morador", "moradores", "cidade", "estado", "pais",
     "regiao", "setor", "zona",
+    # --- E2E de 2026-08-28: demonstrativos e genericos capitalizados no
+    # inicio da fala viravam "nomes" e, por serem frequentes, chegavam a
+    # engolir siglas reais ("Isso" absorveu INSS). A comparacao e do span
+    # INTEIRO, entao nomes compostos legitimos ("Bolsa Familia", "Arena
+    # Park") nao sao afetados.
+    "isso", "isto", "esse", "essa", "esses", "essas", "aquilo",
+    "aquele", "aquela", "aqui", "ali", "ai", "entao", "tipo",
+    "coisa", "coisas", "show", "familia", "obrigado", "obrigada",
+    "oi", "ola", "ah", "ahn", "eita", "uhum", "aham", "beleza",
+    "ne", "ta", "tudo", "nada", "sim", "nao", "bom", "bem",
+    "hoje", "ontem", "amanha", "agora", "depois", "antes",
+    "sempre", "nunca", "muito", "pouco", "mais", "menos",
+    "trabalho", "servico", "dinheiro", "salario", "tempo",
+    "ano", "mes", "dia", "semana", "hora", "vez", "vezes",
+    "forma", "parte", "caso", "exemplo", "verdade", "questao",
+    "problema", "pergunta", "resposta", "nome", "numero", "area",
+    "equipe", "base", "sistema", "aplicativo", "celular",
+    "telefone", "internet", "computador", "predio", "predios",
+    "apartamento", "condominio", "familia toda", "senhor", "senhora",
 ])
 
 

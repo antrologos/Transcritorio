@@ -180,6 +180,12 @@ class ModelAsset:
     # se o repo publicar v2 maliciosa, o app continua baixando so o hash
     # conhecido-bom. Upgrade deliberado via commit que altera o SHA.
     revision: str | None = None
+    # Repo acompanhante do qual o modelo carrega tokenizer/config em
+    # tempo de execucao (o GLiNER usa o encoder base). Baixado junto,
+    # SEM os pesos — o modelo tem os proprios. Sem isso, o worker
+    # offline quebra com "couldn't connect to huggingface.co".
+    companion_repo: str | None = None
+    companion_revision: str | None = None
 
 
 @dataclass(frozen=True)
@@ -312,6 +318,10 @@ _OPTIONAL_MODELS: tuple[ModelAsset, ...] = (
         "nomes, lugares e instituicoes citados",
         estimated_gb=1.1,
         revision="1fcf13e85f4eef5394e1fcd406cf2ca9ea82351d",
+        # O GLiNER traz os proprios pesos, mas carrega tokenizer e config
+        # do encoder base (~4 MB de arquivos pequenos).
+        companion_repo="microsoft/mdeberta-v3-base",
+        companion_revision="a0484667b22365f84929a935b5e50a51f71f159d",
     ),
     ModelAsset(
         "search_encoder",
@@ -344,7 +354,7 @@ def download_optional_model(
     asset = optional_model(key)
     cache_dir = runtime.model_cache_dir()
     cache_dir.mkdir(parents=True, exist_ok=True)
-    if cached_snapshot_path(asset.repo_id, cache_dir, revision=asset.revision) is not None:
+    if optional_model_cached(asset, cache_dir):
         return 0
     needed_gb = asset.estimated_gb * 1.2 + 1.0
     free_gb = _free_disk_gb(cache_dir)
@@ -353,23 +363,51 @@ def download_optional_model(
               f"{free_gb:.1f} GB livres, ~{needed_gb:.1f} GB necessarios.")
         return 1
     runtime.apply_secure_hf_environment(offline=False, token=None)
+    main_end = 95 if asset.companion_repo else 100
     try:
-        _manual_snapshot_download(
-            repo_id=asset.repo_id,
-            revision=asset.revision or "main",
-            cache_dir=cache_dir,
-            token=None,
-            label=asset.label,
-            start_pct=0,
-            end_pct=100,
-            estimated_bytes=int(asset.estimated_gb * (1024 ** 3)),
-            progress_callback=progress_callback,
-            should_cancel=should_cancel,
-        )
+        if cached_snapshot_path(asset.repo_id, cache_dir, revision=asset.revision) is None:
+            _manual_snapshot_download(
+                repo_id=asset.repo_id,
+                revision=asset.revision or "main",
+                cache_dir=cache_dir,
+                token=None,
+                label=asset.label,
+                start_pct=0,
+                end_pct=main_end,
+                estimated_bytes=int(asset.estimated_gb * (1024 ** 3)),
+                progress_callback=progress_callback,
+                should_cancel=should_cancel,
+            )
+        if asset.companion_repo:
+            _manual_snapshot_download(
+                repo_id=asset.companion_repo,
+                revision=asset.companion_revision or "main",
+                cache_dir=cache_dir,
+                token=None,
+                label=f"{asset.label} (tokenizador)",
+                start_pct=main_end,
+                end_pct=100,
+                estimated_bytes=8 * 1024 * 1024,
+                progress_callback=progress_callback,
+                should_cancel=should_cancel,
+                skip_weights=True,
+            )
     except Exception as exc:  # noqa: BLE001 - download e opcional, nunca crash
         print(f"Falha ao baixar {asset.label}: {exc}")
         return 1
     return 0
+
+
+def optional_model_cached(asset: ModelAsset, cache_dir: Path | None = None) -> bool:
+    """Modelo pronto para uso OFFLINE: pesos e, quando houver, o repo
+    acompanhante de onde ele carrega o tokenizador."""
+    cache = cache_dir or runtime.model_cache_dir()
+    if cached_snapshot_path(asset.repo_id, cache, revision=asset.revision) is None:
+        return False
+    if asset.companion_repo and cached_snapshot_path(
+            asset.companion_repo, cache, revision=asset.companion_revision) is None:
+        return False
+    return True
 
 
 def _free_disk_gb(path: Path) -> float | None:
@@ -712,6 +750,10 @@ def _known_repos() -> set[str]:
     for asset in _FIXED_MODELS + _OPTIONAL_MODELS:
         if asset.repo_id:
             known.add(str(asset.repo_id))
+        # O repo do tokenizador tambem e legitimo: sem isto a limpeza de
+        # orfaos o apagaria e o modelo pararia de carregar offline.
+        if asset.companion_repo:
+            known.add(str(asset.companion_repo))
     return known
 
 
@@ -968,8 +1010,13 @@ def _manual_snapshot_download(
     estimated_bytes: int,
     progress_callback: ProgressCallback | None,
     should_cancel: ShouldCancel | None,
+    skip_weights: bool = False,
 ) -> Path:
     """Baixar um repo HF usando requests direto, bypassando huggingface_hub.
+
+    skip_weights=True baixa so os arquivos pequenos (config, tokenizer):
+    usado nos repos acompanhantes, de onde queremos apenas o tokenizador
+    — baixar os pesos deles seria GB jogado fora.
 
     Motivo da existencia: huggingface_hub 0.36.2 (versao que cabia nas outras
     deps do projeto em abr/2026) nao suporta Xet Storage, o novo backend que
@@ -1041,6 +1088,9 @@ def _manual_snapshot_download(
         if _cancelled():
             raise RuntimeError("Cancelado pelo usuario")
         rfilename = sibling["rfilename"]
+        if skip_weights and rfilename.endswith(
+                (".bin", ".safetensors", ".h5", ".msgpack", ".onnx", ".ot", ".pt")):
+            continue
         # rfilename e ETag entram em caminhos locais: rejeitar path traversal
         # de resposta adulterada (defesa em profundidade junto ao pin de SHA).
         _rf = PurePosixPath(rfilename)

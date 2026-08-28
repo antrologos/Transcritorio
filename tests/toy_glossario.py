@@ -128,4 +128,19 @@ with tempfile.TemporaryDirectory() as tmp:
     assert gl.glossary_report_path(paths).name == "glossario_do_projeto.md"
 print("PASS: caminhos e load_glossary")
 
+# --- o modelo precisa do repo do tokenizador junto (senao quebra offline) ---
+try:
+    from transcribe_pipeline import model_manager as mm
+    asset = mm.optional_model(gl.NER_ASSET_KEY)
+    assert asset.revision, "modelo de nomes sem SHA pinada"
+    # Bug real (E2E 2026-08-28): o GLiNER carrega tokenizer/config do
+    # encoder base; sem o repo acompanhante em cache, o worker offline
+    # falha com "couldn't connect to huggingface.co".
+    assert asset.companion_repo, "modelo de nomes sem repo de tokenizador"
+    assert asset.companion_revision, "repo do tokenizador sem SHA pinada"
+    assert asset.companion_repo in mm._known_repos()  # nunca listado como orfao
+    print("PASS: modelo de nomes com tokenizador pinado")
+except ImportError as exc:
+    print(f"SKIP: registro do modelo ({exc})")
+
 print("PASS: toy_glossario")
