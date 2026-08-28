@@ -319,6 +319,49 @@ def format_glossary_report(glossary: dict[str, Any], project_name: str = "") -> 
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# Correcao de grafia (lote 6b): puro
+# ---------------------------------------------------------------------------
+
+def variant_spans(text: str, variante: str) -> list[tuple[int, int]]:
+    """Spans [ini, fim) da variante no texto (puro).
+
+    Casamento conservador de proposito: exato, SENSIVEL a maiusculas e
+    com fronteira de palavra. "Meia" nao casa dentro de "Meias" nem com
+    "meia" minusculo — que quase sempre e a palavra comum, nao a
+    entidade. Errar para menos aqui e barato (o usuario corrige a mao);
+    errar para mais adultera a entrevista.
+    """
+    needle = str(variante or "")
+    haystack = str(text or "")
+    if not needle or not haystack:
+        return []
+    pattern = re.compile(rf"(?<!\w){re.escape(needle)}(?!\w)")
+    return [(m.start(), m.end()) for m in pattern.finditer(haystack)]
+
+
+def apply_spans(text: str, spans: list[tuple[int, int]], canonico: str) -> str:
+    """Substitui os spans pelo canonico, de tras para frente (puro).
+
+    De tras para frente porque substituir da esquerda deslocaria os
+    indices seguintes.
+    """
+    novo = str(text or "")
+    for start, end in sorted(spans, key=lambda s: -s[0]):
+        novo = novo[:start] + str(canonico) + novo[end:]
+    return novo
+
+
+def occurrence_excerpt(text: str, span: tuple[int, int], margem: int = 60) -> str:
+    """Trecho ao redor da ocorrencia, para a lista de julgamento (puro)."""
+    conteudo = str(text or "")
+    start, end = span
+    esquerda = max(0, start - margem)
+    direita = min(len(conteudo), end + margem)
+    trecho = conteudo[esquerda:direita].strip()
+    return ("…" if esquerda > 0 else "") + trecho + ("…" if direita < len(conteudo) else "")
+
+
 def _clock(seconds: float) -> str:
     total = max(0, int(float(seconds or 0)))
     return f"{total // 3600:02d}:{(total % 3600) // 60:02d}:{total % 60:02d}"
@@ -350,6 +393,114 @@ def load_glossary(paths: Paths) -> dict[str, Any]:
         return payload if isinstance(payload, dict) else {}
     except Exception:  # noqa: BLE001 - glossario e opcional
         return {}
+
+
+def collect_occurrences(
+    paths: Paths, interview_ids: list[str], variante: str, canonico: str = "",
+) -> list[dict[str, Any]]:
+    """Ocorrencias vivas da variante nas transcricoes revisadas.
+
+    Le o texto ATUAL dos turnos (nao os exemplos gravados no glossario:
+    o usuario pode ter editado desde a varredura) e itera review_turns
+    direto — o turn_index da busca literal pula turnos vazios e nao
+    serve para escrita.
+    """
+    from .review_store import load_review_transcript, review_path, review_turns
+
+    ocorrencias: list[dict[str, Any]] = []
+    for interview_id in interview_ids:
+        if not review_path(paths, interview_id).exists():
+            continue
+        try:
+            review = load_review_transcript(paths, interview_id)
+            turns = review_turns(review)
+        except Exception:  # noqa: BLE001 - um arquivo ruim nao derruba a lista
+            continue
+        for turn in turns:
+            texto = str(turn.get("text") or "")
+            for span in variant_spans(texto, variante):
+                ocorrencias.append({
+                    "interview_id": interview_id,
+                    "turn_id": str(turn.get("id") or ""),
+                    "start": float(turn.get("start", 0) or 0),
+                    "span": span,
+                    "variante": variante,
+                    "canonico": canonico,
+                    "trecho": occurrence_excerpt(texto, span),
+                })
+    return ocorrencias
+
+
+def apply_corrections(paths: Paths, decisoes: list[dict[str, Any]]) -> dict[str, int]:
+    """Aplica as ocorrencias aprovadas; devolve o que mudou.
+
+    Uma copia de seguranca por arquivo antes de qualquer alteracao, e
+    set_turn_text por turno (que marca o bloco como editado e registra
+    a auditoria em edits). O canonico em 04_canonical NAO e tocado — e
+    a camada auditavel da maquina.
+    """
+    from .review_store import (
+        backup_review_file, find_turn_index, load_review_transcript,
+        review_turns, save_review_transcript, set_turn_text,
+    )
+
+    por_arquivo: dict[str, list[dict[str, Any]]] = {}
+    for decisao in decisoes:
+        por_arquivo.setdefault(str(decisao["interview_id"]), []).append(decisao)
+
+    blocos = ocorrencias = arquivos = 0
+    for interview_id, itens in por_arquivo.items():
+        try:
+            review = load_review_transcript(paths, interview_id)
+            turns = review_turns(review)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Falha ao abrir {interview_id}: {exc}")
+            continue
+        por_turno: dict[str, list[dict[str, Any]]] = {}
+        for item in itens:
+            por_turno.setdefault(str(item["turn_id"]), []).append(item)
+        mudou = False
+        for turn_id, spans_do_turno in por_turno.items():
+            try:
+                turn = turns[find_turn_index(review, turn_id)]
+            except (KeyError, IndexError):
+                continue
+            texto = str(turn.get("text") or "")
+            # Reconfere cada span no texto ATUAL: se o usuario editou o
+            # bloco depois da coleta, a posicao pode nao valer mais.
+            aplicaveis = [
+                item for item in spans_do_turno
+                if texto[item["span"][0]:item["span"][1]] == item["variante"]
+            ]
+            if not aplicaveis:
+                continue
+            if not mudou:
+                backup_review_file(paths, interview_id)
+                mudou = True
+            novo = texto
+            for item in sorted(aplicaveis, key=lambda i: -i["span"][0]):
+                novo = apply_spans(novo, [tuple(item["span"])], str(item["canonico"]))
+            set_turn_text(review, turn_id, novo)
+            blocos += 1
+            ocorrencias += len(aplicaveis)
+        if mudou:
+            save_review_transcript(paths, interview_id, review)
+            arquivos += 1
+    return {"blocos": blocos, "ocorrencias": ocorrencias, "arquivos": arquivos}
+
+
+def pending_variants(paths: Paths) -> list[dict[str, Any]]:
+    """[{canonico, tipo, variante, total}] do glossario gravado."""
+    pendentes = []
+    for entrada in (load_glossary(paths).get("entradas") or []):
+        for variante in entrada.get("variantes") or []:
+            pendentes.append({
+                "canonico": entrada["canonico"],
+                "tipo": entrada.get("tipo", ""),
+                "variante": variante["texto"],
+                "total": variante.get("total", 0),
+            })
+    return pendentes
 
 
 def glossary_prompt_file(paths: Paths) -> Path | None:

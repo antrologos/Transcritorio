@@ -128,6 +128,94 @@ with tempfile.TemporaryDirectory() as tmp:
     assert gl.glossary_report_path(paths).name == "glossario_do_projeto.md"
 print("PASS: caminhos e load_glossary")
 
+# --- correcao de grafia (6b): casamento conservador ---
+texto = "Fui ao Meia e comprei meias. Meias e Meia sao diferentes; Ameia tambem."
+spans = gl.variant_spans(texto, "Meia")
+assert len(spans) == 2, spans                      # so as ocorrencias exatas
+assert all(texto[a:b] == "Meia" for a, b in spans)
+assert gl.variant_spans(texto, "meia") == []       # caixa importa
+assert gl.variant_spans("Ameia Meias", "Meia") == []   # fronteira de palavra
+assert gl.variant_spans("Moro em Viçosa hoje", "Viçosa")        # acento casa
+assert gl.variant_spans("nada aqui", "Celso") == []
+assert gl.variant_spans("Celso", "") == []
+# pontuacao e fronteira valida
+assert len(gl.variant_spans('Foi no "Meia", sim.', "Meia")) == 1
+print("PASS: variant_spans")
+
+# --- apply_spans: de tras para frente, indices nao se deslocam ---
+alvo = "O Celso e o Celso de novo"
+todos = gl.variant_spans(alvo, "Celso")
+assert gl.apply_spans(alvo, todos, "Censo") == "O Censo e o Censo de novo"
+# aplicar SO a segunda ocorrencia
+assert gl.apply_spans(alvo, [todos[1]], "Censo") == "O Celso e o Censo de novo"
+# canonico mais longo que a variante nao corrompe o span seguinte
+assert gl.apply_spans("BGA e BGA", gl.variant_spans("BGA e BGA", "BGA"), "IBGE") == "IBGE e IBGE"
+print("PASS: apply_spans")
+
+# --- occurrence_excerpt ---
+longo = "a" * 200 + " Meia " + "b" * 200
+trecho = gl.occurrence_excerpt(longo, gl.variant_spans(longo, "Meia")[0])
+assert trecho.startswith("…") and trecho.endswith("…") and "Meia" in trecho
+curto = gl.occurrence_excerpt("Oi Meia tchau", gl.variant_spans("Oi Meia tchau", "Meia")[0])
+assert curto == "Oi Meia tchau"                    # cabe inteiro: sem reticencias
+print("PASS: occurrence_excerpt")
+
+# --- integracao: aplica SO o aprovado, canonico intacto ---
+from transcribe_pipeline import review_store as rs
+from transcribe_pipeline.utils import read_json, write_json as _wj
+with tempfile.TemporaryDirectory() as tmp:
+    paths = make_paths(load_config(None), base_dir=Path(tmp))
+    ensure_directories(paths)
+    canonico_payload = {
+        "interview_id": "T01",
+        "turns": [
+            {"start": 0.0, "end": 5.0, "speaker": "SPEAKER_00", "human_label": "E",
+             "text": "Trabalhei no Caxambia e depois no Caxambia de novo."},
+            {"start": 5.0, "end": 9.0, "speaker": "SPEAKER_01", "human_label": "P",
+             "text": "Comprei meias no Meia da esquina."},
+        ],
+    }
+    _wj(rs.canonical_path(paths, "T01"), canonico_payload)
+    canonico_antes = rs.canonical_path(paths, "T01").read_bytes()
+    review = rs.load_review_transcript(paths, "T01")
+    turns = rs.review_turns(review)
+    rs.save_review_transcript(paths, "T01", review)
+    turn_id = turns[0]["id"]
+
+    todas = gl.collect_occurrences(paths, ["T01"], "Caxambia", "Caxambi")
+    assert len(todas) == 2 and all(o["interview_id"] == "T01" for o in todas)
+    assert todas[0]["turn_id"] == turn_id and "Caxambia" in todas[0]["trecho"]
+    # aprova SO a primeira
+    resultado = gl.apply_corrections(paths, [todas[0]])
+    assert resultado == {"blocos": 1, "ocorrencias": 1, "arquivos": 1}, resultado
+    depois = rs.review_turns(rs.load_review_transcript(paths, "T01"))
+    assert depois[0]["text"] == "Trabalhei no Caxambi e depois no Caxambia de novo."
+    assert depois[0]["edited"] is True
+    assert depois[1]["text"] == canonico_payload["turns"][1]["text"]   # intocado
+    edits = rs.load_review_transcript(paths, "T01").get("edits") or []
+    assert any(e.get("action") == "set_text" for e in edits)
+    # o canonico e a camada auditavel: NAO pode mudar
+    assert rs.canonical_path(paths, "T01").read_bytes() == canonico_antes
+    # a palavra comum minuscula continua intacta
+    assert "meias" in depois[1]["text"]
+    # decisao com span defasado (texto mudou) e simplesmente ignorada
+    obsoleta = dict(todas[1], span=(0, 8))
+    assert gl.apply_corrections(paths, [obsoleta])["ocorrencias"] == 0
+print("PASS: collect_occurrences + apply_corrections")
+
+# --- pending_variants ---
+with tempfile.TemporaryDirectory() as tmp:
+    paths = make_paths(load_config(None), base_dir=Path(tmp))
+    ensure_directories(paths)
+    assert gl.pending_variants(paths) == []
+    alvo = gl.glossary_path(paths)
+    alvo.parent.mkdir(parents=True, exist_ok=True)
+    from transcribe_pipeline.utils import write_json as _wj2
+    _wj2(alvo, com_ajuda)
+    pend = gl.pending_variants(paths)
+    assert pend and all({"canonico", "variante", "total"} <= set(p) for p in pend)
+print("PASS: pending_variants")
+
 # --- o modelo precisa do repo do tokenizador junto (senao quebra offline) ---
 try:
     from transcribe_pipeline import model_manager as mm

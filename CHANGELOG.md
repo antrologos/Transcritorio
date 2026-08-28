@@ -67,6 +67,19 @@ oficial passa a ser **PyPI + uv** (`uv tool install transcritorio`); ver
   transcrição nunca somem em silêncio; projeto sem transcrição alguma
   explica em vez de não fazer nada; o seletor se atualiza ao voltar para
   a janela. Tooltips de buscar/perguntar/resumir declaram o escopo.
+- **✨ Revisar grafias de nomes**: a partir do glossário, mostra cada
+  ocorrência de um nome escrito de forma diferente — com a entrevista, o
+  tempo e o trecho à vista — e corrige só as que você marcar. A decisão
+  é por ocorrência, nunca por palavra, porque a mesma grafia pode ser um
+  nome legítimo em outro trecho (num teste real, um grupo apontava para
+  "Méier" e não para a sigla sugerida: aplicar em massa teria escrito um
+  erro por cima de outro). Clicar num trecho abre a entrevista naquele
+  ponto para ouvir antes de decidir. O casamento é exato, sensível a
+  maiúsculas e respeita fronteira de palavra ("Meia" não altera "meias").
+  Só a transcrição revisada muda: a transcrição original da máquina fica
+  intacta, cada arquivo alterado ganha cópia de segurança em
+  `05_transcripts_review/edits/backups/` e Ctrl+Z desfaz na entrevista
+  aberta.
 - **✨ Glossário de nomes com AI**: lê as transcrições do projeto e monta
   um glossário de pessoas, lugares e instituições citados, juntando as
   variações de grafia do mesmo nome (IBGE escrito como "BGA", Viçosa como

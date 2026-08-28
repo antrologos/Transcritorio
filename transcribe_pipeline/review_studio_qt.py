@@ -2121,6 +2121,92 @@ if QT_IMPORT_ERROR is None:
             return result
 
 
+    class SpellingReviewDialog(QDialog):
+        """Revisao de grafias (lote 6b): a UNICA porta que altera o texto
+        das entrevistas, entao a evidencia fica a vista e a decisao e por
+        OCORRENCIA — nunca por palavra. Nada vem marcado: o usuario
+        escolhe ativamente o que muda. Clicar num trecho abre a entrevista
+        naquele ponto para ouvir antes de decidir."""
+
+        def __init__(self, window, grupos: list[dict[str, Any]]) -> None:
+            super().__init__(window)
+            self._window = window
+            self.setWindowTitle("✨ Revisar grafias de nomes")
+            self.setMinimumSize(760, 520)
+            self._checks: list[tuple[QCheckBox, dict[str, Any]]] = []
+
+            layout = QVBoxLayout(self)
+            intro = QLabel(
+                "A AI encontrou nomes escritos de formas diferentes. Marque só as "
+                "ocorrências que são erro de transcrição — cada uma é decidida "
+                "separadamente, porque a mesma palavra pode ser um nome legítimo "
+                "em outro trecho.\nO áudio e a transcrição original não são "
+                "alterados; Ctrl+Z desfaz na entrevista aberta."
+            )
+            intro.setWordWrap(True)
+            intro.setStyleSheet(_style_muted())
+            layout.addWidget(intro)
+
+            container = QWidget()
+            container_layout = QVBoxLayout(container)
+            container_layout.setContentsMargins(0, 0, 0, 0)
+            for grupo in grupos:
+                box = QGroupBox(f"\"{grupo['variante']}\"  →  {grupo['canonico']}")
+                box_layout = QVBoxLayout(box)
+                ocorrencias = grupo["ocorrencias"]
+                todas = QCheckBox(f"marcar as {len(ocorrencias)} ocorrência(s)")
+                box_layout.addWidget(todas)
+                grupo_checks: list[QCheckBox] = []
+                for ocorrencia in ocorrencias:
+                    row = QHBoxLayout()
+                    check = QCheckBox()
+                    grupo_checks.append(check)
+                    self._checks.append((check, ocorrencia))
+                    row.addWidget(check)
+                    rotulo = QPushButton(
+                        f"{ocorrencia['interview_id']} • {format_clock(ocorrencia['start'])} • "
+                        f"{ocorrencia['trecho']}")
+                    rotulo.setFlat(True)
+                    rotulo.setStyleSheet("text-align: left;")
+                    rotulo.setToolTip("Abrir a entrevista neste ponto para ouvir")
+                    rotulo.clicked.connect(
+                        lambda _checked=False, o=ocorrencia: self._window.open_search_hit(
+                            str(o["interview_id"]), float(o["start"])))
+                    row.addWidget(rotulo, 1)
+                    box_layout.addLayout(row)
+                todas.toggled.connect(
+                    lambda checked, items=grupo_checks: [c.setChecked(checked) for c in items])
+                container_layout.addWidget(box)
+            container_layout.addStretch()
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setWidget(container)
+            layout.addWidget(scroll, 1)
+
+            self.count_label = QLabel("")
+            self.count_label.setStyleSheet(_style_muted())
+            layout.addWidget(self.count_label)
+            buttons = QDialogButtonBox(
+                QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+            buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Aplicar correções")
+            buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Agora não")
+            buttons.accepted.connect(self.accept)
+            buttons.rejected.connect(self.reject)
+            layout.addWidget(buttons)
+            for check, _ocorrencia in self._checks:
+                check.toggled.connect(self._update_count)
+            self._update_count()
+
+        def _update_count(self) -> None:
+            total = len(self.selected())
+            self.count_label.setText(
+                "Nenhuma ocorrência marcada — nada será alterado."
+                if not total else f"{total} ocorrência(s) serão corrigidas.")
+
+        def selected(self) -> list[dict[str, Any]]:
+            return [ocorrencia for check, ocorrencia in self._checks if check.isChecked()]
+
+
     class SpeakerNamingDialog(QDialog):
         """Dialogo "De quem é esta voz?" (planos D2.1/D2.5/D2.6): trechos com
         timestamp + prévia do texto por voz, ▶/⏹ com destaque do que toca, e a
@@ -4018,6 +4104,14 @@ if QT_IMPORT_ERROR is None:
                 "AI local — nada sai do seu computador.")
             self.glossario_action.triggered.connect(self.run_glossario_job)
 
+            self.spelling_action = QAction("✨ Revisar grafias de nomes...", self)
+            self.spelling_action.setToolTip(
+                "Mostra os nomes que aparecem escritos de formas diferentes e deixa\n"
+                "você corrigir ocorrência por ocorrência, com o trecho à vista.\n"
+                "Exige o glossário gerado antes; o áudio e a transcrição original\n"
+                "não são alterados, e Ctrl+Z desfaz na entrevista aberta.")
+            self.spelling_action.triggered.connect(self.open_spelling_review)
+
             self.render_action = QAction("Atualizar transcricao editavel", self)
             self.render_action.setToolTip("Remontar a transcrição editável a partir dos dados brutos (ASR + diarização).\nSelecione ao menos um arquivo.")
             self.render_action.triggered.connect(self.run_render_job)
@@ -4193,6 +4287,7 @@ if QT_IMPORT_ERROR is None:
             transcrever_menu.addSeparator()
             transcrever_menu.addAction(self.summarize_action)
             transcrever_menu.addAction(self.glossario_action)
+            transcrever_menu.addAction(self.spelling_action)
             transcrever_menu.addSeparator()
             transcrever_menu.addAction(self.qc_action)
             transcrever_menu.addAction(self.queue_action)
@@ -8415,16 +8510,87 @@ if QT_IMPORT_ERROR is None:
                 "as variacoes de grafia com muito mais precisao."
             )
             open_file = box.addButton("Abrir glossario", QMessageBox.ButtonRole.AcceptRole)
+            revisar = (box.addButton("Revisar grafias...", QMessageBox.ButtonRole.ActionRole)
+                       if com_variantes else None)
             open_ctx = box.addButton("Abrir nomes conhecidos", QMessageBox.ButtonRole.ActionRole)
             box.addButton("Fechar", QMessageBox.ButtonRole.RejectRole)
             box.setDefaultButton(open_file)
             box.exec()
             if box.clickedButton() is open_file:
                 QDesktopServices.openUrl(QUrl.fromLocalFile(str(report)))
+            elif revisar is not None and box.clickedButton() is revisar:
+                self.open_spelling_review()
             elif box.clickedButton() is open_ctx:
                 ctx = _context_path(self.context.paths)
                 if ctx.exists():
                     QDesktopServices.openUrl(QUrl.fromLocalFile(str(ctx)))
+
+        def open_spelling_review(self) -> None:
+            """Revisao de grafias (lote 6b): so aplica o que o usuario marcar."""
+            from . import glossario as _gl
+            if self.context is None:
+                QMessageBox.information(self, "Abra um projeto", "Abra um projeto para revisar as grafias.")
+                return
+            if not self.save_current_turn():
+                return
+            pendentes = _gl.pending_variants(self.context.paths)
+            if not pendentes:
+                QMessageBox.information(
+                    self, "Nada a revisar",
+                    "Nenhuma variação de grafia foi encontrada.\n\n"
+                    "Gere o glossário primeiro (menu Transcrever) — e, para "
+                    "melhorar a deteccao, declare os nomes corretos na secao "
+                    "\"## Nomes conhecidos\" do contexto da pesquisa.")
+                return
+            ids = [r["interview_id"] for r in self.context.rows]
+            grupos = []
+            for pendente in pendentes:
+                ocorrencias = _gl.collect_occurrences(
+                    self.context.paths, ids, pendente["variante"], pendente["canonico"])
+                if ocorrencias:
+                    grupos.append({**pendente, "ocorrencias": ocorrencias})
+            if not grupos:
+                QMessageBox.information(
+                    self, "Nada a revisar",
+                    "As variações do glossário não aparecem mais nas transcrições "
+                    "revisadas — provavelmente já foram corrigidas.")
+                return
+            dialog = SpellingReviewDialog(self, grupos)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            decisoes = dialog.selected()
+            if not decisoes:
+                self.progress_label.setText("Nenhuma grafia foi alterada.")
+                return
+            aberta = self.current_interview_id
+            before = deepcopy(self.review) if self.review else None
+            try:
+                resultado = _gl.apply_corrections(self.context.paths, decisoes)
+            except Exception as exc:  # noqa: BLE001
+                QMessageBox.critical(self, "Não foi possível corrigir", sanitize_message(str(exc)))
+                return
+            if aberta and any(str(d["interview_id"]) == aberta for d in decisoes):
+                # Recarrega do disco: apply_corrections gravou por fora do
+                # objeto em memoria desta janela.
+                try:
+                    self.review = app_service.load_review(self.context, aberta, create=True)
+                    self.turns = review_store.review_turns(self.review)
+                    self.load_turn_table()
+                    if before is not None:
+                        self.undo_stack.push(ReviewSnapshotCommand(
+                            self, "Corrigir grafias", before, self.review, self.current_turn_id))
+                except Exception as exc:  # noqa: BLE001
+                    _logger.warning("Falha ao recarregar %s apos correcao: %s", aberta, exc)
+            self.set_save_state(saved_status_message())
+            QMessageBox.information(
+                self, "Grafias corrigidas",
+                f"{resultado['ocorrencias']} ocorrência(s) corrigida(s) em "
+                f"{resultado['blocos']} bloco(s) de {resultado['arquivos']} arquivo(s).\n\n"
+                "Cópias de segurança das revisões ficam em "
+                "05_transcripts_review/edits/backups/.\n"
+                "Gere o glossário de novo para atualizar a lista.")
+            self.progress_label.setText(
+                f"{resultado['ocorrencias']} grafia(s) corrigida(s).")
 
         def run_qc_job(self) -> None:
             if not self.save_current_turn():
