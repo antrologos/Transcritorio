@@ -130,7 +130,7 @@ PERGUNTA_PROMPT = (
     "2. Nao use nenhum conhecimento externo; nao invente.\n"
     f"3. Se os trechos nao contem a resposta, escreva exatamente: {SEM_RESPOSTA}\n"
     "4. Responda em portugues, direto, em ate 200 palavras.\n\n"
-    "{contexto}=== TRECHOS ===\n{trechos}\n\n=== PERGUNTA ===\n{pergunta}"
+    "{contexto}{glossario}=== TRECHOS ===\n{trechos}\n\n=== PERGUNTA ===\n{pergunta}"
 )
 
 
@@ -139,7 +139,7 @@ MAP_PROMPT = (
     "brasileiro), com timestamps. Liste os temas tratados NESTE trecho.\n"
     'Responda APENAS com JSON: [{{"tema": "2-5 palavras", "inicio": "HH:MM:SS do '
     'primeiro momento do tema", "resumo": "1 frase do que foi dito"}}]. '
-    "Use somente o que esta no trecho; nao invente.\n\n{contexto}=== TRECHO ===\n{janela}"
+    "Use somente o que esta no trecho; nao invente.\n\n{contexto}{glossario}=== TRECHO ===\n{janela}"
 )
 
 REDUCE_PROMPT = (
@@ -151,7 +151,7 @@ REDUCE_PROMPT = (
     "`- [HH:MM:SS] Tema — sintese curta` (timestamp do primeiro momento).\n\n"
     "## Observacoes\nAte 3 pontos que merecem atencao do pesquisador (tensoes, "
     "contradicoes, temas emergentes{fora_do_roteiro}).\n\n"
-    "Baseie-se apenas nas notas; nao invente conteudo.\n\n{contexto}=== NOTAS ===\n{notas}"
+    "Baseie-se apenas nas notas; nao invente conteudo.\n\n{contexto}{glossario}=== NOTAS ===\n{notas}"
 )
 
 
@@ -185,6 +185,91 @@ def _make_asker(model_repo: str):
     return ask
 
 
+# Receita calibrada na PoC 2.0.b (2026-08-25): th=0,5 + exigir maiuscula
+# no span + stoplist -> precisao 0,47, recall 0,96 e 6/6 dos nomes
+# corrompidos pelo ASR. O modelo cru erra em pronomes/genericos, nao em
+# semantica; por isso a camada de regras vive aqui e nao no modelo.
+NER_LABELS = ("person", "location", "organization")
+NER_TIPOS = {"person": "pessoa", "location": "lugar", "organization": "instituicao"}
+NER_THRESHOLD = 0.5
+NER_STOPLIST = frozenset([
+    "eu", "voce", "voces", "ele", "ela", "eles", "elas",
+    "gente", "a gente", "pessoa", "pessoas", "a pessoa",
+    "casa", "rua", "lugar", "bairro", "la", "domicilio",
+    "vizinho", "vizinhos", "minha mae", "meu pai", "censo",
+    "supervisor", "supervisores", "recenseador", "recenseadores",
+    "prefeitura", "universidade", "colegio", "escola", "igreja",
+    "morador", "moradores", "cidade", "estado", "pais",
+    "regiao", "setor", "zona",
+])
+
+
+def _ner_keep(text: str) -> bool:
+    """Filtro de regras da PoC: maiuscula inicial e fora da stoplist (puro)."""
+    import unicodedata as _ud
+
+    cleaned = " ".join(str(text or "").split())
+    if not cleaned or not cleaned[0].isupper():
+        return False
+    folded = "".join(
+        c for c in _ud.normalize("NFD", cleaned.lower()) if _ud.category(c) != "Mn")
+    return folded not in NER_STOPLIST
+
+
+def _run_entidades(args) -> int:
+    """Varre as transcricoes com o GLiNER e devolve as mencoes filtradas."""
+    from gliner import GLiNER  # so existe no llm-venv
+
+    alvos = json.loads(Path(args.alvos_file).read_text(encoding="utf-8"))
+    emit(5, "Carregando o GLiNER, nosso modelo de AI local para nomes...")
+    model = GLiNER.from_pretrained(args.model_repo)
+    mencoes: list[dict] = []
+    for index, alvo in enumerate(alvos, start=1):
+        interview_id = str(alvo.get("interview_id") or "")
+        emit(5 + int(90 * index / max(1, len(alvos))),
+             f"O GLiNER esta procurando nomes em {interview_id} ({index}/{len(alvos)})...")
+        try:
+            payload = json.loads(Path(alvo["path"]).read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001 - um arquivo nao derruba o lote
+            print(f"Falha ao ler {interview_id}: {exc}")
+            continue
+        for turn in load_turns(payload):
+            texto = " ".join(str(turn.get("text") or "").split())
+            if not texto:
+                continue
+            for ent in model.predict_entities(texto, list(NER_LABELS), threshold=NER_THRESHOLD):
+                if not _ner_keep(ent.get("text", "")):
+                    continue
+                mencoes.append({
+                    "tipo": NER_TIPOS.get(ent.get("label"), str(ent.get("label"))),
+                    "texto": " ".join(str(ent.get("text")).split()),
+                    "interview_id": interview_id,
+                    "turn_id": str(turn.get("id") or ""),
+                    "start": float(turn.get("start", 0) or 0),
+                    "score": round(float(ent.get("score", 0) or 0), 3),
+                    "trecho": texto[:200],
+                })
+    out_path = Path(args.out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps({"mencoes": mencoes}, ensure_ascii=False), encoding="utf-8")
+    emit(100, f"{len(mencoes)} mencoes de nomes encontradas.")
+    return 0
+
+
+def _load_glossary_block(path_text: str) -> str:
+    """Bloco de glossario ja formatado pelo app; "" quando ausente."""
+    if not path_text:
+        return ""
+    path = Path(path_text)
+    if not path.exists():
+        return ""
+    try:
+        raw = path.read_text(encoding="utf-8").strip()
+    except Exception:  # noqa: BLE001 - glossario e opcional
+        return ""
+    return f"{raw}\n\n" if raw else ""
+
+
 def _run_perguntar(args) -> int:
     """Resposta ancorada nos trechos recuperados, com citacoes [n]."""
     trechos = json.loads(Path(args.trechos_file).read_text(encoding="utf-8"))
@@ -202,12 +287,14 @@ def _run_perguntar(args) -> int:
             raw = context_path.read_text(encoding="utf-8").strip()
             if raw:
                 contexto = f"=== CONTEXTO DA PESQUISA ===\n{raw[:4000]}\n\n"
+    glossario = _load_glossary_block(args.glossario_file)
     emit(15, "Carregando o Qwen 3.5, nosso modelo de AI local...")
     ask = _make_asker(args.model_repo)
     emit(55, "Escrevendo a resposta com base nos trechos...")
     resposta = ask(
         PERGUNTA_PROMPT.format(
-            contexto=contexto, trechos=format_trechos(trechos), pergunta=args.question),
+            contexto=contexto, glossario=glossario,
+            trechos=format_trechos(trechos), pergunta=args.question),
         max_new_tokens=600,
     )
     valida = validate_answer(resposta, len(trechos))
@@ -225,13 +312,15 @@ def _run_perguntar(args) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--task", required=True, choices=["sumario", "perguntar"])
+    parser.add_argument("--task", required=True, choices=["sumario", "perguntar", "entidades"])
     parser.add_argument("--question", default="")
     parser.add_argument("--trechos-file", default="")
+    parser.add_argument("--alvos-file", default="")
     parser.add_argument("--review", default="")
     parser.add_argument("--out", required=True)
     parser.add_argument("--model-repo", required=True)
     parser.add_argument("--context-file", default="")
+    parser.add_argument("--glossario-file", default="")
     parser.add_argument("--hf-cache", default="")
     args = parser.parse_args()
 
@@ -241,6 +330,8 @@ def main() -> int:
         os.environ["HF_HOME"] = str(Path(args.hf_cache).parent)
         os.environ["HF_HUB_OFFLINE"] = "1"
 
+    if args.task == "entidades":
+        return _run_entidades(args)
     if args.task == "perguntar":
         return _run_perguntar(args)
 
@@ -264,6 +355,7 @@ def main() -> int:
                 contexto = f"=== CONTEXTO DA PESQUISA ===\n{raw[:6000]}\n\n"
                 fora_do_roteiro = " fora do roteiro"
 
+    glossario = _load_glossary_block(args.glossario_file)
     emit(5, "Carregando o Qwen 3.5, nosso modelo de AI local...")
     ask = _make_asker(args.model_repo)
 
@@ -271,7 +363,9 @@ def main() -> int:
     for index, window in enumerate(windows, start=1):
         emit(5 + int(75 * index / max(1, len(windows))),
              f"O Qwen esta lendo a entrevista e anotando os temas ({index}/{len(windows)})...")
-        answer = ask(MAP_PROMPT.format(contexto=contexto, janela=window), max_new_tokens=500)
+        answer = ask(
+            MAP_PROMPT.format(contexto=contexto, glossario=glossario, janela=window),
+            max_new_tokens=500)
         window_notes.append(extract_json_list(answer))
 
     emit(85, "Montando o resumo e o indice tematico...")
@@ -280,7 +374,8 @@ def main() -> int:
         print("O modelo nao extraiu notas; sumario abortado.")
         return 1
     final_md = ask(
-        REDUCE_PROMPT.format(contexto=contexto, notas=notas, fora_do_roteiro=fora_do_roteiro),
+        REDUCE_PROMPT.format(contexto=contexto, glossario=glossario, notas=notas,
+                             fora_do_roteiro=fora_do_roteiro),
         max_new_tokens=1400,
     )
     out_path = Path(args.out)

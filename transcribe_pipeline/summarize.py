@@ -93,6 +93,10 @@ def run_summarize(
 
     asset = _optional_asset(LLM_ASSET_KEY)
     worker = Path(__file__).resolve().parent / "llm_worker.py"
+    # Glossario de nomes (lote 6a): faz a AI tratar "BGA" e "IBGE" como a
+    # mesma entidade. Opcional — sem glossario, nada muda.
+    from .glossario import glossary_prompt_file
+    glossario_file = glossary_prompt_file(paths)
 
     failures = 0
     total = len(rows_to_run)
@@ -131,11 +135,18 @@ def run_summarize(
         ctx = context_path(paths)
         if ctx.exists():
             command += ["--context-file", str(ctx)]
+        if glossario_file is not None:
+            command += ["--glossario-file", str(glossario_file)]
         completed = run_command_stream(command, on_output=on_output, should_cancel=should_cancel)
         if completed.returncode != 0:
             failures += 1
             print(f"{interview_id}: falha ao gerar o resumo (codigo {completed.returncode}).")
         else:
             print(f"{interview_id}: resumo em {resumo_path(paths, interview_id)}")
+    if glossario_file is not None:
+        try:
+            glossario_file.unlink(missing_ok=True)
+        except OSError:
+            pass
     emit("summarize_progress", 100, "Resumos concluidos.")
     return failures

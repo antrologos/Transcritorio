@@ -98,6 +98,12 @@ def run_ask(
     ctx = context_path(paths)
     if ctx.exists():
         command += ["--context-file", str(ctx)]
+    # Glossario de nomes (lote 6a): a AI passa a saber que "BGA" e "IBGE"
+    # sao a mesma coisa. Opcional — sem glossario, nada muda.
+    from .glossario import glossary_prompt_file
+    glossario_file = glossary_prompt_file(paths)
+    if glossario_file is not None:
+        command += ["--glossario-file", str(glossario_file)]
 
     def on_output(line: str) -> None:
         detail = parse_progress_json_line(line)
@@ -116,7 +122,9 @@ def run_ask(
             return {"erro": f"A AI local falhou ao responder (codigo {completed.returncode})."}
         payload = json.loads(out_path.read_text(encoding="utf-8"))
     finally:
-        for path in (trechos_path, out_path):
+        for path in (trechos_path, out_path, glossario_file):
+            if path is None:
+                continue
             try:
                 path.unlink(missing_ok=True)
             except OSError:

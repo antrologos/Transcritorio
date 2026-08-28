@@ -67,6 +67,17 @@ oficial passa a ser **PyPI + uv** (`uv tool install transcritorio`); ver
   transcrição nunca somem em silêncio; projeto sem transcrição alguma
   explica em vez de não fazer nada; o seletor se atualiza ao voltar para
   a janela. Tooltips de buscar/perguntar/resumir declaram o escopo.
+- **✨ Glossário de nomes com AI**: lê as transcrições do projeto e monta
+  um glossário de pessoas, lugares e instituições citados, juntando as
+  variações de grafia do mesmo nome (IBGE escrito como "BGA", Viçosa como
+  "Vistosa"). O glossário passa a acompanhar os prompts do resumo e do
+  Perguntar, para a AI tratar as variantes como a mesma entidade — sem
+  alterar uma vírgula das transcrições. Sai um relatório com a seção
+  "Grafias a conferir", apontando onde cada variante ocorre. Declarar os
+  nomes corretos na seção "## Nomes conhecidos" do contexto da pesquisa
+  torna a detecção muito mais precisa (num teste com 54 menções reais,
+  passou de 3 para 6 de 6 nomes corrompidos identificados). AI 100%
+  local, roda sem placa de vídeo. CLI: `transcritorio-cli glossario`.
 - Áudio multicanal (fase 4, núcleo): quando a gravação tem 2+ canais
   com microfones distintos (lapelas, gravador de 2 mics), o pipeline
   passa a usar os canais como fonte da separação de falantes, com os

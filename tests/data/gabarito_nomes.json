@@ -1,0 +1,391 @@
+{
+ "origem": "PoC 2.0.b (2026-08-25), gabarito manual de 54 mencoes",
+ "garbles_conhecidos": [
+  "BGA",
+  "Realembo",
+  "Vistosa",
+  "Ubar",
+  "CFET",
+  "Cefete"
+ ],
+ "mencoes": [
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "pessoa",
+   "texto": "Caio",
+   "turn_id": "turn_000001",
+   "trecho": "está de acordo com a gravação, correto Caio? Aí eu queria minimamente primeiro te explicar"
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "pessoa",
+   "texto": "Caio",
+   "turn_id": "turn_000128",
+   "trecho": "já encaminhando para o final da nossa conversa, Caio, você tem alguma coisa que você gostaria de acrescentar"
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "pessoa",
+   "texto": "Caio",
+   "turn_id": "turn_000150",
+   "trecho": "Bom, Caio, eu acho que eu não tenho mais nenhuma pergunta pra te fazer"
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "pessoa",
+   "texto": "Carlos",
+   "turn_id": "turn_000158",
+   "trecho": "e um boné. Aham. Bom, Carlos,"
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "pessoa",
+   "texto": "Penha",
+   "turn_id": "turn_000148",
+   "trecho": "Alguns portos falam assim, ah, neto da Penha, tá ligado? Tranquilo. Às vezes surgia essa confiança"
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "lugar",
+   "texto": "Senador Camará",
+   "turn_id": "turn_000007",
+   "trecho": "Senador Camará."
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "lugar",
+   "texto": "Senador Camará",
+   "turn_id": "turn_000008",
+   "trecho": "Senador Camará. E hoje em dia você mora em qual bairro? Assim."
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "lugar",
+   "texto": "Senador Camará",
+   "turn_id": "turn_000010",
+   "trecho": "você sempre morou antes em Senador Camará ou foi um bairro que você estava só durante o CELSO?"
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "lugar",
+   "texto": "Rocinha",
+   "turn_id": "turn_000010",
+   "trecho": "Rocinha, na Zona Sul. Aonde? Na Rocinha, na Zona Sul. Ah, perfeito."
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "lugar",
+   "texto": "Zona Sul",
+   "turn_id": "turn_000010",
+   "trecho": "Rocinha, na Zona Sul. Aonde? Na Rocinha, na Zona Sul. Ah, perfeito."
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "lugar",
+   "texto": "Realembo",
+   "turn_id": "turn_000011",
+   "trecho": "alguns seis anos que eu morei em Realembo nesse meio tempo, porque... a gente se mudou pra Realembo"
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "lugar",
+   "texto": "Maracanã",
+   "turn_id": "turn_000016",
+   "trecho": "o censo. O CFET era o Maracanã?"
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "lugar",
+   "texto": "Senador Camará",
+   "turn_id": "turn_000037",
+   "trecho": "mas você morava em Senador Camará, ou você trabalhou no setor censitário em Senador Camará?"
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "lugar",
+   "texto": "Bangu",
+   "turn_id": "turn_000040",
+   "trecho": "era bem no centro de Bangu, tipo, tem a casa de Bangu, que é lá do trem"
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "lugar",
+   "texto": "Maracanã",
+   "turn_id": "turn_000093",
+   "trecho": "como eu tava ainda no Cefete, eu estava no Maracanã, e, né, tipo assim, o trajeto que eu tomava"
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "lugar",
+   "texto": "Senador Camará",
+   "turn_id": "turn_000132",
+   "trecho": "E você usualmente encontrava com ele em Senador Camará ou lá em Bangu, na base?"
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "lugar",
+   "texto": "Bangu",
+   "turn_id": "turn_000132",
+   "trecho": "E você usualmente encontrava com ele em Senador Camará ou lá em Bangu, na base?"
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "instituicao",
+   "texto": "Instagram",
+   "turn_id": "turn_000005",
+   "trecho": "deitado vendo vídeo de moto no Instagram. Nada demais."
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "instituicao",
+   "texto": "CFET RJ",
+   "turn_id": "turn_000015",
+   "trecho": "eu estava terminando o meu ensino médio técnico no CFET RJ. Então, tipo, eu estava fazendo junto"
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "instituicao",
+   "texto": "CFET",
+   "turn_id": "turn_000016",
+   "trecho": "o censo. O CFET era o Maracanã?"
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "instituicao",
+   "texto": "IBGE",
+   "turn_id": "turn_000019",
+   "trecho": "IBGE, mas como é um estágio..."
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "instituicao",
+   "texto": "IBGE",
+   "turn_id": "turn_000020",
+   "trecho": "que não era remunerado, e o IBGE era remunerado, eu pensei, pô, eu prefiro me dedicar ao IBGE"
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "instituicao",
+   "texto": "IBGE",
+   "turn_id": "turn_000021",
+   "trecho": "como você descobriu esse trabalho do IBGE, de ser recenseador?"
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "instituicao",
+   "texto": "IBGE",
+   "turn_id": "turn_000031",
+   "trecho": "Concurso de pós, depois virou associado. Quem é trabalhar na IBGE, né? Começa a se inscrever"
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "instituicao",
+   "texto": "IBGE",
+   "turn_id": "turn_000035",
+   "trecho": "Eu lembro que a prova do IBGE era classificatória, mas não era muito estudante"
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "instituicao",
+   "texto": "SUS",
+   "turn_id": "turn_000047",
+   "trecho": "eu tenho que continuar no SUS, mas não teria como eu tirar no SUS, porque o SUS"
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "instituicao",
+   "texto": "Samsung",
+   "turn_id": "turn_000049",
+   "trecho": "Que você veja as coisas como é que é no aparelho do Samsung. Eu esqueci que tem um nome pra ele"
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "instituicao",
+   "texto": "Samsung",
+   "turn_id": "turn_000063",
+   "trecho": "fazer isso também, isso atrapalhava muito a logística do Samsung. As pessoas recusarem tão amplamente"
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "instituicao",
+   "texto": "Cefete",
+   "turn_id": "turn_000093",
+   "trecho": "porque como eu tava ainda no Cefete, eu estava no Maracanã, e, né, tipo assim, o trajeto"
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "instituicao",
+   "texto": "IBGE",
+   "turn_id": "turn_000110",
+   "trecho": "Essas funções de geografia urbana que eu não tinha e que eu acho que você não tem, foram muito úteis pelo menos o menor do IBGE"
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "instituicao",
+   "texto": "IBGE",
+   "turn_id": "turn_000119",
+   "trecho": "Ela falou que é por padrão do IBGE atrasar sua brincadeira. Tipo, os meus três dias são R$120,00"
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "instituicao",
+   "texto": "IBGE",
+   "turn_id": "turn_000121",
+   "trecho": "eles mandam a rescisão também. Tipo, eles tiram a parte de trabalho do IBGE também"
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "instituicao",
+   "texto": "BGA",
+   "turn_id": "turn_000129",
+   "trecho": "Eu acho que o BGA podia ser muito mais presente com relação aos supervisores, tipo, não aos supervisores, mas a instituição em BGA"
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "instituicao",
+   "texto": "IBGE",
+   "turn_id": "turn_000138",
+   "trecho": "Fotos de dados do IBGE ou tirar fotos das coisas com o DMC?"
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "instituicao",
+   "texto": "IBGE",
+   "turn_id": "turn_000146",
+   "trecho": "pegar só o número da casa direitinho pra poder cadastrar no IBGE. Não tem muitas fotos que ajudem"
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "instituicao",
+   "texto": "IBGE",
+   "turn_id": "turn_000151",
+   "trecho": "Acho que relacionado ao IBGE é muito"
+  },
+  {
+   "interview_id": "D01R_0807",
+   "tipo": "instituicao",
+   "texto": "IBGE",
+   "turn_id": "turn_000159",
+   "trecho": "essa entrevista só vai ter finalizada, assim como o IBGE pediu CPF, eu preciso da assinatura desse termo"
+  },
+  {
+   "interview_id": "F03R_0729",
+   "tipo": "pessoa",
+   "texto": "Gil",
+   "turn_id": "turn_000001",
+   "trecho": "Então, Gil, para a gente começar, eu queria te perguntar primeiro em que bairro você mora"
+  },
+  {
+   "interview_id": "F03R_0729",
+   "tipo": "pessoa",
+   "texto": "Jean",
+   "turn_id": "turn_000145",
+   "trecho": "Tá certo, Jean, muito obrigado pela sua participação, pelo seu tempo e por ter concordado"
+  },
+  {
+   "interview_id": "F03R_0729",
+   "tipo": "lugar",
+   "texto": "Ubar",
+   "turn_id": "turn_000002",
+   "trecho": "Eu atualmente moro em Ubar, no bairro Valdemar de Castro, mas eu trabalhei no Censo em Viçosa"
+  },
+  {
+   "interview_id": "F03R_0729",
+   "tipo": "lugar",
+   "texto": "Valdemar de Castro",
+   "turn_id": "turn_000002",
+   "trecho": "Eu atualmente moro em Ubar, no bairro Valdemar de Castro, mas eu trabalhei no Censo em Viçosa"
+  },
+  {
+   "interview_id": "F03R_0729",
+   "tipo": "lugar",
+   "texto": "Viçosa",
+   "turn_id": "turn_000002",
+   "trecho": "mas eu trabalhei no Censo em Viçosa, que é uma cidade aqui perto, né?"
+  },
+  {
+   "interview_id": "F03R_0729",
+   "tipo": "lugar",
+   "texto": "Vistosa",
+   "turn_id": "turn_000101",
+   "trecho": "porque, por exemplo, lá em Vistosa é difícil identificar quem é morador e quem não é"
+  },
+  {
+   "interview_id": "F03R_0729",
+   "tipo": "lugar",
+   "texto": "Viçosa",
+   "turn_id": "turn_000138",
+   "trecho": "A coordenação do IBGE lá de Viçosa conseguiu uma audiência na prefeitura para ver como a prefeitura poderia ajudar"
+  },
+  {
+   "interview_id": "F03R_0729",
+   "tipo": "lugar",
+   "texto": "Brasil",
+   "turn_id": "turn_000154",
+   "trecho": "então a gente aqui no Brasil está falando com recenseadores, mas é possível que esses dados"
+  },
+  {
+   "interview_id": "F03R_0729",
+   "tipo": "instituicao",
+   "texto": "Ultimato",
+   "turn_id": "turn_000005",
+   "trecho": "Antes do censo, eu trabalhava na editora Ultimato. trabalhei no departamento editorial lá"
+  },
+  {
+   "interview_id": "F03R_0729",
+   "tipo": "instituicao",
+   "texto": "Google Maps",
+   "turn_id": "turn_000027",
+   "trecho": "a gente tem um mapa como se fosse o... Talvez até seja o Google Maps, eu não lembro"
+  },
+  {
+   "interview_id": "F03R_0729",
+   "tipo": "instituicao",
+   "texto": "IBGE",
+   "turn_id": "turn_000061",
+   "trecho": "a pessoa podia acessar e ver no site do IBGE a informação sobre mim e tal"
+  },
+  {
+   "interview_id": "F03R_0729",
+   "tipo": "instituicao",
+   "texto": "Receita Federal",
+   "turn_id": "turn_000081",
+   "trecho": "A Receita Federal não vai acessar essas informações para ver qual é a sua renda"
+  },
+  {
+   "interview_id": "F03R_0729",
+   "tipo": "instituicao",
+   "texto": "IBGE",
+   "turn_id": "turn_000090",
+   "trecho": "O IBGE decidiu"
+  },
+  {
+   "interview_id": "F03R_0729",
+   "tipo": "instituicao",
+   "texto": "WhatsApp",
+   "turn_id": "turn_000097",
+   "trecho": "eu tinha contato com ele pelo WhatsApp, no próprio DMC a gente tinha um WhatsApp instalado ali"
+  },
+  {
+   "interview_id": "F03R_0729",
+   "tipo": "instituicao",
+   "texto": "IBGE",
+   "turn_id": "turn_000101",
+   "trecho": "é difícil identificar quem é morador e quem não é, porque pelos critérios do IBGE,"
+  },
+  {
+   "interview_id": "F03R_0729",
+   "tipo": "instituicao",
+   "texto": "IBGE",
+   "turn_id": "turn_000138",
+   "trecho": "A coordenação do IBGE lá de Viçosa conseguiu uma audiência na prefeitura"
+  },
+  {
+   "interview_id": "F03R_0729",
+   "tipo": "instituicao",
+   "texto": "WhatsApp",
+   "turn_id": "turn_000156",
+   "trecho": "eu vou te enviar ele Pelo WhatsApp mesmo Aí você pode ler ele Tá lá bem detalhadinho"
+  }
+ ]
+}

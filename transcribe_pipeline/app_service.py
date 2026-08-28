@@ -298,6 +298,23 @@ def boundary_check_interviews(
     return JobResult("boundary-check", failures)
 
 
+def build_glossary_interviews(
+    context: ProjectContext,
+    ids: list[str] | None = None,
+    overrides: dict[str, Any] | None = None,
+    progress_callback: ProgressCallback | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+) -> JobResult:
+    """Glossario de nomes do projeto (lote 6a) — varredura unica."""
+    from .glossario import run_glossario
+
+    failures = run_glossario(
+        context.rows, merged_config(context.config, overrides), context.paths,
+        ids=ids, progress_callback=progress_callback, should_cancel=should_cancel,
+    )
+    return JobResult("glossario", failures)
+
+
 def analyze_channels_interviews(
     context: ProjectContext,
     ids: list[str] | None = None,

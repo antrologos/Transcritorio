@@ -103,6 +103,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     channels_parser.set_defaults(func=cmd_channels)
 
+    glossario_parser = subparsers.add_parser(
+        "glossario",
+        help="Build the project name glossary from transcripts (local GLiNER).",
+    )
+    add_ids_arg(glossario_parser)
+    glossario_parser.add_argument(
+        "--progress-json",
+        action="store_true",
+        dest="progress_json",
+        help="Imprime linhas '@PROGRESS {json}' para consumo da GUI (subprocesso).",
+    )
+    glossario_parser.set_defaults(func=cmd_glossario)
+
     summarize_parser = subparsers.add_parser(
         "summarize",
         help="Generate a thematic summary of reviewed transcripts (local LLM).",
@@ -370,6 +383,22 @@ def cmd_check_boundaries(args: argparse.Namespace) -> int:
             report=getattr(args, "report", False), progress_callback=progress_callback,
         )
     return failures
+
+
+def cmd_glossario(args: argparse.Namespace) -> int:
+    from .glossario import run_glossario
+
+    config, paths = load_context(args)
+    rows = load_manifest_or_exit(paths)
+    progress_callback = None
+    if getattr(args, "progress_json", False):
+        from .utils import PROGRESS_JSON_PREFIX
+
+        def progress_callback(detail: dict) -> None:
+            print(PROGRESS_JSON_PREFIX + json.dumps(detail, ensure_ascii=False), flush=True)
+
+    return run_glossario(rows, config, paths, ids=args.ids,
+                         progress_callback=progress_callback)
 
 
 def cmd_channels(args: argparse.Namespace) -> int:

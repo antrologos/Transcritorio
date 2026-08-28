@@ -4010,6 +4010,14 @@ if QT_IMPORT_ERROR is None:
                 "AI local — nada sai do seu computador.")
             self.summarize_action.triggered.connect(self.run_summarize_job)
 
+            self.glossario_action = QAction("✨ Glossário de nomes com AI", self)
+            self.glossario_action.setToolTip(
+                "Lê as transcrições do projeto e monta um glossário de pessoas, lugares\n"
+                "e instituições citados, juntando as variações de grafia do mesmo nome\n"
+                "(por exemplo IBGE escrito como BGA). Nada é alterado nas transcrições.\n"
+                "AI local — nada sai do seu computador.")
+            self.glossario_action.triggered.connect(self.run_glossario_job)
+
             self.render_action = QAction("Atualizar transcricao editavel", self)
             self.render_action.setToolTip("Remontar a transcrição editável a partir dos dados brutos (ASR + diarização).\nSelecione ao menos um arquivo.")
             self.render_action.triggered.connect(self.run_render_job)
@@ -4184,6 +4192,7 @@ if QT_IMPORT_ERROR is None:
             transcrever_menu.addAction(self.render_action)
             transcrever_menu.addSeparator()
             transcrever_menu.addAction(self.summarize_action)
+            transcrever_menu.addAction(self.glossario_action)
             transcrever_menu.addSeparator()
             transcrever_menu.addAction(self.qc_action)
             transcrever_menu.addAction(self.queue_action)
@@ -8299,6 +8308,124 @@ if QT_IMPORT_ERROR is None:
             elif box.clickedButton() is open_dir:
                 open_folder_in_explorer(produced[0].parent)
 
+        def _ensure_ner_model(self) -> bool:
+            """Baixa o modelo de nomes (~1,1 GB) sob demanda, com progresso.
+
+            Mesmo padrao do encoder de busca: nunca clique-morto — ou o
+            modelo esta pronto, ou o usuario ve o que falta e decide."""
+            from . import model_manager
+            from .glossario import glossary_ready
+            ready, reason = glossary_ready()
+            if ready:
+                return True
+            answer = QMessageBox.question(
+                self, "Baixar o modelo de nomes?",
+                f"{reason}\n\nBaixar agora (uma vez, ~1,1 GB)?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return False
+            dialog = QProgressDialog("Baixando o modelo de nomes...", "Cancelar", 0, 100, self)
+            dialog.setWindowTitle("Modelo de nomes")
+            dialog.setWindowModality(Qt.WindowModality.WindowModal)
+            dialog.setAutoClose(False)
+            dialog.show()
+
+            def on_progress(detail: dict) -> None:
+                dialog.setValue(max(0, min(100, int(detail.get("progress") or 0))))
+                if detail.get("message"):
+                    dialog.setLabelText(str(detail["message"]))
+                QApplication.processEvents()
+
+            try:
+                failures = model_manager.download_optional_model(
+                    "ner_gliner", progress_callback=on_progress,
+                    should_cancel=dialog.wasCanceled)
+            finally:
+                dialog.close()
+            if failures:
+                QMessageBox.warning(
+                    self, "Download nao concluido",
+                    "Nao foi possivel baixar o modelo de nomes. Verifique a conexao e tente de novo.")
+                return False
+            return True
+
+        def run_glossario_job(self) -> None:
+            """Glossario de nomes do projeto (lote 6a) — varredura unica."""
+            if not self.save_current_turn():
+                return
+            if self.context is None:
+                QMessageBox.information(self, "Abra um projeto", "Abra um projeto para montar o glossario.")
+                return
+            from . import search as _search
+            transcritas = [
+                r["interview_id"] for r in self.context.rows
+                if _search.source_path_for(self.context.paths, r["interview_id"]) is not None
+            ]
+            if not transcritas:
+                QMessageBox.information(
+                    self, "Nenhuma transcricao",
+                    "O glossario le as transcricoes, nao o audio — e nenhum arquivo "
+                    "deste projeto foi transcrito ainda.")
+                return
+            if not self._ensure_ner_model():
+                return
+            total = len(transcritas)
+            steps = [
+                self.job_step(
+                    f"lendo os nomes citados em {total} transcricao(oes)...",
+                    transcritas[0], "glossario de nomes", 0, 100,
+                    lambda progress, should_cancel: app_service.build_glossary_interviews(
+                        self.context, ids=transcritas,
+                        progress_callback=progress, should_cancel=should_cancel,
+                    ),
+                    accepts_progress=True,
+                    optional=True,
+                )
+            ]
+            self._pending_glossario = True
+            self.start_worker(f"Glossario de nomes ({total} arquivo(s))", steps)
+
+        def _show_glossario_results(self) -> None:
+            """Aviso de conclusao com acesso ao glossario e ao contexto."""
+            from .glossario import glossary_report_path, load_glossary
+            from .research_context import context_path as _context_path
+            if self.context is None:
+                return
+            report = glossary_report_path(self.context.paths)
+            if not report.exists():
+                return
+            glossary = load_glossary(self.context.paths)
+            entradas = glossary.get("entradas") or []
+            com_variantes = [e for e in entradas if e.get("variantes")]
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Information)
+            box.setWindowTitle("Glossario pronto")
+            resumo = (
+                f"{len(entradas)} nomes encontrados nas transcricoes"
+                + (f", {len(com_variantes)} com grafias diferentes a conferir."
+                   if com_variantes else ".")
+            )
+            box.setText(
+                f"{resumo}\n\nGlossario: {report.name}\nPasta: {report.parent}\n\n"
+                "Nada foi alterado nas transcricoes.\n"
+                "Dica: declare os nomes corretos na secao \"## Nomes conhecidos\" de\n"
+                f"{_context_path(self.context.paths).name} — a AI passa a reconhecer\n"
+                "as variacoes de grafia com muito mais precisao."
+            )
+            open_file = box.addButton("Abrir glossario", QMessageBox.ButtonRole.AcceptRole)
+            open_ctx = box.addButton("Abrir nomes conhecidos", QMessageBox.ButtonRole.ActionRole)
+            box.addButton("Fechar", QMessageBox.ButtonRole.RejectRole)
+            box.setDefaultButton(open_file)
+            box.exec()
+            if box.clickedButton() is open_file:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(report)))
+            elif box.clickedButton() is open_ctx:
+                ctx = _context_path(self.context.paths)
+                if ctx.exists():
+                    QDesktopServices.openUrl(QUrl.fromLocalFile(str(ctx)))
+
         def run_qc_job(self) -> None:
             if not self.save_current_turn():
                 return
@@ -8419,6 +8546,10 @@ if QT_IMPORT_ERROR is None:
             self._pending_summary_ids = None
             if pending_summaries and "interrompido" not in message:
                 self._show_summary_results(pending_summaries)
+            if getattr(self, "_pending_glossario", False):
+                self._pending_glossario = False
+                if "interrompido" not in message:
+                    self._show_glossario_results()
             if self._close_after_worker:
                 self._close_after_worker = False
                 self.close()
