@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -3332,7 +3333,12 @@ if QT_IMPORT_ERROR is None:
 
         RECOMMENDED = ["large-v3-turbo", "large-v3"]
         OTHERS = ["medium", "small", "base", "tiny"]
-        FIXED_GB = 6.9 + 0.07  # alignment + diarization (always downloaded)
+        @property
+        def FIXED_GB(self) -> float:
+            """Tamanho dos componentes sempre baixados (alinhamento +
+            falantes), lido do registro — antes era um literal que
+            silenciosamente divergia de _FIXED_MODELS."""
+            return sum(a.estimated_gb for a in self._model_manager._FIXED_MODELS)
 
         def __init__(self, wizard: "FirstRunWizard") -> None:
             super().__init__()
@@ -3394,13 +3400,17 @@ if QT_IMPORT_ERROR is None:
             self._update_total()
             self.completeChanged.emit()
 
-        def _update_total(self) -> None:
+        def total_gb(self) -> float:
+            """Espaço em disco do que está marcado + componentes fixos."""
             asr_gb = sum(
                 self._model_manager.ASR_VARIANTS[k]["estimated_gb"]
                 for k, cb in self._checkboxes.items()
                 if cb.isChecked()
             )
-            total = asr_gb + self.FIXED_GB
+            return asr_gb + self.FIXED_GB
+
+        def _update_total(self) -> None:
+            total = self.total_gb()
             # estimated_gb e tamanho EM DISCO (download real e ~metade, o cache
             # HF duplica) — rotular como "espaco em disco", nao "download".
             self.total_label.setText(
@@ -3549,7 +3559,11 @@ if QT_IMPORT_ERROR is None:
                 return
             # Check disk space before starting download
             from . import model_manager
-            disk = model_manager.check_disk_space()
+            # O assistente sabe o que vai baixar: passar o tamanho real em
+            # vez de deixar o limiar generico decidir.
+            select_page = self._wizard.page(FirstRunWizard.PAGE_MODEL_SELECT)
+            required_gb = getattr(select_page, "total_gb", lambda: None)()
+            disk = model_manager.check_disk_space(required_gb)
             if not disk["ok"]:
                 self.progress_label.setText(disk["message"])
                 self.progress_label.setStyleSheet(_style_err())
@@ -4569,10 +4583,21 @@ if QT_IMPORT_ERROR is None:
             # Gate respeita a escolha persistida (diarizacao opcional, v0.2):
             # quem pulou o token nao ve o wizard reaparecer a cada inicio.
             def _models_ready() -> bool:
-                return app_service.required_models_ready(
-                    self._configured_asr_variants(),
-                    include_diarization=self._configured_diarize(),
-                )
+                # get_required_models levanta ValueError quando o
+                # run_config.yaml traz um modelo ASR desconhecido (editado
+                # a mao, vindo da CLI). Sem este guard a excecao subia no
+                # startup e o app nao abria.
+                try:
+                    return app_service.required_models_ready(
+                        self._configured_asr_variants(),
+                        include_diarization=self._configured_diarize(),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    _logger.warning("Verificacao de modelos falhou: %s", exc)
+                    self.progress_label.setText(
+                        "Nao foi possivel verificar os modelos instalados "
+                        "(confira o modelo de transcricao em Configuracoes).")
+                    return True  # nao bloquear a abertura do app
             if not _models_ready():
                 wizard = FirstRunWizard(self)
                 result = wizard.exec()
@@ -4669,7 +4694,33 @@ if QT_IMPORT_ERROR is None:
             from . import app_settings
             return app_settings.diarize_default()
 
+        def ensure_ffmpeg(self) -> bool:
+            """O ffmpeg e pre-requisito externo (prepara o audio e le a
+            duracao). Sem esta checagem, quem esquece de instala-lo so
+            descobria por um 'a tarefa terminou com erro' generico."""
+            from .runtime import resolve_executable
+            caminho = resolve_executable("ffmpeg")
+            if Path(caminho).exists() or shutil.which(caminho):
+                return True
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("FFmpeg não encontrado")
+            box.setText(
+                "O Transcritório precisa do FFmpeg para preparar o áudio, e ele não "
+                "foi encontrado neste computador.\n\n"
+                "Instale com este comando no Prompt de Comando e reabra o aplicativo:\n\n"
+                "    winget install Gyan.FFmpeg"
+            )
+            copiar = box.addButton("Copiar comando", QMessageBox.ButtonRole.ActionRole)
+            box.addButton("Fechar", QMessageBox.ButtonRole.RejectRole)
+            box.exec()
+            if box.clickedButton() is copiar:
+                QApplication.clipboard().setText("winget install Gyan.FFmpeg")
+            return False
+
         def ensure_models_ready(self, require_diarization: bool | None = None) -> bool:
+            if not self.ensure_ffmpeg():
+                return False
             variants = self._configured_asr_variants()
             # require_diarization=True: acoes explicitas de falantes (Identificar
             # falantes / Melhorar falantes) exigem pyannote mesmo com o projeto
@@ -6751,11 +6802,20 @@ if QT_IMPORT_ERROR is None:
             self.progress_label.setText(f"Nome aplicado a {changed} bloco(s) desta voz.")
 
         def _set_action(self, action: QAction, enabled: bool, disabled_reason: str = "") -> None:
-            """Enable/disable an action and update its tooltip with the reason."""
+            """Habilita/desabilita a acao e explica o motivo no tooltip.
+
+            O tooltip ORIGINAL fica guardado na propria acao: usar a
+            primeira linha do tooltip corrente como base truncava
+            permanentemente os tooltips de varias linhas (Perguntar,
+            Resumir) na primeira desabilitacao.
+            """
+            base = action.property("tooltip_base")
+            if base is None:
+                base = action.toolTip() or action.text()
+                action.setProperty("tooltip_base", base)
             action.setEnabled(enabled)
-            if not enabled and disabled_reason:
-                base = action.toolTip().split("\n")[0] if action.toolTip() else action.text()
-                action.setToolTip(f"{base}\n({disabled_reason})")
+            action.setToolTip(f"{base}\n({disabled_reason})"
+                              if (not enabled and disabled_reason) else str(base))
 
         def update_action_states(self) -> None:
             if not hasattr(self, "save_action"):
@@ -8330,10 +8390,7 @@ if QT_IMPORT_ERROR is None:
             """Resumo com indice tematico (fase 2.1) — analise 100% local."""
             if not self.save_current_turn():
                 return
-            from .summarize import summarize_ready
-            ready, reason = summarize_ready()
-            if not ready:
-                QMessageBox.information(self, "Analise local indisponivel", reason)
+            if not self._ensure_llm_model():
                 return
             ids = self.selected_ids_for_job(fallback_current=True)
             if not ids:
@@ -8403,26 +8460,25 @@ if QT_IMPORT_ERROR is None:
             elif box.clickedButton() is open_dir:
                 open_folder_in_explorer(produced[0].parent)
 
-        def _ensure_ner_model(self) -> bool:
-            """Baixa o modelo de nomes (~1,1 GB) sob demanda, com progresso.
+        def _ensure_optional_model(self, key: str, titulo: str, motivo: str) -> bool:
+            """Baixa um modelo opcional sob demanda, com progresso.
 
-            Mesmo padrao do encoder de busca: nunca clique-morto — ou o
-            modelo esta pronto, ou o usuario ve o que falta e decide."""
+            Nunca clique-morto: ou o modelo esta pronto, ou o usuario ve o
+            que falta, quanto pesa, e decide. Vale para TODAS as acoes de
+            AI — antes cada uma resolvia (ou nao) do seu jeito, e o modelo
+            do resumo nao tinha baixador nenhum na interface."""
             from . import model_manager
-            from .glossario import glossary_ready
-            ready, reason = glossary_ready()
-            if ready:
-                return True
+            asset = model_manager.optional_model(key)
             answer = QMessageBox.question(
-                self, "Baixar o modelo de nomes?",
-                f"{reason}\n\nBaixar agora (uma vez, ~1,1 GB)?",
+                self, f"Baixar {titulo}?",
+                f"{motivo}\n\nBaixar agora (uma vez, ~{asset.estimated_gb:.1f} GB)?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.Yes,
             )
             if answer != QMessageBox.StandardButton.Yes:
                 return False
-            dialog = QProgressDialog("Baixando o modelo de nomes...", "Cancelar", 0, 100, self)
-            dialog.setWindowTitle("Modelo de nomes")
+            dialog = QProgressDialog(f"Baixando {titulo}...", "Cancelar", 0, 100, self)
+            dialog.setWindowTitle(titulo.capitalize())
             dialog.setWindowModality(Qt.WindowModality.WindowModal)
             dialog.setAutoClose(False)
             dialog.show()
@@ -8435,16 +8491,35 @@ if QT_IMPORT_ERROR is None:
 
             try:
                 failures = model_manager.download_optional_model(
-                    "ner_gliner", progress_callback=on_progress,
-                    should_cancel=dialog.wasCanceled)
+                    key, progress_callback=on_progress, should_cancel=dialog.wasCanceled)
             finally:
                 dialog.close()
             if failures:
                 QMessageBox.warning(
                     self, "Download nao concluido",
-                    "Nao foi possivel baixar o modelo de nomes. Verifique a conexao e tente de novo.")
+                    f"Nao foi possivel baixar {titulo}. Verifique a conexao e tente de novo.")
                 return False
             return True
+
+        def _ensure_ner_model(self) -> bool:
+            from .glossario import glossary_ready
+            ready, reason = glossary_ready()
+            if ready:
+                return True
+            return self._ensure_optional_model("ner_gliner", "o modelo de nomes", reason)
+
+        def _ensure_llm_model(self) -> bool:
+            """Modelo do resumo/perguntar. Sem placa NVIDIA nao adianta
+            baixar 8,7 GB: ai o limite e a maquina, nao o download."""
+            from . import runtime as _rt
+            from .summarize import summarize_ready
+            ready, reason = summarize_ready()
+            if ready:
+                return True
+            if not _rt.has_nvidia_gpu():
+                QMessageBox.information(self, "Analise local indisponivel", reason)
+                return False
+            return self._ensure_optional_model("llm_qwen", "o modelo de análise", reason)
 
         def run_glossario_job(self) -> None:
             """Glossario de nomes do projeto (lote 6a) — varredura unica."""

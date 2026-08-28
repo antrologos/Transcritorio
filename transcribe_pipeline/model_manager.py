@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from fnmatch import fnmatch
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 import json
@@ -79,21 +80,28 @@ def _clear_stale_hf_locks(cache_dir: Path) -> int:
         )
     return removed
 
-MINIMUM_DISK_GB = 10  # Minimum free disk space required for model downloads
+MINIMUM_DISK_GB = 4  # Piso do fluxo essencial quando nao se sabe o que vai baixar
 
 
-def check_disk_space() -> dict[str, Any]:
-    """Check if there is enough free disk space for model downloads."""
+def check_disk_space(required_gb: float | None = None) -> dict[str, Any]:
+    """Espaco livre suficiente para o que sera baixado.
+
+    required_gb vem de quem sabe o que vai baixar (o assistente soma os
+    modelos escolhidos) — o limiar fixo tanto barrava instalacoes que
+    caberiam quanto aprovava instalacoes que nao cabiam.
+    """
+    needed = float(required_gb) if required_gb else float(MINIMUM_DISK_GB)
+    needed = round(needed * 1.15 + 0.5, 1)  # margem de cache/temporarios
     cache_dir = runtime.model_cache_dir()
     cache_dir.mkdir(parents=True, exist_ok=True)
     usage = shutil.disk_usage(str(cache_dir))
     free_gb = usage.free / (1024 ** 3)
-    if free_gb >= MINIMUM_DISK_GB:
+    if free_gb >= needed:
         return {"ok": True, "free_gb": round(free_gb, 1),
                 "message": f"Espaço disponível: {free_gb:.1f} GB."}
     return {"ok": False, "free_gb": round(free_gb, 1),
             "message": (f"Espaço insuficiente no disco. "
-                        f"Disponível: {free_gb:.1f} GB. Necessário: pelo menos {MINIMUM_DISK_GB} GB.\n"
+                        f"Disponível: {free_gb:.1f} GB. Necessário: pelo menos {needed:.1f} GB.\n"
                         f"Libere espaço e tente novamente.")}
 
 
@@ -186,6 +194,11 @@ class ModelAsset:
     # offline quebra com "couldn't connect to huggingface.co".
     companion_repo: str | None = None
     companion_revision: str | None = None
+    # Arquivos do repo que NAO precisamos (padroes fnmatch sobre o nome
+    # dentro do repo). Alguns repos publicam os pesos em varios formatos
+    # (PyTorch + Flax + TF) e extras que o nosso carregador nunca le;
+    # baixar tudo custa GBs por instalacao sem beneficio nenhum.
+    download_exclude: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -281,8 +294,22 @@ _FIXED_MODELS: tuple[ModelAsset, ...] = (
         "Alinhamento portugues",
         "jonatasgrosman/wav2vec2-large-xlsr-53-portuguese",
         "timestamps por palavra",
-        estimated_gb=6.9,
+        estimated_gb=1.4,
         revision="634ac655299bcdc46c83bc01da9bab52d2987e4f",
+        # O WhisperX carrega este repo com Wav2Vec2Processor + Wav2Vec2ForCTC,
+        # que leem SO o pytorch_model.bin e os jsons de config/vocab. O repo
+        # ainda publica os mesmos pesos em Flax e um modelo de linguagem para
+        # decodificacao com LM (Wav2Vec2ProcessorWithLM), que nunca usamos:
+        # 2,4 GB por instalacao, medidos em 2026-08-28.
+        download_exclude=(
+            "flax_model.msgpack",
+            "tf_model.h5",
+            "language_model/*",
+            "*eval_results*.txt",
+            "log_*.txt",
+            "eval.py",
+            "full_eval.sh",
+        ),
     ),
     ModelAsset(
         "diarization",
@@ -377,6 +404,7 @@ def download_optional_model(
                 estimated_bytes=int(asset.estimated_gb * (1024 ** 3)),
                 progress_callback=progress_callback,
                 should_cancel=should_cancel,
+                exclude=asset.download_exclude,
             )
         if asset.companion_repo:
             _manual_snapshot_download(
@@ -1011,6 +1039,7 @@ def _manual_snapshot_download(
     progress_callback: ProgressCallback | None,
     should_cancel: ShouldCancel | None,
     skip_weights: bool = False,
+    exclude: tuple[str, ...] = (),
 ) -> Path:
     """Baixar um repo HF usando requests direto, bypassando huggingface_hub.
 
@@ -1090,6 +1119,9 @@ def _manual_snapshot_download(
         rfilename = sibling["rfilename"]
         if skip_weights and rfilename.endswith(
                 (".bin", ".safetensors", ".h5", ".msgpack", ".onnx", ".ot", ".pt")):
+            continue
+        if exclude and any(fnmatch(rfilename, pattern) for pattern in exclude):
+            _download_diag_log(f"[manual:{label}] ignorado por filtro: {rfilename}")
             continue
         # rfilename e ETag entram em caminhos locais: rejeitar path traversal
         # de resposta adulterada (defesa em profundidade junto ao pin de SHA).
@@ -1260,6 +1292,7 @@ def download_required_models(
                 estimated_bytes=estimated_bytes,
                 progress_callback=progress_callback,
                 should_cancel=should_cancel,
+                exclude=asset.download_exclude,
             )
         except Exception as exc:  # noqa: BLE001 - keep batch progress visible.
             failures += 1

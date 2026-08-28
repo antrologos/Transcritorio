@@ -70,4 +70,38 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "alguem/desconhecido" in orphans
 print("PASS: registro de modelos opcionais")
 
+# --- filtro de download do alinhador (economia medida: 2,29 GB) ---
+from fnmatch import fnmatch
+
+alinhador = next(a for a in model_manager._FIXED_MODELS if a.key == "alignment_pt")
+assert alinhador.download_exclude, "alinhador sem filtro de download"
+# Nomes REAIS do repo (medidos em 2026-08-28). Guarda contra erro de
+# padrao: o que precisa ficar tem de passar, o peso morto tem de sair.
+NECESSARIOS = [
+    "pytorch_model.bin", "config.json", "preprocessor_config.json",
+    "special_tokens_map.json", "tokenizer_config.json", "vocab.json",
+    "alphabet.json", "README.md",
+]
+DESCARTAVEIS = [
+    "flax_model.msgpack", "language_model/lm.binary",
+    "language_model/unigrams.txt", "language_model/attrs.json", "eval.py",
+    "mozilla-foundation_common_voice_6_0_pt_test_eval_results.txt",
+]
+for nome in NECESSARIOS:
+    assert not any(fnmatch(nome, p) for p in alinhador.download_exclude), \
+        f"o filtro descartaria um arquivo necessario: {nome}"
+for nome in DESCARTAVEIS:
+    assert any(fnmatch(nome, p) for p in alinhador.download_exclude), \
+        f"o filtro deixaria passar peso morto: {nome}"
+# tamanho estimado coerente com o que sobra depois do filtro
+assert alinhador.estimated_gb < 2.0, "estimativa do alinhador nao foi atualizada"
+print("PASS: filtro de download do alinhador")
+
+# --- guarda de disco: exigencia vem de quem sabe o que vai baixar ---
+grande = model_manager.check_disk_space(required_gb=10_000_000)
+assert grande["ok"] is False and "Necessário" in grande["message"]
+pequeno = model_manager.check_disk_space(required_gb=0.001)
+assert pequeno["ok"] is True
+print("PASS: check_disk_space por exigencia real")
+
 print("PASS: toy_llm_env")
