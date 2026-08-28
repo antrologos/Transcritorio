@@ -181,6 +181,94 @@ def has_nvidia_gpu() -> bool:
     return _nvidia_gpu_detected
 
 
+_vram_gb_detected: float | None = None
+_ram_gb_detected: float | None = None
+
+
+def total_vram_gb() -> float | None:
+    """Memoria total da GPU NVIDIA em GB; None se nao der para saber.
+
+    has_nvidia_gpu() so diz se EXISTE placa — uma GT 1030 de 2 GB passa
+    e depois falha ao carregar um modelo de 8,7 GB. Quem decide o que
+    recomendar precisa do numero.
+    """
+    global _vram_gb_detected
+    if _vram_gb_detected is not None:
+        return _vram_gb_detected or None
+    try:
+        import subprocess
+        kwargs: dict = {"capture_output": True, "timeout": 5, "text": True}
+        if sys.platform == "win32":
+            kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            **kwargs)
+        if result.returncode != 0:
+            _vram_gb_detected = 0.0
+            return None
+        # Varias placas: a maior manda, e nela que o modelo vai rodar.
+        valores = [float(v.strip()) for v in result.stdout.splitlines() if v.strip()]
+        _vram_gb_detected = round(max(valores) / 1024, 1) if valores else 0.0
+    except Exception:  # noqa: BLE001 - sonda opcional, nunca derruba
+        _vram_gb_detected = 0.0
+    return _vram_gb_detected or None
+
+
+def total_ram_gb() -> float | None:
+    """Memoria RAM total em GB; None se nao der para saber (stdlib pura)."""
+    global _ram_gb_detected
+    if _ram_gb_detected is not None:
+        return _ram_gb_detected or None
+    total_bytes = 0
+    try:
+        if sys.platform == "win32":
+            import ctypes
+
+            class _MemStatus(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            status = _MemStatus()
+            status.dwLength = ctypes.sizeof(_MemStatus)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                total_bytes = int(status.ullTotalPhys)
+        elif sys.platform == "darwin":
+            import subprocess
+            result = subprocess.run(["sysctl", "-n", "hw.memsize"],
+                                    capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                total_bytes = int(result.stdout.strip())
+        else:
+            total_bytes = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except Exception:  # noqa: BLE001 - sonda opcional, nunca derruba
+        total_bytes = 0
+    _ram_gb_detected = round(total_bytes / (1024 ** 3), 1) if total_bytes else 0.0
+    return _ram_gb_detected or None
+
+
+def cpu_cores() -> int:
+    return int(os.cpu_count() or 1)
+
+
+def free_disk_gb(path: Path | None = None) -> float | None:
+    try:
+        import shutil as _shutil
+        alvo = path or model_cache_dir()
+        alvo.mkdir(parents=True, exist_ok=True)
+        return round(_shutil.disk_usage(str(alvo)).free / (1024 ** 3), 1)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def cuda_libs_present() -> bool:
     """Check if the cuda_pack (GPU acceleration pack) is installed.
 
