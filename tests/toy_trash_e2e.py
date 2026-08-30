@@ -35,8 +35,10 @@ def make_fake_context(tmp: Path):
     (tmp / "audio" / "A02.mp3").write_bytes(b"FAKE_AUDIO_A02" * 100)
     (paths.wav_dir / "A01.wav").write_bytes(b"WAV_A01" * 50)
     (paths.wav_dir / "A02.wav").write_bytes(b"WAV_A02" * 50)
-    (paths.output_root / "00_project" / "waveforms" / "A01.wf").write_bytes(b"wf_A01")
-    (paths.output_root / "00_project" / "waveforms" / "A02.wf").write_bytes(b"wf_A02")
+    # Nome REAL do cache de waveform (fix 2026-08-30: era "{id}.wf", que
+    # nunca existiu — a lixeira nunca movia o cache).
+    (paths.output_root / "00_project" / "waveforms" / "A01.waveform.json").write_bytes(b"wf_A01")
+    (paths.output_root / "00_project" / "waveforms" / "A02.waveform.json").write_bytes(b"wf_A02")
     (paths.asr_dir / "json").mkdir(parents=True, exist_ok=True)
     (paths.asr_dir / "json" / "A01.json").write_text("{}", encoding="utf-8")
     (paths.diarization_dir / "json").mkdir(parents=True, exist_ok=True)
@@ -269,7 +271,7 @@ def test_collect_trash_files_enumerates() -> None:
         context, paths = make_fake_context(tmp)
         files = app_service.collect_trash_files(context, ["A01"])
         paths_found = {f["original"] for f in files}
-        expected_substrings = ["A01.mp3", "A01.wav", "A01.wf", "A01.json", "A01.exclusive.json", "A01.md"]
+        expected_substrings = ["A01.mp3", "A01.wav", "A01.waveform.json", "A01.json", "A01.exclusive.json", "A01.md"]
         for sub in expected_substrings:
             assert any(sub in p for p in paths_found), f"faltou {sub} em {paths_found}"
         # Nao deve incluir A02

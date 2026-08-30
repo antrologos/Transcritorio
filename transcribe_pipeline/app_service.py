@@ -470,10 +470,15 @@ def update_engine_config(context: ProjectContext, updates: dict[str, Any]) -> Pr
 def delete_transcription_outputs(context: ProjectContext, ids: list[str]) -> tuple[int, ProjectContext]:
     """Delete all derived transcription files for given interview IDs.
 
-    Removes outputs in 02_asr_raw through 06_qc. Never touches original
-    source files or 00_config/00_manifest/00_project/01_audio directories.
-    Resets job status to 'Pendente'.
+    Removes outputs in 02_asr_raw through 06_qc, plus the 07_index search
+    index (orphan otherwise). Never touches original source files or
+    00_config/00_manifest/00_project/01_audio directories. The
+    edits/backups/ folder is PRESERVED, and a fresh backup of an edited
+    review is taken before deletion. Resets job status to 'Pendente'.
     """
+    from .review_store import backup_review_file
+    from .search import index_dir
+
     deleted = 0
     paths = context.paths
     dirs_to_clean = [
@@ -483,12 +488,21 @@ def delete_transcription_outputs(context: ProjectContext, ids: list[str]) -> tup
         paths.canonical_dir,
         paths.review_dir,
         paths.qc_dir,
+        index_dir(paths),
     ]
     for interview_id in ids:
+        # Ultima chance da review editada: backup so quando ha trabalho
+        # humano (mesma regra do backup_review_file).
+        try:
+            backup_review_file(paths, interview_id)
+        except Exception:  # noqa: BLE001 - backup nunca impede a limpeza pedida
+            pass
         for base_dir in dirs_to_clean:
             if not base_dir.exists():
                 continue
             for f in base_dir.rglob(f"{interview_id}*"):
+                if f.parent.name == "backups":
+                    continue  # copias de seguranca sobrevivem a limpeza
                 if f.is_file() and is_interview_artifact(f.name, interview_id):
                     f.unlink()
                     deleted += 1
@@ -525,7 +539,7 @@ def collect_trash_files(context: ProjectContext, ids: list[str]) -> list[dict]:
     Returns list of {original, size, mtime} dicts. Includes:
     - Original source audio/video (from metadata.source_path)
     - 01_audio_wav16k_mono/{id}.wav
-    - 00_project/waveforms/{id}.wf
+    - 00_project/waveforms/{id}.waveform.json
     - All derived files in 02-06 (rglob by {id}*)
     """
     import os
@@ -562,7 +576,10 @@ def collect_trash_files(context: ProjectContext, ids: list[str]) -> list[dict]:
                 sp = paths.project_root / sp
             add(sp)
         add(paths.wav_dir / f"{iid}.wav")
-        add(waveform_dir / f"{iid}.wf")
+        # Espelha waveform_cache_path (review_studio_qt.py) — unificar em
+        # utils numa rodada futura. O nome antigo "{id}.wf" nunca existiu.
+        safe_id = "".join(c if c.isalnum() or c in {"-", "_", "."} else "_" for c in iid).strip("._")
+        add(waveform_dir / f"{safe_id or 'arquivo'}.waveform.json")
         for base in dirs_to_scan:
             if not base.exists():
                 continue

@@ -7858,13 +7858,20 @@ if QT_IMPORT_ERROR is None:
             _logger.info("delete_selected_transcriptions triggered: context=%s", self.context is not None)
             if self.context is None:
                 return
-            ids = self.effective_target_ids()
-            _logger.info("  effective_target_ids: %s | checked=%s visual=%s current_iid=%s",
+            # Alvo DESTRUTIVO = so a selecao visual (simetria com a Lixeira,
+            # pos-incidente 2026-08-25): as caixas de marcacao escolhem "o
+            # que transcrever", nunca o que apagar.
+            ids = self.destructive_target_ids()
+            _logger.info("  destructive_target_ids: %s | checked=%s visual=%s current_iid=%s",
                          ids, sorted(self._checked_ids),
                          sorted(self._visually_selected_interview_ids()),
                          self.current_interview_id)
             if not ids:
-                QMessageBox.information(self, "Selecione arquivos", "Selecione ao menos um arquivo para limpar a transcricao.")
+                QMessageBox.information(
+                    self, "Selecione arquivos",
+                    "Selecione (destaque) ao menos um arquivo na lista para limpar "
+                    "a transcricao.\nAs caixas de marcação não contam para esta "
+                    "ação — elas escolhem o que transcrever.")
                 return
             n = len(ids)
             if n == 1:
@@ -7875,7 +7882,13 @@ if QT_IMPORT_ERROR is None:
             box.setIcon(QMessageBox.Icon.Question)
             box.setWindowTitle("Limpar transcricao gerada")
             box.setText(msg)
-            box.setInformativeText("Os arquivos gerados (ASR, identificacao de falantes, transcricao editavel, metricas) serao apagados. O audio original e mantido no projeto — voce pode gerar a transcricao de novo depois.\n\nEsta acao nao pode ser desfeita.")
+            box.setInformativeText(
+                "Os arquivos gerados (ASR, identificacao de falantes, transcricao "
+                "editavel, metricas) serao apagados. O audio original e mantido no "
+                "projeto — voce pode gerar a transcricao de novo depois.\n\n"
+                "Se houver edições manuais, uma cópia de segurança da transcrição "
+                "editável fica em 05_transcripts_review/edits/backups/.\n\n"
+                "Esta acao nao pode ser desfeita.")
             box.setDetailedText("Arquivos afetados:\n\n" + "\n".join(ids))
             box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
             box.setDefaultButton(QMessageBox.StandardButton.No)
