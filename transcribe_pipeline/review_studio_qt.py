@@ -9634,14 +9634,27 @@ if QT_IMPORT_ERROR is None:
                 QMessageBox.information(self, "Selecione uma entrevista", "Selecione uma entrevista para identificar falantes.")
                 return
             self._reset_speakers_confirmed(ids)
-            self.start_worker(
-                "Identificar falantes",
-                [(
-                    "Identificando falantes...",
-                    lambda progress, should_cancel: self._diarize_via_subprocess(ids, progress, should_cancel),
-                    True,
-                )],
+            # Diarizar SEM remontar nao mudava nada visivel: o par
+            # "Reprocessar falantes" + "Atualizar transcricao editavel"
+            # nunca alterava o que o usuario ve. Agora o fluxo completo:
+            # diarizacao -> render por arquivo -> reviews pristinas.
+            steps: list[tuple] = [(
+                "Identificando falantes...",
+                lambda progress, should_cancel: self._diarize_via_subprocess(ids, progress, should_cancel),
+                True,
+            )]
+            steps.extend(
+                (f"Remontando transcricao ({item})...",
+                 lambda item=item: app_service.render_interviews(
+                     self.context, ids=[item],
+                     overrides=self._render_source_overrides(item)))
+                for item in ids
             )
+            steps.append((
+                "Atualizando transcrições editáveis...",
+                lambda alvo=list(ids): app_service.refresh_unedited_reviews(self.context, alvo),
+            ))
+            self.start_worker("Identificar falantes", steps)
 
         def improve_speakers_current_file(self, *_args: Any) -> None:
             if not self.current_interview_id:
@@ -9683,7 +9696,10 @@ if QT_IMPORT_ERROR is None:
                     "montar transcricao",
                     70,
                     95,
-                    lambda item=interview_id: app_service.render_interviews(self.context, ids=[item], overrides={"diarization_source": "pyannote_exclusive"}),
+                    # Mesma decisao por arquivo dos demais fluxos (canais
+                    # informativos > exclusive > sem falantes) — aqui o
+                    # exclusive acabou de ser gerado, mas canais podem vencer.
+                    lambda item=interview_id: app_service.render_interviews(self.context, ids=[item], overrides=self._render_source_overrides(item)),
                 ),
                 self.job_step(
                     f"{interview_id}: recriando transcricao editavel...",
@@ -9707,14 +9723,21 @@ if QT_IMPORT_ERROR is None:
                 QMessageBox.information(self, "Selecione uma entrevista", "Selecione uma entrevista para montar a transcrição editável.")
                 return
             # Um step por arquivo: a fonte de falantes e decidida POR
-            # arquivo (_render_source_overrides), nao forcada.
-            steps = [
+            # arquivo (_render_source_overrides), nao forcada. O passo
+            # final atualiza as REVIEWS pristinas (edicoes humanas sao
+            # preservadas) — sem ele a acao "Atualizar transcricao
+            # editavel" nao atualizava a transcricao editavel.
+            steps: list[tuple] = [
                 (f"Montando transcrição editável ({item})...",
                  lambda item=item: app_service.render_interviews(
                      self.context, ids=[item],
                      overrides=self._render_source_overrides(item)))
                 for item in ids
             ]
+            steps.append((
+                "Atualizando transcrições editáveis...",
+                lambda alvo=list(ids): app_service.refresh_unedited_reviews(self.context, alvo),
+            ))
             self.start_worker("Montar transcrição editável", steps)
 
         def run_summarize_job(self) -> None:
