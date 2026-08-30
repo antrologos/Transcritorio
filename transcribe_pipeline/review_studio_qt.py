@@ -3041,6 +3041,56 @@ if QT_IMPORT_ERROR is None:
             }
 
 
+    class RetranscribeDialog(QDialog):
+        """Escolha de modelo para refazer a transcricao de UM arquivo.
+
+        So modelos INSTALADOS entram (para baixar outros: Gerenciar
+        modelos...). O aviso de recriacao vive AQUI: quem aceita ja
+        consentiu, e o job nao pergunta de novo (confirmed_recreate)."""
+
+        def __init__(self, interview_id: str, installed: list[str],
+                     current: str, parent: QWidget | None = None) -> None:
+            super().__init__(parent)
+            from . import model_manager as _mm
+            self.setWindowTitle("Transcrever novamente")
+            layout = QVBoxLayout(self)
+            intro = QLabel(f"Refazer a transcrição de {interview_id} com o modelo:")
+            intro.setWordWrap(True)
+            layout.addWidget(intro)
+            self.model_combo = QComboBox()
+            for key in _mm.ASR_VARIANTS:
+                if key not in installed:
+                    continue
+                rotulo = str(_mm.ASR_VARIANTS[key].get("label") or key)
+                self.model_combo.addItem(rotulo, key)
+                if key == current:
+                    self.model_combo.setCurrentIndex(self.model_combo.count() - 1)
+            if self.model_combo.count() == 0 and current:
+                self.model_combo.addItem(current, current)
+            layout.addWidget(self.model_combo)
+            nota = QLabel("Modelos instalados neste computador. Para baixar "
+                          "outros, use Transcrever → Gerenciar modelos...")
+            nota.setWordWrap(True)
+            nota.setStyleSheet(_style_muted())
+            layout.addWidget(nota)
+            aviso = QLabel(
+                "A transcrição editável será recriada DO ZERO — edições manuais "
+                "serão descartadas.\nCópia de segurança das versões com edições em "
+                "Transcricoes\\05_transcripts_review\\edits\\backups.")
+            aviso.setWordWrap(True)
+            aviso.setStyleSheet(_style_warn())
+            layout.addWidget(aviso)
+            buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
+                                       | QDialogButtonBox.StandardButton.Cancel)
+            buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Transcrever novamente")
+            buttons.accepted.connect(self.accept)
+            buttons.rejected.connect(self.reject)
+            layout.addWidget(buttons)
+
+        def selected_model(self) -> str:
+            return str(self.model_combo.currentData() or "")
+
+
     class JobsDialog(QDialog):
         def __init__(self, context: app_service.ProjectContext, parent: QWidget | None = None) -> None:
             super().__init__(parent)
@@ -4394,6 +4444,12 @@ if QT_IMPORT_ERROR is None:
             self.transcribe_current_action.setToolTip("Transcrever a midia aberta agora.")
             self.transcribe_current_action.triggered.connect(self.run_current_file_transcription_job)
 
+            self.retranscribe_current_action = QAction("Transcrever novamente...", self)
+            self.retranscribe_current_action.setToolTip(
+                "Refazer a transcricao do arquivo aberto, podendo escolher outro modelo.\n"
+                "A transcricao editavel e recriada (copia de seguranca das edicoes em edits/backups).")
+            self.retranscribe_current_action.triggered.connect(self.retranscribe_current_file)
+
             self.save_action = QAction("Salvar transcrição", self)
             self.save_action.setShortcut(QKeySequence.StandardKey.Save)
             self.save_action.setToolTip("Salvar a transcricao editavel desta entrevista.")
@@ -4714,6 +4770,7 @@ if QT_IMPORT_ERROR is None:
             transcrever_menu = self.menuBar().addMenu("Transcrever")
             transcrever_menu.addAction(self.transcribe_action)
             transcrever_menu.addAction(self.transcribe_current_action)
+            transcrever_menu.addAction(self.retranscribe_current_action)
             transcrever_menu.addAction(self.transcribe_pending_action)
             transcrever_menu.addSeparator()
             transcrever_menu.addAction(self.diarize_action)
@@ -5207,10 +5264,14 @@ if QT_IMPORT_ERROR is None:
                 QApplication.clipboard().setText("winget install Gyan.FFmpeg")
             return False
 
-        def ensure_models_ready(self, require_diarization: bool | None = None) -> bool:
+        def ensure_models_ready(self, require_diarization: bool | None = None,
+                                asr_variants: list[str] | None = None) -> bool:
             if not self.ensure_ffmpeg():
                 return False
-            variants = self._configured_asr_variants()
+            # asr_variants: quem vai transcrever com um modelo DIFERENTE do
+            # configurado (Transcrever novamente...) valida esse modelo — o
+            # default continua sendo o do projeto.
+            variants = asr_variants or self._configured_asr_variants()
             # require_diarization=True: acoes explicitas de falantes (Identificar
             # falantes / Melhorar falantes) exigem pyannote mesmo com o projeto
             # configurado sem diarizacao.
@@ -5560,6 +5621,12 @@ if QT_IMPORT_ERROR is None:
             self.generate_resumo_button.setVisible(False)
             self.generate_resumo_button.clicked.connect(self.run_summarize_job)
             self.open_file_action_row.addWidget(self.transcribe_current_button)
+            # Presenca contextual do refazer: para arquivo TRANSCRITO o botao
+            # "Transcrever este arquivo" some — este assume o lugar (menu
+            # nunca e o unico caminho).
+            self.retranscribe_current_button = self.action_button(self.retranscribe_current_action)
+            self.retranscribe_current_button.setVisible(False)
+            self.open_file_action_row.addWidget(self.retranscribe_current_button)
             self.open_file_action_row.addWidget(self.improve_speakers_button)
             self.open_file_action_row.addWidget(self.generate_resumo_button)
             self.open_file_action_row.addWidget(self.open_resumo_button)
@@ -7481,6 +7548,7 @@ if QT_IMPORT_ERROR is None:
             self._set_action(self.transcribe_action, not busy and has_table_selection, reason_busy if busy else reason_select)
             self._set_action(self.transcribe_pending_action, not busy and bool(self.pending_transcription_ids()), reason_busy if busy else "Não há arquivos pendentes.")
             self._set_action(self.transcribe_current_action, not busy and has_untranscribed_open_file, reason_busy if busy else reason_open)
+            self._set_action(self.retranscribe_current_action, not busy and has_review, reason_busy if busy else reason_open)
             self._set_action(self.save_action, not busy and has_turn, reason_busy if busy else reason_turn)
             self._set_action(self.generate_files_action, not busy and (has_review or has_table_selection or any(status.review_exists or status.canonical_exists for status in self.statuses)), reason_busy if busy else "Nenhuma transcrição disponível.")
             self._set_action(self.export_selected_action, not busy and has_table_selection, reason_busy if busy else reason_select)
@@ -7585,6 +7653,9 @@ if QT_IMPORT_ERROR is None:
             if hasattr(self, "transcribe_current_button"):
                 self.transcribe_current_button.setVisible(has_untranscribed_open_file)
                 self.transcribe_current_button.setEnabled(not busy and has_untranscribed_open_file)
+            if hasattr(self, "retranscribe_current_button"):
+                self.retranscribe_current_button.setVisible(has_review)
+                self.retranscribe_current_button.setEnabled(not busy and has_review)
             if hasattr(self, "improve_speakers_button"):
                 self.improve_speakers_button.setVisible(has_review)
                 self.improve_speakers_button.setEnabled(not busy and has_review)
@@ -8567,16 +8638,46 @@ if QT_IMPORT_ERROR is None:
                 return
             self.run_full_transcription_job(ids=ids)
 
+        def retranscribe_current_file(self, *_args: Any) -> None:
+            """Refazer a transcricao do arquivo aberto, com escolha de modelo
+            entre os instalados (caso de uso: comparar modelos). O dialogo
+            ja avisa da recriacao — confirmed_recreate evita pergunta dupla."""
+            interview_id = self.current_interview_id
+            if not interview_id:
+                QMessageBox.information(self, "Abra um arquivo",
+                                        "Abra uma transcrição antes de refazê-la.")
+                return
+            if not self.save_current_turn(force=True):
+                return
+            from . import model_manager as _mm
+            instalados = list(_mm.installed_asr_variants())
+            atual = str(self.context.config.get("asr_model") or "") if self.context else ""
+            dialog = RetranscribeDialog(interview_id, instalados, atual, self)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            escolhido = dialog.selected_model() or atual
+            self.run_full_transcription_job(
+                ids=[interview_id],
+                asr_model=escolhido or None,
+                confirmed_recreate=True,
+            )
+
         def run_manifest_job(self) -> None:
             if not self.save_current_turn():
                 return
             self.start_worker("Atualizar biblioteca", [("Procurando gravações...", lambda: app_service.refresh_manifest(self.context))])
 
         def run_full_transcription_job(self, ids: list[str] | None = None, *,
+                                       asr_model: str | None = None,
                                        confirmed_recreate: bool = False) -> None:
+            # asr_model: modelo escolhido SO para esta rodada (Transcrever
+            # novamente...) — sobrescreve o baseline com consentimento e nao
+            # toca a config do projeto. Nada aqui usa asr_variant (singular),
+            # que e a pasta A/B 02_asr_variants exclusiva da CLI.
             if not self.save_current_turn():
                 return
-            if not self.ensure_models_ready():
+            if not self.ensure_models_ready(
+                    asr_variants=[asr_model] if asr_model else None):
                 return
             ids = ids or self.selected_ids_for_job(fallback_current=True)
             if not ids:
@@ -8613,7 +8714,7 @@ if QT_IMPORT_ERROR is None:
             steps: list[tuple] = []
             weights: list[int] = []
             # Dynamic weights from benchmark data (tests/benchmark_exhaustive_2026-04-19.csv)
-            asr_model = str(self.context.config.get("asr_model", "large-v3-turbo"))
+            asr_model = asr_model or str(self.context.config.get("asr_model", "large-v3-turbo"))
             # _pipeline_weights espera o device EFETIVO ("cuda"/"cpu") — com o
             # default "auto" (v0.2+) e preciso resolver antes do lookup.
             from . import runtime as _runtime_w
@@ -8658,7 +8759,10 @@ if QT_IMPORT_ERROR is None:
                         lambda progress, should_cancel, item=interview_id: app_service.transcribe_interviews(
                             self.context,
                             ids=[item],
-                            overrides={"diarize": False},
+                            # asr_model efetivo SEMPRE no override: igual a
+                            # config no fluxo normal; o escolhido na rodada
+                            # de "Transcrever novamente...".
+                            overrides={"diarize": False, "asr_model": asr_model},
                             progress_callback=progress,
                             should_cancel=should_cancel,
                         ),
@@ -8689,9 +8793,14 @@ if QT_IMPORT_ERROR is None:
                     # Fonte do render decidida NA HORA: canais informativos
                     # (fase 4) tem prioridade; senao pyannote_exclusive; senao
                     # modo sem falantes.
-                    self.job_step(f"{prefix}: montando transcricao editavel...", interview_id, "montar transcricao", r[3], r[4], lambda item=interview_id: app_service.render_interviews(self.context, ids=[item], overrides=(
-                        {"diarization_source": "channels"} if self._channels_diarization_exists(item)
-                        else (render_overrides if self._exclusive_diarization_exists(item) else {})))),
+                    # asr_model tambem no render: o canonical grava o modelo
+                    # do config (render.py) — sem o override, uma rodada com
+                    # outro modelo registraria o modelo ERRADO no canonical
+                    # e na review.
+                    self.job_step(f"{prefix}: montando transcricao editavel...", interview_id, "montar transcricao", r[3], r[4], lambda item=interview_id: app_service.render_interviews(self.context, ids=[item], overrides={
+                        "asr_model": asr_model,
+                        **({"diarization_source": "channels"} if self._channels_diarization_exists(item)
+                           else (render_overrides if self._exclusive_diarization_exists(item) else {}))})),
                 )
                 if do_boundary:
                     file_steps.append(
