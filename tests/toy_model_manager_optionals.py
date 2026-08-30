@@ -89,8 +89,12 @@ with tempfile.TemporaryDirectory() as tmp:
     print("PASS: opcional instalado pode ser removido")
 
     # --- variante Whisper NAO instalada tambem ganha Baixar por item ---
+    # (o tiny continua BAIXAVEL pelo gerenciador, mas rotulado como
+    # demonstracao — decisao 2026-08-30)
     r = _linha(dlg, model_manager.friendly_name("tiny"))
     assert r is not None
+    assert "Demonstra" in model_manager.friendly_name("tiny"), \
+        model_manager.friendly_name("tiny")
     assert dlg.table.item(r, dlg.COL_STATUS).text() == "Disponivel"
     botao = dlg.table.cellWidget(r, dlg.COL_ACTION)
     assert botao is not None and botao.text() == "Baixar"

@@ -3860,7 +3860,10 @@ if QT_IMPORT_ERROR is None:
         """Page 3: choose which ASR model(s) to download."""
 
         RECOMMENDED = ["large-v3-turbo", "large-v3"]
-        OTHERS = ["medium", "small", "base", "tiny"]
+        # tiny/base NAO entram (demo_only, 2026-08-30): o primeiro contato
+        # nunca deve produzir uma transcricao pessima. Continuam baixaveis
+        # pelo Gerenciar modelos, rotulados como demonstracao.
+        OTHERS = ["medium", "small"]
         @property
         def FIXED_GB(self) -> float:
             """Componentes alem do ASR, conforme o PERFIL escolhido — lido

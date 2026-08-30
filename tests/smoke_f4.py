@@ -107,8 +107,9 @@ for r in range(dlg.table.rowCount()):
                      "has_btn": btn is not None,
                      "btn_text": btn.text() if btn is not None else ""})
 
-# 3.2: tiny (instalado) tem size != "-"
-tiny_row = next((r for r in row_data if "Rapido" in r["name"] and "150 MB" in r["name"]), None)
+# 3.2: tiny (instalado) tem size != "-" — rotulo novo de demonstracao
+# (2026-08-30: tiny/base sairam do assistente e avisam a qualidade)
+tiny_row = next((r for r in row_data if "Demonstra" in r["name"] and "150 MB" in r["name"]), None)
 assert tiny_row is not None, f"faltou tiny: {[r['name'] for r in row_data]}"
 assert tiny_row["size"] != "-", f"tiny sem size: {tiny_row}"
 assert tiny_row["status"] == "Instalado", f"tiny status: {tiny_row}"
@@ -165,7 +166,7 @@ tiny_in_use = None
 for r in range(dlg2.table.rowCount()):
     name = dlg2.table.item(r, 0).text()
     status = dlg2.table.item(r, 2).text()
-    if "Rapido" in name and "150 MB" in name:
+    if "Demonstra" in name and "150 MB" in name:
         tiny_in_use = status
         break
 assert tiny_in_use == "Em uso", f"tiny deveria ser 'Em uso', got {tiny_in_use!r}"

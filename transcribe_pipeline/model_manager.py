@@ -260,24 +260,32 @@ ASR_VARIANTS: dict[str, dict[str, Any]] = {
         "desc": "Qualidade razoavel.",
     },
     "base": {
-        "label": "Whisper base",
-        "friendly_pt": "Equilibrado leve (qualidade boa, 300 MB)",
+        # demo_only (2026-08-30): qualidade insuficiente para trabalho
+        # real — fora do assistente; baixavel so pelo gerenciador, com o
+        # aviso no proprio rotulo (o antigo dizia "qualidade boa" e o
+        # desc interno "Qualidade fraca" — mentia).
+        "label": "Whisper base (demonstração)",
+        "friendly_pt": "⚠ Demonstração leve (300 MB) — qualidade insuficiente para trabalho",
         "repo": "Systran/faster-whisper-base",
         "revision": "ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66",
         "estimated_gb": 0.3,
         "quality": 3,
         "speed": 9,
-        "desc": "Qualidade fraca.",
+        "demo_only": True,
+        "desc": "Qualidade fraca — apenas demonstração.",
     },
     "tiny": {
-        "label": "Whisper tiny",
-        "friendly_pt": "Rapido (qualidade basica, 150 MB)",
+        # demo_only (2026-08-30): ~30% de erro em pt, loops de repeticao
+        # — serve SO para testar o fluxo em 1 minuto de download.
+        "label": "Whisper tiny (demonstração)",
+        "friendly_pt": "⚠ Demonstração (150 MB) — ~30% de erros; só para testar o fluxo",
         "repo": "Systran/faster-whisper-tiny",
         "revision": "d90ca5fe260221311c53c58e660288d3deb8d356",
         "estimated_gb": 0.15,
         "quality": 2,
         "speed": 10,
-        "desc": "Qualidade ruim.",
+        "demo_only": True,
+        "desc": "Qualidade ruim — apenas demonstração.",
     },
 }
 

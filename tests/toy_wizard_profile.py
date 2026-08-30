@@ -51,7 +51,9 @@ print("PASS: get_required_models por perfil")
 # --- recomendacao de MODELO acompanha a maquina (pura) ---
 assert caps.recommended_asr_variant(caps.parse_fake_hardware("gpu24")) == "large-v3-turbo"
 assert caps.recommended_asr_variant(caps.parse_fake_hardware("cpu")) == "small"
-assert caps.recommended_asr_variant(caps.parse_fake_hardware("minimo")) == "base"
+# 2026-08-30: "minimo" tambem recomenda small — o base virou demonstracao
+# (qualidade insuficiente para trabalho) e saiu do assistente.
+assert caps.recommended_asr_variant(caps.parse_fake_hardware("minimo")) == "small"
 assert caps.recommended_asr_variant(caps.parse_fake_hardware("gpu2")) == "small"
 print("PASS: recommended_asr_variant")
 
@@ -97,11 +99,14 @@ assert marcados == ["small"], marcados
 assert "Recomendado para esta máquina" in select_page._checkboxes["small"].text()
 assert "Recomendado" not in select_page._checkboxes["large-v3-turbo"].text()
 assert wizard.selected_asr_variants == ["small"]
+# tiny/base sao DEMONSTRACAO (decisao 2026-08-30): fora do assistente
+assert "tiny" not in select_page._checkboxes, "tiny voltou ao assistente"
+assert "base" not in select_page._checkboxes, "base voltou ao assistente"
 # marcar um segundo modelo NAO desmarca o primeiro, e o rotulo enumera
-select_page._checkboxes["tiny"].setChecked(True)
-assert set(select_page.selected_asr_variants()) == {"small", "tiny"}
+select_page._checkboxes["medium"].setChecked(True)
+assert set(select_page.selected_asr_variants()) == {"small", "medium"}
 assert "2 modelos" in select_page.total_label.text()
-select_page._checkboxes["tiny"].setChecked(False)
+select_page._checkboxes["medium"].setChecked(False)
 assert "Será baixado" in select_page.total_label.text()
 
 # a pagina de perfis declara com qual modelo estimou os tamanhos
