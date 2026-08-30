@@ -1699,7 +1699,9 @@ if QT_IMPORT_ERROR is None:
         def _show_in_explorer(self) -> None:
             target = self._selected_path() or self.results_folder
             if sys.platform == "win32":
-                subprocess.Popen(["explorer", "/select,", str(target)])
+                # /select, COLADO ao caminho: com argumento separado o
+                # Explorer ignora e abre Documentos.
+                subprocess.Popen(["explorer", f"/select,{target}"])
 
         def _copy_path(self) -> None:
             target = self._selected_path() or self.results_folder
@@ -3220,8 +3222,10 @@ if QT_IMPORT_ERROR is None:
             # Honestidade do combo: sem placa NVIDIA, "cuda" e uma escolha
             # que so falharia depois — desabilitar COM motivo (nunca
             # esconder), e uma config "cuda" orfa cai para "auto".
+            # NUNCA no macOS: la "cuda" e a rota documentada do MLX/Metal
+            # (ver comentario das device_options) e ha a opcao "mps".
             from . import capabilities as _caps_dev
-            if not _caps_dev.hardware_snapshot().has_gpu:
+            if sys.platform != "darwin" and not _caps_dev.hardware_snapshot().has_gpu:
                 idx_cuda = self.device_combo.findData("cuda")
                 try:
                     item = self.device_combo.model().item(idx_cuda)
@@ -4508,24 +4512,24 @@ if QT_IMPORT_ERROR is None:
                 intro.setMinimumHeight(90)
             elif self._needs_token:
                 intro.setPlainText(
-                    "O token Hugging Face e usado apenas para baixar modelos. "
-                    "Audios, videos e transcricoes continuam neste computador.\n\n"
+                    "O token Hugging Face é usado apenas para baixar modelos. "
+                    "Áudios, vídeos e transcrições continuam neste computador.\n\n"
                     "Passo a passo:\n"
                     "1. Crie ou entre na sua conta do Hugging Face.\n"
                     "2. Abra o modelo pyannote/speaker-diarization-community-1 e aceite os termos.\n"
                     "3. Crie um token de leitura no Hugging Face.\n"
                     "4. Cole o token abaixo e baixe os modelos.\n"
-                    "5. Depois do download, o Transcritorio verifica o carregamento local/offline.\n\n"
-                    "Para preparar outro computador, repita estes mesmos passos com o token do usuario daquele computador. "
+                    "5. Depois do download, o Transcritório verifica o carregamento local/offline.\n\n"
+                    "Para preparar outro computador, repita estes mesmos passos com o token do usuário daquele computador. "
                     "Nunca use nem compartilhe o token de outra pessoa."
                 )
                 intro.setMinimumHeight(180)
             else:
                 intro.setPlainText(
-                    "Os componentes da sua instalacao sao todos publicos: "
-                    "nenhuma conta e nenhum token sao necessarios.\n\n"
+                    "Os componentes da sua instalação são todos públicos: "
+                    "nenhuma conta e nenhum token são necessários.\n\n"
                     "Clique em Baixar modelos para completar o que falta. "
-                    "Audios, videos e transcricoes continuam neste computador."
+                    "Áudios, vídeos e transcrições continuam neste computador."
                 )
                 intro.setMinimumHeight(90)
             layout.addWidget(intro)
@@ -4874,7 +4878,7 @@ if QT_IMPORT_ERROR is None:
             self.open_export_folder_action.triggered.connect(self.open_export_folder)
 
             self.diarize_action = QAction("Reprocessar falantes", self)
-            self.diarize_action.setToolTip("Reprocessar a identificação de falantes para os arquivos selecionados.\nSelecione ao menos um arquivo.")
+            self.diarize_action.setToolTip("Reprocessar a identificação de falantes.\nMarque ☑ ao menos um arquivo na lista (ou abra um).")
             self.diarize_action.triggered.connect(self.run_diarization_job)
 
             self.improve_speakers_action = QAction("Melhorar falantes deste arquivo", self)
@@ -5365,24 +5369,24 @@ if QT_IMPORT_ERROR is None:
                 return
             # Todas as condicoes atendidas: oferece install
             detectada = (
-                f"Detectamos uma placa grafica NVIDIA com {hw.vram_gb:.0f} GB "
-                "de memoria de video no seu computador."
+                f"Detectamos uma placa gráfica NVIDIA com {hw.vram_gb:.0f} GB "
+                "de memória de vídeo no seu computador."
                 if hw.vram_gb else
-                "Detectamos uma placa grafica NVIDIA no seu computador.")
+                "Detectamos uma placa gráfica NVIDIA no seu computador.")
             aviso_vram = ""
             if hw.vram_gb is not None and hw.vram_gb < 4:
                 aviso_vram = (
-                    "\n\nAtencao: com essa memoria de video, a aceleracao pode "
-                    "nao valer a pena com os modelos maiores — o modo CPU "
-                    "continua disponivel.")
+                    "\n\nAtenção: com essa memória de vídeo, a aceleração pode "
+                    "não valer a pena com os modelos maiores — o modo CPU "
+                    "continua disponível.")
             msg = (
                 f"{detectada}\n\n"
-                "O Transcritorio esta instalado sem a aceleracao por placa "
-                "grafica. Ativando a aceleracao, a transcricao fica de 3 a 9 "
-                "vezes mais rapida, mas exige um download adicional de cerca "
+                "O Transcritório está instalado sem a aceleração por placa "
+                "gráfica. Ativando a aceleração, a transcrição fica de 3 a 9 "
+                "vezes mais rápida, mas exige um download adicional de cerca "
                 "de 2,5 GB.\n\n"
                 "Clique em 'Baixar e instalar agora' para ativar; o "
-                "Transcritorio cuida do resto e avisa quando concluir."
+                "Transcritório cuida do resto e avisa quando concluir."
                 + aviso_vram
             )
             box = QMessageBox(self)
@@ -5725,7 +5729,7 @@ if QT_IMPORT_ERROR is None:
                 QMessageBox.warning(self, APP_NAME, f"Erro ao abrir projeto:\n{exc}")
                 return
             self.switch_project_context(context)
-            self.project_label.setText(self.project_header_text())
+            self._update_project_label()
 
         def _build_ui(self) -> None:
             self._build_menus()
@@ -5739,10 +5743,8 @@ if QT_IMPORT_ERROR is None:
             self.project_label = QLabel(self.project_header_text())
             self.project_label.setStyleSheet(_style_muted())
             self.project_label.setTextFormat(Qt.TextFormat.RichText)
-            self.project_label.setToolTip(
-                "Clique em \"Modelo\" ou \"Motor\" para configurar a transcrição "
-                "(modelo Whisper, dispositivo CUDA/CPU, idioma).")
             self.project_label.linkActivated.connect(lambda _link: self.configure_engine())
+            self._update_project_label()
             header.addWidget(self.project_label)
             root_layout.addLayout(header)
 
@@ -5896,7 +5898,10 @@ if QT_IMPORT_ERROR is None:
             _cta_row.addWidget(self._empty_open_project_btn)
             _cta_row.addStretch(1)
             _es_layout.addLayout(_cta_row)
-            self._empty_hint = QLabel("Formatos aceitos: MP3, WAV, M4A, MP4, FLAC, OGG, OPUS, WMA")
+            # Somente os formatos que o manifest REALMENTE aceita
+            # (config.media_extensions) — prometer OGG/OPUS/WMA e rejeitar
+            # o arquivo na linha seguinte era promessa falsa.
+            self._empty_hint = QLabel("Formatos aceitos: MP3, M4A, WAV, FLAC, MP4, MOV")
             self._empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._empty_hint.setStyleSheet(f"{_style_muted()} font-size: 11px;")
             self._empty_hint.setWordWrap(True)
@@ -5960,6 +5965,18 @@ if QT_IMPORT_ERROR is None:
             if self.context is not None:
                 return str(self.context.paths.project_root)
             return str(Path.home())
+
+        def _update_project_label(self) -> None:
+            """Texto + tooltip do cabecalho, coerentes com o estado: sem
+            projeto o tooltip nao promete links "Modelo"/"Motor" que nao
+            existem no texto."""
+            if not hasattr(self, "project_label"):
+                return
+            self.project_label.setText(self.project_header_text())
+            self.project_label.setToolTip(
+                "Clique em \"Modelo\" ou \"Motor\" para configurar a transcrição "
+                "(modelo Whisper, dispositivo CUDA/CPU, idioma)."
+                if self.context is not None else "Nenhum projeto aberto.")
 
         def project_header_text(self) -> str:
             if self.context is None:
@@ -6371,7 +6388,7 @@ if QT_IMPORT_ERROR is None:
                     self._empty_state_widget.setVisible(True)
                     self.interview_table.setVisible(False)
                 if hasattr(self, "project_label"):
-                    self.project_label.setText(self.project_header_text())
+                    self._update_project_label()
                 self.update_action_states()
                 return
             try:
@@ -6394,7 +6411,7 @@ if QT_IMPORT_ERROR is None:
                 return
             self._status_map = {s.interview_id: s for s in self.statuses}
             if hasattr(self, "project_label"):
-                self.project_label.setText(self.project_header_text())
+                self._update_project_label()
             self._sync_diarize_checkbox()
             self._sync_voice_prompt_action()
             self.interview_table.setSortingEnabled(False)
@@ -7016,7 +7033,16 @@ if QT_IMPORT_ERROR is None:
             if not self.save_current_turn():
                 return
             status = self.status_by_interview_id(interview_id)
-            if status and not status.review_exists and not status.canonical_exists:
+            if status is None:
+                # Lista desatualizada (arquivo removido/renomeado fora): sem
+                # este guard, load_review criava uma review vazia e o
+                # get_media_candidates estourava um KeyError em ingles.
+                QMessageBox.information(
+                    self, "Arquivo não encontrado",
+                    "Este arquivo não está mais na lista do projeto. "
+                    "Recarregue a lista (F5) e tente de novo.")
+                return
+            if not status.review_exists and not status.canonical_exists:
                 self.open_media_only(interview_id)
                 return
             try:
@@ -7481,7 +7507,7 @@ if QT_IMPORT_ERROR is None:
             self.turns = []
             self.word_index = []
             self._word_uncertain_cutoff = None
-            self.review_title.setText("Abra um arquivo para editar a transcricao.")
+            self.review_title.setText("Abra um arquivo para editar a transcrição.")
             self.turn_table.setRowCount(0)
             self.waveform_widget.set_waveform([], 0)
             self.text_edit.clear()
@@ -7631,6 +7657,21 @@ if QT_IMPORT_ERROR is None:
             degrada para a selecao padrao da palavra, sem seek.
             """
             if not self.review or not self.current_turn_id or not self.word_index:
+                if self.review and self.current_turn_id and not self.word_index:
+                    # Feedback NO MOMENTO do gesto: o duplo clique mudo era o
+                    # unico sinal de que os tempos por palavra nao existem
+                    # (a dica da abertura ja tinha sido sobrescrita).
+                    try:
+                        pronto = self._capability_state("tempos_por_palavra")[0] == "pronta"
+                    except Exception:  # noqa: BLE001
+                        pronto = True
+                    self.progress_label.setText(
+                        "Este arquivo não tem tempos por palavra — o duplo clique "
+                        "não leva ao áudio. "
+                        + ("Transcreva novamente para gerá-los."
+                           if pronto else
+                           "Instale \"Tempos por palavra\" em Transcrever → "
+                           "Gerenciar modelos... e transcreva novamente."))
                 return
             try:
                 index = review_store.find_turn_index(self.review, self.current_turn_id)
@@ -8327,20 +8368,21 @@ if QT_IMPORT_ERROR is None:
                 return
             n = len(ids)
             if n == 1:
-                msg = "Limpar a transcricao gerada deste arquivo?"
+                msg = "Limpar a transcrição gerada deste arquivo?"
             else:
-                msg = f"Limpar a transcricao gerada de {n} arquivos?"
+                msg = f"Limpar a transcrição gerada de {n} arquivos?"
             box = QMessageBox(self)
             box.setIcon(QMessageBox.Icon.Question)
             box.setWindowTitle("Limpar transcricao gerada")
             box.setText(msg)
             box.setInformativeText(
-                "Os arquivos gerados (ASR, identificacao de falantes, transcricao "
-                "editavel, metricas) serao apagados. O audio original e mantido no "
-                "projeto — voce pode gerar a transcricao de novo depois.\n\n"
+                "Os arquivos gerados (transcrição bruta, identificação de "
+                "falantes, transcrição editável, métricas) serão apagados. O "
+                "áudio original é mantido no projeto — você pode gerar a "
+                "transcrição de novo depois.\n\n"
                 "Se houver edições manuais, uma cópia de segurança da transcrição "
                 "editável fica em 05_transcripts_review/edits/backups/.\n\n"
-                "Esta acao nao pode ser desfeita.")
+                "Esta ação não pode ser desfeita.")
             box.setDetailedText("Arquivos afetados:\n\n" + "\n".join(ids))
             box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
             box.setDefaultButton(QMessageBox.StandardButton.No)
@@ -8351,7 +8393,7 @@ if QT_IMPORT_ERROR is None:
             try:
                 deleted, self.context = app_service.delete_transcription_outputs(self.context, ids)
             except Exception as exc:
-                QMessageBox.critical(self, "Erro ao apagar", str(exc)[:2000])
+                QMessageBox.critical(self, "Erro ao apagar", sanitize_message(str(exc))[:2000])
                 return
             self.refresh_interviews()
             self.progress_label.setText(f"{deleted} arquivo(s) apagado(s) de {n} entrevista(s).")
@@ -8923,7 +8965,7 @@ if QT_IMPORT_ERROR is None:
             scope = dialog.selected_scope()
             ids = self.ids_for_export_scope(scope)
             if not ids:
-                QMessageBox.information(self, "Nada para exportar", "Nao encontrei transcricoes para o escopo escolhido.")
+                QMessageBox.information(self, "Nada para exportar", "Não encontrei transcrições para o escopo escolhido.")
                 return
             exported: list[Path] = []
             skipped: list[str] = []
@@ -8950,8 +8992,8 @@ if QT_IMPORT_ERROR is None:
                 QMessageBox.information(
                     self,
                     "Nada exportado",
-                    "Nenhum arquivo foi gerado. Verifique se as transcricoes estao prontas." + (
-                        "\n\nSem transcricao exportavel:\n" + "\n".join(skipped) if skipped else ""
+                    "Nenhum arquivo foi gerado. Verifique se as transcrições estão prontas." + (
+                        "\n\nSem transcrição exportável:\n" + "\n".join(skipped) if skipped else ""
                     ),
                 )
 
@@ -9885,7 +9927,11 @@ if QT_IMPORT_ERROR is None:
                 return False
             asset = model_manager.asset_by_key(key)
             env_pendente = bool(needs_llm_env) and not _llm_env.llm_env_ready()
-            extra_gb = 3.0 if env_pendente else 0.0
+            # ~3 GB e o ambiente com torch CUDA; o conjunto CPU (glossario
+            # em maquina sem placa) fica em ~1,5 GB — cobrar 3 barrava quem
+            # cabia no disco.
+            from . import runtime as _rt_env
+            extra_gb = (3.0 if _rt_env.has_nvidia_gpu() else 1.5) if env_pendente else 0.0
             disk = model_manager.check_disk_space(float(asset.estimated_gb) + extra_gb)
             if not disk.get("ok"):
                 QMessageBox.warning(self, "Espaço em disco insuficiente",
@@ -9907,8 +9953,8 @@ if QT_IMPORT_ERROR is None:
                                   "Baixar e usar é por sua conta e risco.")
             if env_pendente:
                 partes.append("Na primeira utilização, o aplicativo também prepara "
-                              "um ambiente de análise local (~3 GB adicionais, "
-                              "baixados uma vez).")
+                              f"um ambiente de análise local (~{extra_gb:.1f} GB "
+                              "adicionais, baixados uma vez).")
             partes.append(f"Baixar agora (uma vez, ~{asset.estimated_gb:.1f} GB)?\n"
                           f"Espaço livre em disco: {disk.get('free_gb', 0):.1f} GB.")
             answer = QMessageBox.question(

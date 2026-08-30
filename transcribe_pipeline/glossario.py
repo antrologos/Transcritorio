@@ -534,7 +534,7 @@ def glossary_ready() -> tuple[bool, str]:
     if not model_manager.optional_model_cached(asset, runtime.model_cache_dir()):
         return False, (
             f"O modelo de nomes ({asset.label}, ~{asset.estimated_gb:.1f} GB) "
-            "ainda nao foi baixado neste computador.")
+            "ainda não foi baixado neste computador.")
     return True, ""
 
 

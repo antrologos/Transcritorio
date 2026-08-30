@@ -93,29 +93,33 @@ try:
     _FakeQMB._reset(); pedidos_de_disco.clear()
     janela = _Janela(GPU8, set())
     with patch.object(model_manager, "check_disk_space", _disco_ok), \
-         patch("transcribe_pipeline.llm_env.llm_env_ready", lambda *a, **k: False):
+         patch("transcribe_pipeline.llm_env.llm_env_ready", lambda *a, **k: False), \
+         patch("transcribe_pipeline.runtime.has_nvidia_gpu", lambda: True):
         ok = janela._ensure_optional_model("llm_qwen", "o modelo de análise",
                                            "Motivo X.", needs_llm_env=True)
     assert ok is False and len(_FakeQMB.perguntas) == 1  # recusou = sem download
     texto = _FakeQMB.perguntas[0][1]
     assert "8.7" in texto, texto
     assert "memória de vídeo" in texto and "8 GB" in texto, texto
-    assert "~3 GB" in texto, "ambiente LLM nao declarado: " + texto
+    assert "~3.0 GB" in texto, "ambiente LLM nao declarado: " + texto
     assert "42.0 GB" in texto, texto
     assert pedidos_de_disco and abs(pedidos_de_disco[0] - 11.7) < 0.01, pedidos_de_disco
     print("PASS: oferta do Qwen declara VRAM, ambiente e disco")
 
     # --- GLiNER: sem linha de VRAM (roda em CPU), com ambiente ---
+    # Maquina SEM GPU: o ambiente CPU custa ~1,5 GB, nao 3 (cobrar 3
+    # barrava quem cabia no disco).
     _FakeQMB._reset(); pedidos_de_disco.clear()
     with patch.object(model_manager, "check_disk_space", _disco_ok), \
-         patch("transcribe_pipeline.llm_env.llm_env_ready", lambda *a, **k: False):
+         patch("transcribe_pipeline.llm_env.llm_env_ready", lambda *a, **k: False), \
+         patch("transcribe_pipeline.runtime.has_nvidia_gpu", lambda: False):
         janela._ensure_optional_model("ner_gliner", "o modelo de nomes",
                                       "Motivo Y.", needs_llm_env=True)
     texto = _FakeQMB.perguntas[0][1]
     assert "memória de vídeo" not in texto, texto
-    assert "~3 GB" in texto
-    assert abs(pedidos_de_disco[0] - 4.1) < 0.01, pedidos_de_disco
-    print("PASS: oferta do GLiNER sem VRAM, com ambiente")
+    assert "~1.5 GB" in texto, texto
+    assert abs(pedidos_de_disco[0] - 2.6) < 0.01, pedidos_de_disco
+    print("PASS: oferta do GLiNER sem VRAM, com ambiente CPU de 1,5 GB")
 
     # --- ambiente ja pronto: nada de ~3 GB na oferta nem no disco ---
     _FakeQMB._reset(); pedidos_de_disco.clear()

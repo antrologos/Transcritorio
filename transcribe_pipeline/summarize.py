@@ -52,12 +52,12 @@ def llm_model_cached(key: str = LLM_ASSET_KEY) -> bool:
 def summarize_ready() -> tuple[bool, str]:
     """(pronto, motivo-se-nao). Nao cria nada; so diagnostica."""
     if not runtime.has_nvidia_gpu():
-        return False, ("A analise local precisa de uma placa NVIDIA (o modelo roda na GPU). "
-                       "Este computador nao tem uma disponivel.")
+        return False, ("A análise local precisa de uma placa NVIDIA (o modelo roda na GPU). "
+                       "Este computador não tem uma disponível.")
     if not llm_model_cached():
         asset = _optional_asset(LLM_ASSET_KEY)
-        return False, (f"O modelo de analise ({asset.label}, ~{asset.estimated_gb:.1f} GB) "
-                       "ainda nao foi baixado neste computador.")
+        return False, (f"O modelo de análise ({asset.label}, ~{asset.estimated_gb:.1f} GB) "
+                       "ainda não foi baixado neste computador.")
     return True, ""
 
 
