@@ -1221,6 +1221,7 @@ if QT_IMPORT_ERROR is None:
                 # steps SEM grupo (jobs de passo unico) mantem o aborto.
                 seen_groups: set[str] = set()
                 failed_groups: set[str] = set()
+                group_errors: dict[str, str] = {}  # primeiro erro por arquivo
                 for index, step in enumerate(self.steps, start=1):
                     if self.cancel_after_step:
                         self.finished_ok.emit(f"{self.label} cancelado.")
@@ -1253,6 +1254,7 @@ if QT_IMPORT_ERROR is None:
                         if group is None:
                             raise
                         failed_groups.add(group)
+                        group_errors.setdefault(group, sanitize_message(str(exc)))
                         completed_weight += weight
                         self.progress.emit(
                             f"Etapa {index} de {len(self.steps)}: {message} — falhou; "
@@ -1271,7 +1273,12 @@ if QT_IMPORT_ERROR is None:
                               "arquivo(s) com falha — veja a coluna Transcrição "
                               "e a Fila de tarefas.")
                     if seen_groups and failed_groups >= seen_groups:
-                        self.failed.emit(resumo)  # todos falharam: vermelho
+                        # Todos falharam: vermelho, COM a causa real (num lote
+                        # de 1 arquivo o resumo generico escondia o erro).
+                        primeiro = next(iter(group_errors.values()), "")
+                        if primeiro:
+                            resumo = f"{resumo}\n\nPrimeiro erro: {primeiro}"
+                        self.failed.emit(resumo)
                         return
                     self.progress.emit(resumo, 100)
                     self.finished_ok.emit(resumo)
@@ -9271,6 +9278,12 @@ if QT_IMPORT_ERROR is None:
                 )
                 steps.extend(file_steps)
                 weights.extend(step_w)
+            if self.current_interview_id and self.current_interview_id in ids:
+                # O job vai RECRIAR a review deste arquivo: congelar o editor
+                # fecha a corrida autosave x rebuild_review (texto digitado
+                # durante o job era gravado e depois sobrescrito/perdido).
+                # on_worker_done recarrega e reabilita; on_worker_failed idem.
+                self.set_editor_enabled(False)
             self.refresh_interviews()
             self.start_worker(
                 f"Transcrever {len(ids)} arquivo(s)",
@@ -9354,12 +9367,38 @@ if QT_IMPORT_ERROR is None:
                     )
                     return app_service.JobResult(stage, 0, PENDING_SPEAKERS_NOTE)
 
+                def _cancel_pedido() -> bool:
+                    try:
+                        return bool(should_cancel and should_cancel())
+                    except Exception:  # noqa: BLE001
+                        return False
+
+                def _mark_cancelled() -> None:
+                    # Cancelar nao e falhar: o whisperx devolve o cancelamento
+                    # como "1 falha(s)" e o job ficava "Falha" na tabela para
+                    # uma acao que o proprio usuario pediu.
+                    app_service.update_job(
+                        self.context,
+                        interview_id,
+                        {
+                            "status": "Pendente",
+                            "stage": "",
+                            "progress": 0,
+                            "last_error": "",
+                            "finished_at": "",
+                            "estimated_finish_at": "",
+                        },
+                    )
+
                 try:
                     result = func(relay, should_cancel or (lambda: False)) if accepts_progress else func()
                     failures = getattr(result, "failures", 0)
                     if failures:
                         if optional:
                             return _mark_optional_failure()
+                        if _cancel_pedido():
+                            _mark_cancelled()
+                            return result
                         app_service.update_job(
                             self.context,
                             interview_id,
@@ -9392,6 +9431,9 @@ if QT_IMPORT_ERROR is None:
                     if optional:
                         _logger.warning("Etapa opcional '%s' de %s falhou: %s", stage, interview_id, exc)
                         return _mark_optional_failure()
+                    if _cancel_pedido():
+                        _mark_cancelled()
+                        raise
                     app_service.update_job(
                         self.context,
                         interview_id,
@@ -9652,6 +9694,9 @@ if QT_IMPORT_ERROR is None:
                     lambda item=interview_id: app_service.rebuild_review(self.context, item),
                 ),
             ]
+            # O passo final recria a review do arquivo aberto: congelar o
+            # editor (mesma corrida autosave x rebuild do fluxo principal).
+            self.set_editor_enabled(False)
             self.start_worker(f"Melhorar falantes de {interview_id}", steps, weights=[70, 25, 5])
 
         def run_render_job(self) -> None:
@@ -9891,8 +9936,10 @@ if QT_IMPORT_ERROR is None:
                     optional=True,
                 )
             ]
-            self._pending_glossario = True
             self.start_worker(f"Glossario de nomes ({total} arquivo(s))", steps)
+            # Depois do start_worker (que zera a flag): senao a limpeza de
+            # higiene a apagaria antes do job comecar.
+            self._pending_glossario = True
 
         def _show_glossario_results(self) -> None:
             """Aviso de conclusao com acesso ao glossario e ao contexto."""
@@ -10028,6 +10075,9 @@ if QT_IMPORT_ERROR is None:
                 return
             self.current_job_label = label
             self._pending_summary_ids = None  # notificacao so do job que a setar
+            # Mesma higiene para o glossario: a flag sobrevivia a uma falha e
+            # a janela de resultados abria sozinha no fim de OUTRO job.
+            self._pending_glossario = False
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(0)
             self.progress_bar.setVisible(True)
@@ -10083,20 +10133,27 @@ if QT_IMPORT_ERROR is None:
             # capacidades evita tooltips/notas mentindo apos o download.
             self._invalidate_capability_cache()
             self.progress_bar.setRange(0, 100)
-            self.progress_label.setText(message)
-            if "interrompido" in message:
+            # "cancelado" e interrupcao tanto quanto "interrompido": tratar
+            # igual (sem barra em 100%, sem dialogos de resultado).
+            interrompido = ("interrompido" in message) or ("cancelado" in message)
+            if interrompido:
                 self.progress_bar.setValue(max(0, min(100, self.progress_bar.value())))
             else:
                 self.progress_bar.setValue(100)
             self.current_job_label = ""
             self._reset_orphan_queue_jobs()
             self.refresh_interviews()
+            # DEPOIS do refresh: ele termina sobrescrevendo o progress_label
+            # com "N entrevista(s) na lista" — a mensagem de conclusao
+            # ("concluído com N falhas", "Modelos prontos") nunca ficava
+            # visivel.
+            self.progress_label.setText(message)
             # Retomada da acao que esperava modelos (F2): o download e
             # assincrono, entao e AQUI que "a acao original segue".
             retry = getattr(self, "_retry_after_models", None)
             if retry is not None and finished_label == "Preparar modelos":
                 self._retry_after_models = None
-                if "interrompido" not in message and "cancelado" not in message:
+                if not interrompido:
                     QTimer.singleShot(0, retry)
             if self.current_interview_id:
                 current_id = self.current_interview_id
@@ -10108,18 +10165,13 @@ if QT_IMPORT_ERROR is None:
                         self.set_editor_enabled(True)
                         self.review_title.setText(self._review_title_text(current_id))
                         # Retranscrever muda tambem as palavras: recarregar o
-                        # word_index (e as marcas na onda) junto com a review.
+                        # word_index junto com a review.
                         from . import words as words_mod
                         try:
                             self.word_index = words_mod.load_word_index(self.context.paths, current_id)
                         except Exception:  # noqa: BLE001 - palavras sao opcionais
                             self.word_index = []
                         self._word_uncertain_cutoff = words_mod.uncertain_threshold(self.word_index)
-                        cutoff = self._word_uncertain_cutoff
-                        self.waveform_widget.set_words([
-                            (word["start"],
-                             cutoff is not None and word["score"] is not None and word["score"] <= cutoff)
-                            for word in self.word_index])
                         self.load_turn_table()
                         if self.turns:
                             self.select_turn_by_index(0, seek=False)
@@ -10141,23 +10193,31 @@ if QT_IMPORT_ERROR is None:
                                     self.load_waveform()
                         except Exception as exc:  # noqa: BLE001 - midia e acessoria aqui
                             _logger.warning("Falha ao renovar midia de %s: %s", current_id, exc)
+                        # As marcas de palavra SO DEPOIS do load_waveform:
+                        # set_waveform zera os ticks, e a ordem antiga
+                        # apagava as marcas recem-calculadas.
+                        cutoff = self._word_uncertain_cutoff
+                        self.waveform_widget.set_words([
+                            (word["start"],
+                             cutoff is not None and word["score"] is not None and word["score"] <= cutoff)
+                            for word in self.word_index])
                 except Exception as exc:
                     _logger.warning("Falha ao recarregar review de %s: %s", current_id, exc)
             self.update_action_states()
             self._update_voice_banner()
             pending_summaries = getattr(self, "_pending_summary_ids", None)
             self._pending_summary_ids = None
-            if pending_summaries and "interrompido" not in message:
+            if pending_summaries and not interrompido:
                 self._show_summary_results(pending_summaries)
             if getattr(self, "_pending_glossario", False):
                 self._pending_glossario = False
-                if "interrompido" not in message:
+                if not interrompido:
                     self._show_glossario_results()
             if self._close_after_worker:
                 self._close_after_worker = False
                 self.close()
                 return
-            if self.current_interview_id and self.review and "interrompido" not in message:
+            if self.current_interview_id and self.review and not interrompido:
                 # Fluxo "transcrever o arquivo aberto": a transcricao aparece
                 # aqui SEM passar por open_review — a pergunta "De quem e esta
                 # voz?" precisa disparar tambem neste caminho (buraco pego no
@@ -10184,6 +10244,12 @@ if QT_IMPORT_ERROR is None:
             dialog.exec()
             self._reset_orphan_queue_jobs()
             self.refresh_interviews()
+            # Depois do refresh (que sobrescreve o progress_label).
+            self.progress_label.setText("A tarefa terminou com erro.")
+            # O job pode ter congelado o editor do arquivo aberto; com a
+            # review ainda valida no disco, devolver a edicao.
+            if self.current_interview_id and self.review:
+                self.set_editor_enabled(True)
             self.update_action_states()
             if self._close_after_worker:
                 self._close_after_worker = False

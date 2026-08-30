@@ -79,6 +79,9 @@ steps = [
 oks, errs, _msgs = _roda(steps)
 assert executado == ["A1", "B1"], executado
 assert not oks and errs and "2 arquivo(s) com falha" in errs[0], (oks, errs)
+# o ERRO REAL nao pode se perder no resumo (lote de 1 arquivo era o pior
+# caso: o dialogo vermelho dizia so "concluido com 1 falha")
+assert "explodiu" in errs[0], errs
 
 # --- step SEM grupo falhando: aborta como sempre (jobs de passo unico) ---
 executado.clear()
