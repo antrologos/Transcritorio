@@ -2767,6 +2767,14 @@ if QT_IMPORT_ERROR is None:
             ready = self._ready_query()
             if ready is None:
                 return
+            # Mesmo gate de clique do resumo (registro de capacidades +
+            # oferta de download): antes, a falta do modelo/GPU virava
+            # texto morto no rodape — o unico fluxo de AI sem baixador.
+            if not self._window._ensure_llm_model():
+                self.status_label.setText(
+                    "A resposta com AI não está disponível — use "
+                    "\"Encontrar trechos\", que funciona nesta máquina.")
+                return
             ids, query = ready
             paths = self._window.context.paths
             self.status_label.setText("Perguntando à AI local (pode levar ~1 minuto)…")
@@ -2847,6 +2855,12 @@ if QT_IMPORT_ERROR is None:
                 self.status_label.setText(f"Não foi possível preparar: {error}")
                 return
             self.prepare_button.setVisible(False)
+            # O encoder baixado aqui muda o estado das capacidades na
+            # janela principal (tooltips/notas) — invalidar o cache dela.
+            try:
+                self._window._invalidate_capability_cache()
+            except Exception:  # noqa: BLE001 - estado da janela nunca derruba o preparo
+                pass
             self.status_label.setText("Exploração pronta.")
             self.run_explore()
 
@@ -4695,7 +4709,9 @@ if QT_IMPORT_ERROR is None:
                 )
                 _it.mark_cuda_extra_installed(True)
                 return
-            if not _rt.has_nvidia_gpu():
+            from . import capabilities as _caps
+            hw = _caps.hardware_snapshot()
+            if not hw.has_gpu:
                 QMessageBox.information(
                     self,
                     "Aceleração NVIDIA",
@@ -4703,11 +4719,18 @@ if QT_IMPORT_ERROR is None:
                     "O Transcritório continua funcionando normalmente em CPU.",
                 )
                 return
+            detalhe = (f"Placa NVIDIA com {hw.vram_gb:.0f} GB de memória de vídeo detectada."
+                       if hw.vram_gb else "Placa NVIDIA detectada.")
+            aviso = ""
+            if hw.vram_gb is not None and hw.vram_gb < 4:
+                aviso = ("\nAtenção: com essa memória de vídeo, a aceleração pode não "
+                         "valer a pena com os modelos maiores — o modo CPU continua "
+                         "disponível.")
             self._show_uv_command_dialog(
                 "Instalar aceleração NVIDIA",
-                "Placa NVIDIA detectada. A aceleração torna a transcrição 3-9x mais rápida.\n"
+                f"{detalhe} A aceleração torna a transcrição 3-9x mais rápida.\n"
                 "O download é grande (~2,5 GB) e o Transcritório continua funcionando em CPU\n"
-                "caso algo dê errado — a instalação não altera seus projetos.",
+                "caso algo dê errado — a instalação não altera seus projetos." + aviso,
                 _it.cuda_install_command(),
             )
             # O flag cuda_extra_installed so e marcado quando a instalacao e
@@ -4793,17 +4816,31 @@ if QT_IMPORT_ERROR is None:
             if _runtime.cuda_libs_present():
                 return
             # Sem placa NVIDIA? Nada a oferecer.
-            if not _runtime.has_nvidia_gpu():
+            from . import capabilities as _caps
+            hw = _caps.hardware_snapshot()
+            if not hw.has_gpu:
                 return
             # Todas as condicoes atendidas: oferece install
+            detectada = (
+                f"Detectamos uma placa grafica NVIDIA com {hw.vram_gb:.0f} GB "
+                "de memoria de video no seu computador."
+                if hw.vram_gb else
+                "Detectamos uma placa grafica NVIDIA no seu computador.")
+            aviso_vram = ""
+            if hw.vram_gb is not None and hw.vram_gb < 4:
+                aviso_vram = (
+                    "\n\nAtencao: com essa memoria de video, a aceleracao pode "
+                    "nao valer a pena com os modelos maiores — o modo CPU "
+                    "continua disponivel.")
             msg = (
-                "Detectamos uma placa grafica NVIDIA no seu computador.\n\n"
+                f"{detectada}\n\n"
                 "O Transcritorio esta instalado sem a aceleracao por placa "
                 "grafica. Ativando a aceleracao, a transcricao fica de 3 a 9 "
                 "vezes mais rapida, mas exige um download adicional de cerca "
                 "de 2,5 GB.\n\n"
                 "Clique em 'Baixar e instalar agora' para ativar; o "
                 "Transcritorio cuida do resto e avisa quando concluir."
+                + aviso_vram
             )
             box = QMessageBox(self)
             box.setWindowTitle("Aceleracao disponivel (NVIDIA detectada)")
@@ -8899,18 +8936,49 @@ if QT_IMPORT_ERROR is None:
             elif box.clickedButton() is open_dir:
                 open_folder_in_explorer(produced[0].parent)
 
-        def _ensure_optional_model(self, key: str, titulo: str, motivo: str) -> bool:
+        def _ensure_optional_model(self, key: str, titulo: str, motivo: str,
+                                   needs_llm_env: bool = False) -> bool:
             """Baixa um modelo opcional sob demanda, com progresso.
 
             Nunca clique-morto: ou o modelo esta pronto, ou o usuario ve o
-            que falta, quanto pesa, e decide. Vale para TODAS as acoes de
+            que falta, quanto pesa, qual requisito de hardware se aplica e
+            quanto disco sobra — e decide. Vale para TODAS as acoes de
             AI — antes cada uma resolvia (ou nao) do seu jeito, e o modelo
-            do resumo nao tinha baixador nenhum na interface."""
+            do resumo nao tinha baixador nenhum na interface.
+
+            needs_llm_env: a capacidade tambem exige o ambiente de analise
+            local (~3 GB de bibliotecas instaladas na primeira execucao) —
+            declarar ANTES do aceite, nao surpreender durante o job."""
+            from . import capabilities as _caps
+            from . import llm_env as _llm_env
             from . import model_manager
             asset = model_manager.optional_model(key)
+            env_pendente = bool(needs_llm_env) and not _llm_env.llm_env_ready()
+            extra_gb = 3.0 if env_pendente else 0.0
+            disk = model_manager.check_disk_space(float(asset.estimated_gb) + extra_gb)
+            if not disk.get("ok"):
+                QMessageBox.warning(self, "Espaço em disco insuficiente",
+                                    str(disk.get("message") or ""))
+                return False
+            partes = [motivo]
+            cap = _caps.capability_for_model(key)
+            if cap is not None and cap.needs_gpu:
+                cache = getattr(self, "_caps_cache", None)
+                hw = cache[0] if cache else _caps.hardware_snapshot()
+                linha = (f"Requer placa de vídeo NVIDIA com pelo menos "
+                         f"{cap.min_vram_gb:.0f} GB de memória de vídeo")
+                if hw.vram_gb:
+                    linha += f" — a sua tem {hw.vram_gb:.0f} GB"
+                partes.append(linha + ".")
+            if env_pendente:
+                partes.append("Na primeira utilização, o aplicativo também prepara "
+                              "um ambiente de análise local (~3 GB adicionais, "
+                              "baixados uma vez).")
+            partes.append(f"Baixar agora (uma vez, ~{asset.estimated_gb:.1f} GB)?\n"
+                          f"Espaço livre em disco: {disk.get('free_gb', 0):.1f} GB.")
             answer = QMessageBox.question(
                 self, f"Baixar {titulo}?",
-                f"{motivo}\n\nBaixar agora (uma vez, ~{asset.estimated_gb:.1f} GB)?",
+                "\n\n".join(partes),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.Yes,
             )
@@ -8946,20 +9014,24 @@ if QT_IMPORT_ERROR is None:
             ready, reason = glossary_ready()
             if ready:
                 return True
-            return self._ensure_optional_model("ner_gliner", "o modelo de nomes", reason)
+            return self._ensure_optional_model("ner_gliner", "o modelo de nomes",
+                                               reason, needs_llm_env=True)
 
         def _ensure_llm_model(self) -> bool:
-            """Modelo do resumo/perguntar. Sem placa NVIDIA nao adianta
-            baixar 8,7 GB: ai o limite e a maquina, nao o download."""
-            from . import runtime as _rt
+            """Modelo do resumo/perguntar. O criterio de aptidao e o registro
+            de capacidades (VRAM minima incluida): sem maquina apta nao
+            adianta baixar 8,7 GB — ai o limite e a maquina, nao o
+            download. summarize_ready fica como guarda de segunda linha."""
             from .summarize import summarize_ready
+            estado, motivo_cap, _gb = self._capability_state("resumo_perguntar")
+            if estado == "incompativel":
+                QMessageBox.information(self, "Analise local indisponivel", motivo_cap)
+                return False
             ready, reason = summarize_ready()
             if ready:
                 return True
-            if not _rt.has_nvidia_gpu():
-                QMessageBox.information(self, "Analise local indisponivel", reason)
-                return False
-            return self._ensure_optional_model("llm_qwen", "o modelo de análise", reason)
+            return self._ensure_optional_model("llm_qwen", "o modelo de análise",
+                                               reason, needs_llm_env=True)
 
         def run_glossario_job(self) -> None:
             """Glossario de nomes do projeto (lote 6a) — varredura unica."""

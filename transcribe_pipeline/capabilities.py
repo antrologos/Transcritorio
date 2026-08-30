@@ -117,6 +117,19 @@ def capability(key: str) -> Capability:
     raise KeyError(f"Capacidade desconhecida: {key}")
 
 
+def capability_for_model(model_key: str) -> Capability | None:
+    """Capacidade habilitada por este modelo; None se nenhuma (pura).
+
+    Liga a chave de um modelo opcional (llm_qwen, ner_gliner, ...) aos
+    requisitos declarados no registro — e o que permite a uma oferta de
+    download dizer o requisito de hardware ANTES do usuario aceitar.
+    """
+    for item in CAPABILITIES:
+        if model_key in item.models:
+            return item
+    return None
+
+
 def parse_fake_hardware(spec: str | None) -> Hardware | None:
     """Retrato SIMULADO a partir do valor do env de teste (pura).
 
