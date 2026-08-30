@@ -60,7 +60,7 @@ from .utils import sanitize_message
 try:
     from PySide6.QtCore import QEvent, QPointF, QThread, QTimer, Qt, QUrl, Signal
     from PySide6.QtGui import QAction, QBrush, QColor, QDesktopServices, QIcon, QKeySequence, QPainter, QPainterPath, QPen, QShortcut, QUndoCommand, QUndoStack
-    from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+    from PySide6.QtMultimedia import QAudioOutput, QMediaDevices, QMediaPlayer
     from PySide6.QtMultimediaWidgets import QVideoWidget
     from PySide6.QtWidgets import (
         QApplication,
@@ -2222,6 +2222,11 @@ if QT_IMPORT_ERROR is None:
             self._player = QMediaPlayer(self)
             self._audio_output = QAudioOutput(self)
             self._player.setAudioOutput(self._audio_output)
+            # Mesmo ajuste do player principal: seguir o dispositivo padrao
+            # quando um fone e conectado com o dialogo aberto.
+            self._media_devices = QMediaDevices(self)
+            self._media_devices.audioOutputsChanged.connect(
+                lambda: self._audio_output.setDevice(QMediaDevices.defaultAudioOutput()))
             self._player.setSource(QUrl.fromLocalFile(str(media_path)))
             self._stop_at_ms: int | None = None
             self._sample_start_ms: int | None = None
@@ -4158,6 +4163,12 @@ if QT_IMPORT_ERROR is None:
             self.player = QMediaPlayer(self)
             self.audio_output = QAudioOutput(self)
             self.player.setAudioOutput(self.audio_output)
+            # Seguir o dispositivo PADRAO do sistema: o QAudioOutput fica
+            # preso ao dispositivo do momento em que foi criado, entao
+            # conectar um fone (bluetooth OU com fio) depois de abrir o app
+            # deixava o som na caixa de som (teste real, 2026-08-30).
+            self._media_devices = QMediaDevices(self)
+            self._media_devices.audioOutputsChanged.connect(self._follow_default_audio_output)
             self.autosave_timer = QTimer(self)
             self.autosave_timer.setInterval(1200)
             self.autosave_timer.setSingleShot(True)
@@ -6865,6 +6876,13 @@ if QT_IMPORT_ERROR is None:
             start = float(turn.get("start", 0) or 0)
             end = float(turn.get("end", start) or start)
             self.waveform_widget.zoom_to_range(start, end)
+
+        def _follow_default_audio_output(self) -> None:
+            """Reaponta a saida para o novo dispositivo padrao do sistema."""
+            try:
+                self.audio_output.setDevice(QMediaDevices.defaultAudioOutput())
+            except Exception as exc:  # noqa: BLE001 - audio nunca derruba o app
+                _logger.warning("troca de dispositivo de audio falhou: %s", exc)
 
         def seek_player(self, target_ms: int) -> None:
             """Seek com confirmacao anti-WMF: o backend de midia do Windows
