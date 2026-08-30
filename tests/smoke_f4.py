@@ -91,8 +91,8 @@ header("CENARIO 1 - Dialog populado com cache simulado")
 with patch.object(runtime, "model_cache_dir", return_value=cache_root):
     dlg = ModelManagerDialog(lambda: win.context, win)
 
-# Esperado: 6 ASR + 2 fixos + 1 orfao = 9 linhas
-assert dlg.table.rowCount() == 9, f"esperava 9 linhas, got {dlg.table.rowCount()}"
+# Esperado: 6 ASR + 2 fixos + 3 opcionais de IA (SL-D) + 1 orfao = 12 linhas
+assert dlg.table.rowCount() == 12, f"esperava 12 linhas, got {dlg.table.rowCount()}"
 check(f"1.1 tabela com {dlg.table.rowCount()} linhas")
 
 # Verificar cada linha tem dados
@@ -103,7 +103,9 @@ for r in range(dlg.table.rowCount()):
     status = dlg.table.item(r, 2).text()
     date = dlg.table.item(r, 3).text()
     btn = dlg.table.cellWidget(r, 4)
-    row_data.append({"name": name, "size": size, "status": status, "date": date, "has_btn": btn is not None})
+    row_data.append({"name": name, "size": size, "status": status, "date": date,
+                     "has_btn": btn is not None,
+                     "btn_text": btn.text() if btn is not None else ""})
 
 # 3.2: tiny (instalado) tem size != "-"
 tiny_row = next((r for r in row_data if "Rapido" in r["name"] and "150 MB" in r["name"]), None)
@@ -117,8 +119,9 @@ check(f"1.2 tiny instalado: size={tiny_row['size']} status={tiny_row['status']}"
 turbo_row = next((r for r in row_data if "recomendado" in r["name"].lower()), None)
 assert turbo_row is not None
 assert turbo_row["status"] == "Disponivel", f"turbo status: {turbo_row}"
-assert turbo_row["has_btn"] is False  # nao instalado, sem botao remover
-check(f"1.3 turbo nao-instalado: status=Disponivel (sem botao Remover)")
+# SL-D: nao instalado ganha botao "Baixar" por item (antes: sem botao nenhum)
+assert turbo_row["btn_text"] == "Baixar", turbo_row
+check(f"1.3 turbo nao-instalado: status=Disponivel (com botao Baixar)")
 
 # medium esta instalado + nao e asr_model → Instalado
 medium_row = next((r for r in row_data if "2,8 GB" in r["name"]), None)

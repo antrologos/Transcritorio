@@ -230,8 +230,8 @@ header("PASSO 6 - ModelManagerDialog popula + bloqueios funcionam")
 with patch.object(runtime, "model_cache_dir", return_value=cache_root):
     mm_dialog = ModelManagerDialog(lambda: win.context, win)
 
-# 6 ASR + 2 fixos + 1 orfao = 9 linhas
-assert mm_dialog.table.rowCount() == 9
+# 6 ASR + 2 fixos + 3 opcionais de IA (SL-D) + 1 orfao = 12 linhas
+assert mm_dialog.table.rowCount() == 12
 check(f"6.1 tabela: {mm_dialog.table.rowCount()} linhas")
 
 # Espacamento total valido

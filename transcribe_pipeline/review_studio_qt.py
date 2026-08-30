@@ -1785,8 +1785,9 @@ if QT_IMPORT_ERROR is None:
                 ctx = None
             configured = (ctx.config.get("asr_model") if ctx else "large-v3-turbo") or "large-v3-turbo"
 
-            rows: list[tuple[str, str, int, str, str, bool]] = []
-            # (label, repo_id, size, status, date_str, can_remove)
+            rows: list[tuple[str, str, int, str, str, bool, str | None, str, str]] = []
+            # (label, repo_id, size, status, date_str, can_remove,
+            #  download_key, size_hint, status_tip)
             for key, info in model_manager.ASR_VARIANTS.items():
                 repo = str(info.get("repo"))
                 label = model_manager.friendly_name(key)
@@ -1796,9 +1797,11 @@ if QT_IMPORT_ERROR is None:
                     status = "Em uso" if key == configured else "Instalado"
                     dt = model_manager.model_install_date(repo, cache_root)
                     date_str = datetime.fromtimestamp(dt).strftime("%d/%m/%Y") if dt else "-"
-                    rows.append((label, repo, size, status, date_str, True))
+                    rows.append((label, repo, size, status, date_str, True, None, "", ""))
                 else:
-                    rows.append((label, repo, 0, "Disponivel", "-", False))
+                    gb = float(info.get("estimated_gb") or 0.0)
+                    rows.append((label, repo, 0, "Disponivel", "-", False,
+                                 f"asr:{key}", f"~{gb:.1f} GB" if gb else "-", ""))
             # Fixos (obrigatorios)
             for asset in model_manager._FIXED_MODELS:
                 repo = asset.repo_id
@@ -1808,34 +1811,64 @@ if QT_IMPORT_ERROR is None:
                     size = int(entry.get("size_on_disk", 0))
                     dt = model_manager.model_install_date(repo, cache_root)
                     date_str = datetime.fromtimestamp(dt).strftime("%d/%m/%Y") if dt else "-"
-                    rows.append((label, repo, size, "Obrigatorio", date_str, False))
+                    rows.append((label, repo, size, "Obrigatorio", date_str, False, None, "", ""))
                 else:
-                    rows.append((label, repo, 0, "Pendente", "-", False))
+                    rows.append((label, repo, 0, "Pendente", "-", False, None, "", ""))
+            # Opcionais de IA (antes invisiveis: 8,7 GB de Qwen baixados
+            # ficavam irremoviveis, e nao havia escolha por item).
+            from . import capabilities as _caps
+            hw = _caps.hardware_snapshot()
+            for asset in model_manager._OPTIONAL_MODELS:
+                entry = scan_by_repo.get(asset.repo_id)
+                if entry is not None:
+                    size = int(entry.get("size_on_disk", 0))
+                    dt = model_manager.model_install_date(asset.repo_id, cache_root)
+                    date_str = datetime.fromtimestamp(dt).strftime("%d/%m/%Y") if dt else "-"
+                    rows.append((asset.label, asset.repo_id, size, "Instalado",
+                                 date_str, True, None, "", ""))
+                    continue
+                cap = _caps.capability_for_model(asset.key)
+                bloqueio = _caps.hardware_blocker(cap, hw) if cap is not None else ""
+                gb_hint = f"~{asset.estimated_gb:.1f} GB"
+                if bloqueio:
+                    rows.append((asset.label, asset.repo_id, 0, "Incompativel",
+                                 "-", False, None, gb_hint, f"{cap.label} {bloqueio}."))
+                else:
+                    rows.append((asset.label, asset.repo_id, 0, "Disponivel",
+                                 "-", False, f"opt:{asset.key}", gb_hint, ""))
             # Orfaos
             for repo in model_manager.orphan_repos(cache_root):
                 entry = scan_by_repo.get(repo)
                 size = int(entry["size_on_disk"]) if entry else 0
                 dt = model_manager.model_install_date(repo, cache_root)
                 date_str = datetime.fromtimestamp(dt).strftime("%d/%m/%Y") if dt else "-"
-                rows.append((f"{repo} (orfao)", repo, size, "Orfao", date_str, True))
+                rows.append((f"{repo} (orfao)", repo, size, "Orfao", date_str, True, None, "", ""))
 
             # Popular tabela
-            for r_idx, (label, repo, size, status, date_str, can_remove) in enumerate(rows):
+            for r_idx, (label, repo, size, status, date_str, can_remove,
+                        download_key, size_hint, status_tip) in enumerate(rows):
                 self.table.insertRow(r_idx)
                 name_item = QTableWidgetItem(label)
                 name_item.setToolTip(repo)
                 self.table.setItem(r_idx, self.COL_NAME, name_item)
-                size_str = model_manager._format_size(size) if size else "-"
+                size_str = model_manager._format_size(size) if size else (size_hint or "-")
                 self.table.setItem(r_idx, self.COL_SIZE, QTableWidgetItem(size_str))
                 status_item = QTableWidgetItem(status)
                 if status == "Em uso":
                     status_item.setToolTip("Modelo atualmente selecionado na configuracao de transcricao.")
+                elif status_tip:
+                    status_item.setToolTip(status_tip)
                 self.table.setItem(r_idx, self.COL_STATUS, status_item)
                 self.table.setItem(r_idx, self.COL_DATE, QTableWidgetItem(date_str))
                 if can_remove:
                     btn = QPushButton("Remover")
                     btn.setToolTip(f"Remover {repo} do cache local. Voce podera baixar de novo depois.")
                     btn.clicked.connect(lambda _chk, rid=repo, st=status: self._remove_model(rid, st))
+                    self.table.setCellWidget(r_idx, self.COL_ACTION, btn)
+                elif download_key:
+                    btn = QPushButton("Baixar")
+                    btn.setToolTip("Baixar este modelo agora (tamanho e requisitos confirmados antes).")
+                    btn.clicked.connect(lambda _chk, dk=download_key: self._download_row(dk))
                     self.table.setCellWidget(r_idx, self.COL_ACTION, btn)
 
             total_bytes = sum(int(e.get("size_on_disk", 0)) for e in scan)
@@ -1849,6 +1882,84 @@ if QT_IMPORT_ERROR is None:
             folder = runtime.model_cache_dir()
             folder.mkdir(parents=True, exist_ok=True)
             open_folder_in_explorer(folder)
+
+        def _download_row(self, download_key: str) -> None:
+            kind, _, key = download_key.partition(":")
+            if kind == "opt":
+                self._download_optional(key)
+            elif kind == "asr":
+                self._download_asr_variant(key)
+
+        def _download_optional(self, key: str) -> None:
+            """Delegar a oferta padrao da janela (_ensure_optional_model):
+            confirmacao com GB, requisito de hardware, disco e o ambiente
+            de ~3 GB quando aplicavel — e invalidacao do cache de
+            capacidades no sucesso."""
+            parent = self.parent()
+            if parent is None or not hasattr(parent, "_ensure_optional_model"):
+                return
+            from . import model_manager
+            asset = model_manager.optional_model(key)
+            ok = parent._ensure_optional_model(
+                key, asset.label,
+                f"{asset.label} habilita: {asset.purpose}.",
+                needs_llm_env=key in ("llm_qwen", "ner_gliner"))
+            if ok:
+                self._populate()
+
+        def _download_asr_variant(self, key: str) -> None:
+            """Baixar UMA variante do Whisper por item (fecha o caso
+            "quero instalar outro modelo depois do assistente")."""
+            from . import model_manager
+            info = model_manager.ASR_VARIANTS.get(key) or {}
+            gb = float(info.get("estimated_gb") or 0.0)
+            disk = model_manager.check_disk_space(gb)
+            if not disk.get("ok"):
+                QMessageBox.warning(self, "Espaço em disco insuficiente",
+                                    str(disk.get("message") or ""))
+                return
+            nome = model_manager.friendly_name(key)
+            answer = QMessageBox.question(
+                self, "Baixar modelo de transcrição?",
+                f"Baixar {nome} agora (uma vez, ~{gb:.1f} GB)?\n"
+                f"Espaço livre em disco: {disk.get('free_gb', 0):.1f} GB.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            dialog = QProgressDialog(f"Baixando {nome}...", "Cancelar", 0, 100, self)
+            dialog.setWindowTitle("Baixar modelo")
+            dialog.setWindowModality(Qt.WindowModality.WindowModal)
+            dialog.setAutoClose(False)
+            dialog.show()
+
+            def on_progress(detail: dict) -> None:
+                dialog.setValue(max(0, min(100, int(detail.get("progress") or 0))))
+                if detail.get("message"):
+                    dialog.setLabelText(str(detail["message"]))
+                QApplication.processEvents()
+
+            try:
+                result = app_service.download_models(
+                    token="",
+                    progress_callback=on_progress,
+                    should_cancel=dialog.wasCanceled,
+                    asr_variants=[key],
+                    include_diarization=False,
+                    include_alignment=False,
+                )
+            finally:
+                dialog.close()
+            if getattr(result, "failures", 0):
+                QMessageBox.warning(
+                    self, "Download nao concluido",
+                    f"Nao foi possivel baixar {nome}. Verifique a conexao e tente de novo.")
+                return
+            parent = self.parent()
+            if parent is not None and hasattr(parent, "_invalidate_capability_cache"):
+                parent._invalidate_capability_cache()
+            self._populate()
 
         def _jobs_using_model_repo(self, repo_id: str) -> int:
             """Retorna numero de jobs Rodando/Na fila que estao usando este modelo.
@@ -2926,8 +3037,8 @@ if QT_IMPORT_ERROR is None:
             self.model_combo.setCurrentIndex(current_idx)
             model_row = QHBoxLayout()
             model_row.addWidget(self.model_combo, stretch=1)
-            self.install_models_btn = QPushButton("Instalar modelos...")
-            self.install_models_btn.setToolTip("Baixar modelos adicionais do Hugging Face.")
+            self.install_models_btn = QPushButton("Gerenciar modelos...")
+            self.install_models_btn.setToolTip("Ver, baixar e remover os modelos deste computador.")
             self.install_models_btn.clicked.connect(self._open_model_setup)
             model_row.addWidget(self.install_models_btn)
             grid.addWidget(QLabel("Modelo Whisper:"), 0, 0)
@@ -3044,10 +3155,13 @@ if QT_IMPORT_ERROR is None:
             layout.addWidget(buttons)
 
         def _open_model_setup(self) -> None:
+            # Abre o GERENCIADOR (escolha por item), nao o dialogo de escopo
+            # obrigatorio — que numa instalacao completa ficava vazio, com um
+            # "Baixar modelos" sem nada a baixar (teste real 2026-08-30).
             self.reject()
             parent = self.parent()
-            if parent and hasattr(parent, "show_model_setup"):
-                parent.show_model_setup()
+            if parent and hasattr(parent, "show_model_manager"):
+                parent.show_model_manager()
 
         def updates(self) -> dict[str, Any]:
             device = str(self.device_combo.currentData())
@@ -4188,8 +4302,10 @@ if QT_IMPORT_ERROR is None:
                     asr_variants=asr_variants,
                     include_diarization=include_diarization,
                     include_alignment=include_alignment) if not item.cached]
+                self._nada_pendente = not pendentes
             except Exception:  # noqa: BLE001 - config invalida nao trava o dialogo
                 pendentes = []
+                self._nada_pendente = False
             self._needs_token = any(item.asset.gated for item in pendentes)
 
             title = QLabel("Preparar modelos locais")
@@ -4198,7 +4314,16 @@ if QT_IMPORT_ERROR is None:
 
             intro = QTextEdit()
             intro.setReadOnly(True)
-            if self._needs_token:
+            if self._nada_pendente:
+                # Escopo completo em cache: um "Baixar modelos" sem nada a
+                # baixar confundia (teste real 2026-08-30).
+                intro.setPlainText(
+                    "Todos os modelos desta instalação já estão baixados e "
+                    "prontos — não há nada para baixar agora.\n\n"
+                    "Para ver, baixar ou remover modelos (inclusive os de IA), "
+                    "use Transcrever → Gerenciar modelos...")
+                intro.setMinimumHeight(90)
+            elif self._needs_token:
                 intro.setPlainText(
                     "O token Hugging Face e usado apenas para baixar modelos. "
                     "Audios, videos e transcricoes continuam neste computador.\n\n"
@@ -4269,6 +4394,7 @@ if QT_IMPORT_ERROR is None:
 
             buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
             buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Baixar modelos")
+            buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(not self._nada_pendente)
             buttons.accepted.connect(self.accept)
             buttons.rejected.connect(self.reject)
             layout.addWidget(buttons)
