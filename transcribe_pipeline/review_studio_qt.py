@@ -4794,12 +4794,42 @@ if QT_IMPORT_ERROR is None:
                 self.context = app_service.update_engine_config(self.context, {"diarize": checked})
             except Exception as exc:
                 _logger.warning("update_engine_config(diarize) falhou: %s", exc)
+                return
+            if not checked:
+                return
+            # Honestidade ao MARCAR: numa instalacao sem o modelo de
+            # falantes, a exigencia de conta/token do Hugging Face
+            # aparecia so no clique em Transcrever — surpresa que o
+            # perfil Essencial prometia dispensar.
+            try:
+                estado, _motivo, _gb = self._capability_state("separar_falantes")
+            except Exception:  # noqa: BLE001 - sonda nunca bloqueia o toggle
+                return
+            if estado == "pronta":
+                return
+            box = QMessageBox(self)
+            box.setWindowTitle("Separar quem fala")
+            box.setIcon(QMessageBox.Icon.Question)
+            box.setText(
+                "A separação de falantes usa um modelo adicional (~0,1 GB) que "
+                "ainda não está neste computador. Ele é gratuito, mas o download "
+                "exige uma conta no Hugging Face e o aceite dos termos do modelo.\n\n"
+                "Preparar agora? (Se deixar para depois, o aplicativo pedirá isso "
+                "na hora de transcrever.)")
+            preparar = box.addButton("Preparar agora", QMessageBox.ButtonRole.AcceptRole)
+            box.addButton("Deixar para depois", QMessageBox.ButtonRole.RejectRole)
+            box.exec()
+            if box.clickedButton() is preparar:
+                self.show_model_setup()
 
         def _sync_diarize_checkbox(self) -> None:
             if not hasattr(self, "diarize_checkbox"):
                 return
+            from . import app_settings as _settings
             self.diarize_checkbox.blockSignals(True)
-            self.diarize_checkbox.setChecked(bool(self.context.config.get("diarize", True)) if self.context else True)
+            self.diarize_checkbox.setChecked(
+                bool(self.context.config.get("diarize", True)) if self.context
+                else bool(_settings.diarize_default()))
             self.diarize_checkbox.blockSignals(False)
 
         def _maybe_offer_cuda_install(self) -> None:
@@ -5165,7 +5195,11 @@ if QT_IMPORT_ERROR is None:
                 "Identifica automaticamente quem esta falando (Entrevistador/Entrevistado).\n"
                 "Desative para audios com um unico falante ou para transcrever mais rapido."
             )
-            self.diarize_checkbox.setChecked(True)
+            # Sem projeto aberto, o estado default e o da INSTALACAO (perfil
+            # essencial = desmarcado) — um True fixo mentia para o usuario
+            # essencial ate o primeiro _sync_diarize_checkbox.
+            from . import app_settings as _settings_cb
+            self.diarize_checkbox.setChecked(bool(_settings_cb.diarize_default()))
             self.diarize_checkbox.toggled.connect(self._on_diarize_toggled)
             action_bar.addWidget(self.diarize_checkbox)
             action_bar.addWidget(self.action_button(self.save_action))
@@ -6228,12 +6262,13 @@ if QT_IMPORT_ERROR is None:
             self.start_worker(
                 "Aplicar rótulos de falantes",
                 [
-                    (
-                        "Remontando transcricoes...",
-                        lambda: app_service.render_interviews(
-                            self.context, ids=transcribed, overrides={"diarization_source": "pyannote_exclusive"}
-                        ),
-                    ),
+                    *[
+                        (f"Remontando transcricao ({item})...",
+                         lambda item=item: app_service.render_interviews(
+                             self.context, ids=[item],
+                             overrides=self._render_source_overrides(item)))
+                        for item in transcribed
+                    ],
                     (
                         "Atualizando transcricoes editaveis...",
                         lambda: app_service.refresh_unedited_reviews(self.context, transcribed),
@@ -6410,6 +6445,23 @@ if QT_IMPORT_ERROR is None:
                 self.select_turn_by_index(0, seek=False)
             self.set_save_state(saved_status_message())
             self.update_action_states()
+            # Tempos por palavra ausentes degradavam em SILENCIO: o duplo
+            # clique numa palavra simplesmente nao fazia nada. Uma linha de
+            # status explica e aponta o caminho (sem popup, sem widget novo).
+            if self.turns and not self.word_index:
+                try:
+                    _palavras_estado = self._capability_state("tempos_por_palavra")[0]
+                except Exception:  # noqa: BLE001 - sonda nunca atrapalha a abertura
+                    _palavras_estado = "pronta"
+                if _palavras_estado != "pronta":
+                    self.progress_label.setText(
+                        "Este arquivo não tem tempos por palavra (o duplo clique numa "
+                        "palavra não leva ao áudio). Instale \"Tempos por palavra\" em "
+                        "Transcrever → Gerenciar modelos... e transcreva novamente.")
+                else:
+                    self.progress_label.setText(
+                        "Este arquivo foi transcrito sem tempos por palavra — "
+                        "transcreva novamente para gerá-los.")
             # Abertura comum: o banner contextual assume (o dialogo automatico
             # fica so para o fim de uma transcricao — plano D2.6).
             self._update_voice_banner()
@@ -6716,7 +6768,8 @@ if QT_IMPORT_ERROR is None:
                     [(
                         "Remontando transcricao...",
                         lambda item=interview_id: app_service.render_interviews(
-                            self.context, ids=[item], overrides={"diarization_source": "pyannote_exclusive"}
+                            self.context, ids=[item],
+                            overrides=self._render_source_overrides(item)
                         ),
                     )],
                 )
@@ -7343,27 +7396,54 @@ if QT_IMPORT_ERROR is None:
             self._set_action(self.export_current_action, not busy and has_review, reason_busy if busy else reason_open)
             self._set_action(self.close_open_file_action, not busy and has_open_file, reason_busy if busy else "Nenhum arquivo aberto.")
             self._set_action(self.open_export_folder_action, not busy, reason_busy)
-            self._set_action(self.diarize_action, not busy and has_selected, reason_busy if busy else reason_select)
-            self._set_action(self.improve_speakers_action, not busy and has_review, reason_busy if busy else reason_open)
+            # Acoes que dependem do modelo de falantes: instalavel mantem
+            # habilitada, mas a nota avisa que o download exigira conta HF.
+            falantes_estado, _falantes_motivo, falantes_gb = self._capability_state("separar_falantes")
+            falantes_nota = (
+                f"Modelo de separação de falantes não instalado (~{falantes_gb:.1f} GB) — "
+                "o download exigirá conta gratuita no Hugging Face."
+                if falantes_estado == "instalavel" else "")
+            self._set_action(self.diarize_action, not busy and has_selected,
+                             reason_busy if busy else reason_select,
+                             enabled_note=falantes_nota)
+            self._set_action(self.improve_speakers_action, not busy and has_review,
+                             reason_busy if busy else reason_open,
+                             enabled_note=falantes_nota)
             self._set_action(self.name_voices_action, not busy and has_review, reason_busy if busy else reason_open)
             self._set_action(self.voice_prompt_action, not busy and has_project, reason_busy if busy else "Abra ou crie um projeto primeiro.")
             self._set_action(self.render_action, not busy and has_selected, reason_busy if busy else reason_select)
-            self._set_action(self.qc_action, not busy, reason_busy)
+            # QC sem projeto quebrava (context None no run_qc_job).
+            self._set_action(self.qc_action, not busy and has_project,
+                             reason_busy if busy else reason_project)
             # Acoes de AI (etapa 2 do plano de perfis): a regra e simples e
             # vale para todas — INCOMPATIVEL com a maquina desabilita e diz
             # por que; falta só baixar mantem habilitada, porque o clique
-            # oferece o download. Nunca clique-morto, nunca erro.
-            resumo_estado, resumo_motivo, _gb = self._capability_state("resumo_perguntar")
+            # oferece o download (com a nota avisando o tamanho antes).
+            # Nunca clique-morto, nunca erro.
+            resumo_estado, resumo_motivo, resumo_gb = self._capability_state("resumo_perguntar")
             resumo_travado = resumo_estado == "incompativel"
             self._set_action(
                 self.summarize_action,
                 not busy and has_review and not resumo_travado,
                 reason_busy if busy else (resumo_motivo if resumo_travado else reason_open),
+                enabled_note=(f"Baixa o modelo de análise (~{resumo_gb:.1f} GB) na "
+                              "primeira utilização."
+                              if resumo_estado == "instalavel" else ""),
             )
+            busca_estado, _busca_motivo, busca_gb = self._capability_state("busca_semantica")
             self._set_action(self.explore_action, not busy and has_project,
-                             reason_busy if busy else reason_project)
-            self._set_action(self.glossario_action, not busy and has_project,
-                             reason_busy if busy else reason_project)
+                             reason_busy if busy else reason_project,
+                             enabled_note=(f"Baixa um modelo de ~{busca_gb:.1f} GB na "
+                                           "primeira utilização."
+                                           if busca_estado == "instalavel" else ""))
+            glos_estado, glos_motivo, glos_gb = self._capability_state("glossario_nomes")
+            glos_travado = glos_estado == "incompativel"  # hoje impossivel (CPU basta); regra geral
+            self._set_action(self.glossario_action,
+                             not busy and has_project and not glos_travado,
+                             reason_busy if busy else (glos_motivo if glos_travado else reason_project),
+                             enabled_note=(f"Baixa o modelo de nomes (~{glos_gb:.1f} GB) na "
+                                           "primeira utilização."
+                                           if glos_estado == "instalavel" else ""))
             self._set_action(self.spelling_action, not busy and has_project,
                              reason_busy if busy else reason_project)
             self.cancel_job_action.setEnabled(busy)
@@ -8641,6 +8721,18 @@ if QT_IMPORT_ERROR is None:
             except Exception:
                 return False
 
+        def _render_source_overrides(self, interview_id: str) -> dict[str, Any]:
+            """Fonte de falantes para REMONTAR este arquivo: a mesma decisao
+            do fluxo principal (canais informativos > pyannote_exclusive >
+            modo sem falantes). Forcar pyannote_exclusive fixo fazia o
+            render falhar no perfil essencial, onde exclusive.json nao
+            existe."""
+            if self._channels_diarization_exists(interview_id):
+                return {"diarization_source": "channels"}
+            if self._exclusive_diarization_exists(interview_id):
+                return {"diarization_source": "pyannote_exclusive"}
+            return {}
+
         def _diarize_then_channels(
             self,
             interview_id: str,
@@ -8860,7 +8952,16 @@ if QT_IMPORT_ERROR is None:
             if not ids:
                 QMessageBox.information(self, "Selecione uma entrevista", "Selecione uma entrevista para montar a transcrição editável.")
                 return
-            self.start_worker("Montar transcrição editável", [("Montando transcrição editável...", lambda: app_service.render_interviews(self.context, ids=ids, overrides={"diarization_source": "pyannote_exclusive"}))])
+            # Um step por arquivo: a fonte de falantes e decidida POR
+            # arquivo (_render_source_overrides), nao forcada.
+            steps = [
+                (f"Montando transcrição editável ({item})...",
+                 lambda item=item: app_service.render_interviews(
+                     self.context, ids=[item],
+                     overrides=self._render_source_overrides(item)))
+                for item in ids
+            ]
+            self.start_worker("Montar transcrição editável", steps)
 
         def run_summarize_job(self) -> None:
             """Resumo com indice tematico (fase 2.1) — analise 100% local."""
