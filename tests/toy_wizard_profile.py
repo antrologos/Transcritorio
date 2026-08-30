@@ -104,6 +104,12 @@ assert "2 modelos" in select_page.total_label.text()
 select_page._checkboxes["tiny"].setChecked(False)
 assert "Será baixado" in select_page.total_label.text()
 
+# a pagina de perfis declara com qual modelo estimou os tamanhos
+pagina_perfil = wizard.page(FirstRunWizard.PAGE_PROFILE)
+rotulos = [w.text() for w in pagina_perfil.findChildren(type(wizard._profile_warning))]
+assert any("estimativas com o modelo" in t for t in rotulos), rotulos
+assert any("small" in t for t in rotulos), "a estimativa nao cita o modelo recomendado"
+
 # pagina de download tem o botao de cancelar (oculto ate comecar)
 download_page = wizard.page(FirstRunWizard.PAGE_DOWNLOAD)
 assert hasattr(download_page, "cancel_download_button")

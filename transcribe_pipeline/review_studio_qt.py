@@ -3230,7 +3230,12 @@ if QT_IMPORT_ERROR is None:
             self._profile_warning.setWordWrap(True)
             self._profile_warning.setStyleSheet(_style_err())
             layout.addWidget(self._profile_warning)
+            from . import model_manager as _mm
+            variante_label = str(_mm.ASR_VARIANTS.get(variante, {}).get("label", variante))
             rodape = QLabel(
+                f"Os tamanhos acima são estimativas com o modelo de transcrição "
+                f"recomendado para esta máquina ({variante_label}); na próxima etapa "
+                "você escolhe o modelo exato e o total se ajusta.\n"
                 "Tudo pode ser mudado depois em Transcrever > Gerenciar modelos — "
                 "nada aqui é definitivo.")
             rodape.setWordWrap(True)
