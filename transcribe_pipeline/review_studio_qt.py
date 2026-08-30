@@ -4660,6 +4660,9 @@ if QT_IMPORT_ERROR is None:
             # Acao a reexecutar quando o worker "Preparar modelos" concluir
             # (a retomada real do gate ensure_models_ready — F2).
             self._retry_after_models: Callable[[], None] | None = None
+            # Linha sob o cursor enquanto o menu de contexto esta aberto
+            # (alvo das acoes destrutivas disparadas por ele — F7).
+            self._context_cursor_row: int | None = None
             self.current_turn_id: str | None = None
             self.current_play_row: int | None = None
             self.media_candidates: list[Path] = []
@@ -7937,6 +7940,16 @@ if QT_IMPORT_ERROR is None:
             has_project = self._has_project()
             has_selected = bool(self.selected_interview_id() or self.current_interview_id)
             has_table_selection = bool(self.effective_target_ids())
+            # Habilitar pela MESMA regua da execucao (F7): as destrutivas
+            # miram a selecao visual; transcrever/diarizar/render miram os
+            # checkboxes (com fallback no arquivo aberto). Habilitar por uma
+            # regua e executar por outra produzia cliques que so repreendiam.
+            has_destructive = bool(self.destructive_target_ids())
+            reason_destructive = ("Selecione (destaque) ao menos um arquivo na "
+                                  "lista — as caixas ☑ escolhem o que "
+                                  "transcrever, não o que apagar.")
+            reason_checked = ("Marque ☑ ao menos um arquivo na lista "
+                              "(ou abra um arquivo).")
             has_review = bool(self.current_interview_id and self.review)
             has_open_file = bool(self.current_interview_id)
             has_untranscribed_open_file = bool(self.current_interview_id and not self.review)
@@ -7962,14 +7975,14 @@ if QT_IMPORT_ERROR is None:
             self._set_action(self.refresh_library_action, not busy and has_project, reason_busy if busy else reason_project)
             self._set_action(self.reload_list_action, not busy and has_project, reason_busy if busy else reason_project)
             self._set_action(self.open_transcript_action, not busy and has_table_selection, reason_busy if busy else reason_select)
-            self._set_action(self.transcribe_action, not busy and has_table_selection, reason_busy if busy else reason_select)
+            self._set_action(self.transcribe_action, not busy and has_selected, reason_busy if busy else reason_checked)
             self._set_action(self.transcribe_pending_action, not busy and bool(self.pending_transcription_ids()), reason_busy if busy else "Não há arquivos pendentes.")
             self._set_action(self.transcribe_current_action, not busy and has_untranscribed_open_file, reason_busy if busy else reason_open)
             self._set_action(self.retranscribe_current_action, not busy and has_review, reason_busy if busy else reason_open)
             self._set_action(self.save_action, not busy and has_turn, reason_busy if busy else reason_turn)
             self._set_action(self.generate_files_action, not busy and (has_review or has_table_selection or any(status.review_exists or status.canonical_exists for status in self.statuses)), reason_busy if busy else "Nenhuma transcrição disponível.")
-            self._set_action(self.export_selected_action, not busy and has_table_selection, reason_busy if busy else reason_select)
-            self._set_action(self.delete_transcription_action, not busy and has_table_selection, reason_busy if busy else reason_select)
+            self._set_action(self.export_selected_action, not busy and has_selected, reason_busy if busy else reason_checked)
+            self._set_action(self.delete_transcription_action, not busy and has_destructive, reason_busy if busy else reason_destructive)
             # Rename e reorder exigem UM unico alvo
             single_target = bool(has_project and len(self.effective_target_ids()) == 1)
             single_target_busy = False
@@ -7986,8 +7999,8 @@ if QT_IMPORT_ERROR is None:
             any_busy = busy or trash_busy
             self._set_action(
                 self.trash_selected_action,
-                not any_busy and has_project and has_table_selection,
-                reason_busy if any_busy else reason_select,
+                not any_busy and has_project and has_destructive,
+                reason_busy if any_busy else reason_destructive,
             )
             can_undo = bool(getattr(self, "_trash_undo", []))
             can_redo = bool(getattr(self, "_trash_redo", []))
@@ -8012,14 +8025,14 @@ if QT_IMPORT_ERROR is None:
                 "o download exigirá conta gratuita no Hugging Face."
                 if falantes_estado == "instalavel" else "")
             self._set_action(self.diarize_action, not busy and has_selected,
-                             reason_busy if busy else reason_select,
+                             reason_busy if busy else reason_checked,
                              enabled_note=falantes_nota)
             self._set_action(self.improve_speakers_action, not busy and has_review,
                              reason_busy if busy else reason_open,
                              enabled_note=falantes_nota)
             self._set_action(self.name_voices_action, not busy and has_review, reason_busy if busy else reason_open)
             self._set_action(self.voice_prompt_action, not busy and has_project, reason_busy if busy else "Abra ou crie um projeto primeiro.")
-            self._set_action(self.render_action, not busy and has_selected, reason_busy if busy else reason_select)
+            self._set_action(self.render_action, not busy and has_selected, reason_busy if busy else reason_checked)
             # QC sem projeto quebrava (context None no run_qc_job).
             self._set_action(self.qc_action, not busy and has_project,
                              reason_busy if busy else reason_project)
@@ -8280,10 +8293,11 @@ if QT_IMPORT_ERROR is None:
             _logger.info("delete_selected_transcriptions triggered: context=%s", self.context is not None)
             if self.context is None:
                 return
-            # Alvo DESTRUTIVO = so a selecao visual (simetria com a Lixeira,
-            # pos-incidente 2026-08-25): as caixas de marcacao escolhem "o
-            # que transcrever", nunca o que apagar.
-            ids = self.destructive_target_ids()
+            # Alvo DESTRUTIVO = selecao visual (simetria com a Lixeira,
+            # pos-incidente 2026-08-25) ou a linha sob o cursor do menu de
+            # contexto; as caixas de marcacao escolhem "o que transcrever",
+            # nunca o que apagar.
+            ids = self.destructive_target_ids(getattr(self, "_context_cursor_row", None))
             _logger.info("  destructive_target_ids: %s | checked=%s visual=%s current_iid=%s",
                          ids, sorted(self._checked_ids),
                          sorted(self._visually_selected_interview_ids()),
@@ -8448,6 +8462,8 @@ if QT_IMPORT_ERROR is None:
         TRASH_ASYNC_THRESHOLD_BYTES = 50 * 1024 * 1024  # 50 MB
 
         def trash_selected_interviews(self, *_args: Any, cursor_row: int | None = None) -> None:
+            if cursor_row is None:
+                cursor_row = getattr(self, "_context_cursor_row", None)
             _logger.info("trash_selected_interviews triggered: context=%s busy=%s cursor_row=%s",
                          self.context is not None, self._trash_busy, cursor_row)
             if self.context is None or self._trash_busy:
@@ -8840,10 +8856,14 @@ if QT_IMPORT_ERROR is None:
             single = len(target_ids) == 1
             job_status = (self.context.jobs.get(target_ids[0]) or {}).get("status") if single else ""
             busy_single = job_status in ("Rodando", "Na fila")
+            # busy GLOBAL tambem: o setEnabled direto daqui contornava o
+            # update_action_states e reabilitava rename/mover durante um job
+            # de OUTRO arquivo (escrita concorrente em metadados.csv).
+            busy = bool(self.worker and self.worker.isRunning())
             menu = QMenu(self)
-            self.rename_interview_action.setEnabled(single and not busy_single)
-            self.move_up_action.setEnabled(single and not busy_single)
-            self.move_down_action.setEnabled(single and not busy_single)
+            self.rename_interview_action.setEnabled(single and not busy_single and not busy)
+            self.move_up_action.setEnabled(single and not busy_single and not busy)
+            self.move_down_action.setEnabled(single and not busy_single and not busy)
             menu.addAction(self.rename_interview_action)
             menu.addSeparator()
             menu.addAction(self.move_up_action)
@@ -8851,7 +8871,15 @@ if QT_IMPORT_ERROR is None:
             menu.addSeparator()
             menu.addAction(self.delete_transcription_action)
             menu.addAction(self.trash_selected_action)
-            menu.exec(viewport.mapToGlobal(pos))
+            # A linha sob o cursor vale como alvo para as acoes destrutivas
+            # DESTE menu (botao direito numa linha nao-selecionada apagava a
+            # OUTRA linha destacada). Limpo ao fechar: o menu Editar nao
+            # pode herdar um cursor velho.
+            self._context_cursor_row = cursor_row
+            try:
+                menu.exec(viewport.mapToGlobal(pos))
+            finally:
+                self._context_cursor_row = None
 
         def export_reviews(self, *_args: Any) -> None:
             if not self.save_current_turn(force=bool(self.review and self.current_turn_id)):

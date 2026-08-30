@@ -167,12 +167,23 @@ header("PASSO 3 - Marca checkbox -> actions habilitam (F1 selection fix)")
 win._checked_ids = {"A01"}
 win.update_action_states()
 assert win.effective_target_ids() == ["A01"]
-assert win.delete_transcription_action.isEnabled()
-assert win.trash_selected_action.isEnabled()
+# F7 (2026-08-30): as DESTRUTIVAS habilitam pela regua da execucao — so
+# selecao VISUAL conta (checkbox = "o que transcrever"). Antes o item
+# ficava habilitado e o clique so repreendia.
+assert not win.delete_transcription_action.isEnabled()
+assert not win.trash_selected_action.isEnabled()
 assert win.rename_interview_action.isEnabled()
 # move_up/down habilitam por selecao unica (nao checam posicao — movimento e no-op silencioso no topo)
 assert win.move_up_action.isEnabled() is True
-check("3.1 com checkbox A01: delete/trash/rename/move habilitados")
+check("3.1 checkbox A01: rename/move habilitam; destrutivas exigem destaque")
+
+win.interview_table.selectRow(0)
+win.update_action_states()
+assert win.delete_transcription_action.isEnabled()
+assert win.trash_selected_action.isEnabled()
+win.interview_table.clearSelection()
+win.update_action_states()
+check("3.2 destaque visual habilita as destrutivas")
 
 
 # ==== PASSO 4: Simular export + verificar Resultados/ (F3) ====
