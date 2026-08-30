@@ -282,7 +282,9 @@ ASR_VARIANTS: dict[str, dict[str, Any]] = {
 }
 
 _FRIENDLY_FIXED_MODELS: dict[str, str] = {
-    "alignment_pt": "Alinhamento de tempo (portugues, 6,9 GB)",
+    # 1,4 GB desde o download_exclude de 2026-08-28 (o rotulo antigo
+    # "6,9 GB" ficou para tras e mentia no gerenciador).
+    "alignment_pt": "Alinhamento de tempo (portugues, 1,4 GB)",
     "diarization": "Identificacao de falantes (70 MB)",
 }
 
@@ -368,17 +370,34 @@ def optional_model(key: str) -> ModelAsset:
     raise KeyError(f"Modelo opcional desconhecido: {key}")
 
 
+def asset_by_key(key: str) -> ModelAsset:
+    """Asset por chave, FIXO ou opcional (F4).
+
+    Permite ao gerenciador baixar por item tambem os fixos ungated
+    (ex.: o alinhador pendente numa instalacao essencial — antes nao
+    havia rota nenhuma para instala-lo)."""
+    for asset in _OPTIONAL_MODELS + _FIXED_MODELS:
+        if asset.key == key:
+            return asset
+    raise KeyError(f"Modelo desconhecido: {key}")
+
+
 def download_optional_model(
     key: str,
     progress_callback: ProgressCallback | None = None,
     should_cancel: ShouldCancel | None = None,
 ) -> int:
-    """Baixa um modelo OPCIONAL (ungated) sob demanda; 0 = sucesso.
+    """Baixa um modelo UNGATED (opcional ou fixo) sob demanda; 0 = sucesso.
 
     Reutiliza o downloader manual (Xet-proof, SHA-pinada). Checagem de
     disco POR modelo — a global de 10 GB nao cobre downloads grandes.
+    Modelos gated (pyannote) nao passam por aqui: exigem token, e o
+    caminho deles e o ModelSetupDialog.
     """
-    asset = optional_model(key)
+    asset = asset_by_key(key)
+    if asset.gated:
+        print(f"{asset.label} exige conta/token: use o preparador de modelos.")
+        return 1
     cache_dir = runtime.model_cache_dir()
     cache_dir.mkdir(parents=True, exist_ok=True)
     if optional_model_cached(asset, cache_dir):

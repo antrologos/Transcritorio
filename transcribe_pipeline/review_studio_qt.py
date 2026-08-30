@@ -1718,7 +1718,7 @@ if QT_IMPORT_ERROR is None:
             self.resize(780, 520)
             layout = QVBoxLayout(self)
 
-            header = QLabel("Modelos locais de transcricao e separacao de falantes")
+            header = QLabel("Modelos locais de transcrição, separação de falantes e IA")
             header.setStyleSheet("font-size: 14px; font-weight: 700;")
             layout.addWidget(header)
 
@@ -1783,7 +1783,11 @@ if QT_IMPORT_ERROR is None:
                 ctx = self._context_provider()
             except Exception:
                 ctx = None
-            configured = (ctx.config.get("asr_model") if ctx else "large-v3-turbo") or "large-v3-turbo"
+            from . import app_settings as _settings
+            # Sem projeto, o "Em uso" segue a escolha da MAQUINA (quem
+            # instalou o tiny via o turbo marcado como em uso).
+            configured = ((ctx.config.get("asr_model") if ctx else None)
+                          or _settings.asr_model_default())
 
             rows: list[tuple[str, str, int, str, str, bool, str | None, str, str]] = []
             # (label, repo_id, size, status, date_str, can_remove,
@@ -1802,7 +1806,10 @@ if QT_IMPORT_ERROR is None:
                     gb = float(info.get("estimated_gb") or 0.0)
                     rows.append((label, repo, 0, "Disponivel", "-", False,
                                  f"asr:{key}", f"~{gb:.1f} GB" if gb else "-", ""))
-            # Fixos (obrigatorios)
+            # Fixos (obrigatorios). Pendentes ganham rota (F4): ungated
+            # (alinhador) baixa por item; gated (pyannote) roteia para o
+            # preparador com conta/token. Antes eram becos — a dica de
+            # tempos-por-palavra mandava para ca e nao havia botao nenhum.
             for asset in model_manager._FIXED_MODELS:
                 repo = asset.repo_id
                 label = model_manager.friendly_name(asset.key)
@@ -1813,19 +1820,45 @@ if QT_IMPORT_ERROR is None:
                     date_str = datetime.fromtimestamp(dt).strftime("%d/%m/%Y") if dt else "-"
                     rows.append((label, repo, size, "Obrigatorio", date_str, False, None, "", ""))
                 else:
-                    rows.append((label, repo, 0, "Pendente", "-", False, None, "", ""))
+                    chave_download = (f"setup:{asset.key}" if asset.gated
+                                      else f"opt:{asset.key}")
+                    rows.append((label, repo, 0, "Pendente", "-", False,
+                                 chave_download, f"~{asset.estimated_gb:.1f} GB",
+                                 ("O download exige conta gratuita no Hugging Face "
+                                  "e aceite dos termos do modelo."
+                                  if asset.gated else "")))
             # Opcionais de IA (antes invisiveis: 8,7 GB de Qwen baixados
             # ficavam irremoviveis, e nao havia escolha por item).
             from . import capabilities as _caps
             hw = _caps.hardware_snapshot()
             for asset in model_manager._OPTIONAL_MODELS:
                 entry = scan_by_repo.get(asset.repo_id)
-                if entry is not None:
+                # "Instalado" exige o criterio REAL (pesos >= 100 KB +
+                # companion quando houver) — presenca de pasta marcava um
+                # download cancelado no meio como instalado, sem retomada.
+                completo = False
+                try:
+                    snap = model_manager.cached_snapshot_path(
+                        asset.repo_id, cache_root, revision=asset.revision)
+                    completo = (snap is not None
+                                and model_manager._snapshot_has_weights(snap)
+                                and model_manager.optional_model_cached(asset, cache_root))
+                except Exception:  # noqa: BLE001 - cache ilegivel = incompleto
+                    completo = False
+                if entry is not None and completo:
                     size = int(entry.get("size_on_disk", 0))
                     dt = model_manager.model_install_date(asset.repo_id, cache_root)
                     date_str = datetime.fromtimestamp(dt).strftime("%d/%m/%Y") if dt else "-"
                     rows.append((asset.label, asset.repo_id, size, "Instalado",
                                  date_str, True, None, "", ""))
+                    continue
+                if entry is not None and not completo:
+                    size = int(entry.get("size_on_disk", 0))
+                    rows.append((asset.label, asset.repo_id, size, "Incompleto",
+                                 "-", False, f"opt:{asset.key}",
+                                 f"~{asset.estimated_gb:.1f} GB",
+                                 "Download anterior incompleto — Baixar retoma "
+                                 "aproveitando o que já veio."))
                     continue
                 cap = _caps.capability_for_model(asset.key)
                 bloqueio = _caps.hardware_blocker(cap, hw) if cap is not None else ""
@@ -1892,17 +1925,24 @@ if QT_IMPORT_ERROR is None:
                 self._download_optional(key)
             elif kind == "asr":
                 self._download_asr_variant(key)
+            elif kind == "setup":
+                # Modelo gated (pyannote): o caminho e o preparador, que
+                # cuida de conta/token/termos.
+                parent = self.parent()
+                if parent is not None and hasattr(parent, "show_model_setup"):
+                    parent.show_model_setup(include_diarization=True)
+                    self._populate()
 
         def _download_optional(self, key: str) -> None:
             """Delegar a oferta padrao da janela (_ensure_optional_model):
             confirmacao com GB, requisito de hardware, disco e o ambiente
             de ~3 GB quando aplicavel — e invalidacao do cache de
-            capacidades no sucesso."""
+            capacidades no sucesso. Aceita opcionais E fixos ungated."""
             parent = self.parent()
             if parent is None or not hasattr(parent, "_ensure_optional_model"):
                 return
             from . import model_manager
-            asset = model_manager.optional_model(key)
+            asset = model_manager.asset_by_key(key)
             ok = parent._ensure_optional_model(
                 key, asset.label,
                 f"{asset.label} habilita: {asset.purpose}.",
@@ -1914,6 +1954,11 @@ if QT_IMPORT_ERROR is None:
             """Baixar UMA variante do Whisper por item (fecha o caso
             "quero instalar outro modelo depois do assistente")."""
             from . import model_manager
+            janela = self.parent()
+            if janela is not None and getattr(janela, "_model_download_busy", False):
+                QMessageBox.information(self, "Download em andamento",
+                                        "Aguarde o download atual terminar.")
+                return
             info = model_manager.ASR_VARIANTS.get(key) or {}
             gb = float(info.get("estimated_gb") or 0.0)
             disk = model_manager.check_disk_space(gb)
@@ -1943,6 +1988,8 @@ if QT_IMPORT_ERROR is None:
                     dialog.setLabelText(str(detail["message"]))
                 QApplication.processEvents()
 
+            if janela is not None:
+                janela._model_download_busy = True
             try:
                 result = app_service.download_models(
                     token="",
@@ -1952,7 +1999,14 @@ if QT_IMPORT_ERROR is None:
                     include_diarization=False,
                     include_alignment=False,
                 )
+            except Exception as exc:  # noqa: BLE001 - excecao subia sem mensagem
+                QMessageBox.warning(
+                    self, "Download nao concluido",
+                    f"Nao foi possivel baixar {nome}: {sanitize_message(str(exc))}")
+                return
             finally:
+                if janela is not None:
+                    janela._model_download_busy = False
                 dialog.close()
             if getattr(result, "failures", 0):
                 QMessageBox.warning(
@@ -9708,7 +9762,14 @@ if QT_IMPORT_ERROR is None:
             from . import capabilities as _caps
             from . import llm_env as _llm_env
             from . import model_manager
-            asset = model_manager.optional_model(key)
+            if getattr(self, "_model_download_busy", False):
+                # Reentrancia: o download roda na thread da GUI com
+                # processEvents — um segundo clique (gerenciador/Perguntar
+                # sao janelas irmas, nao bloqueadas) iniciaria outro.
+                QMessageBox.information(self, "Download em andamento",
+                                        "Aguarde o download atual terminar.")
+                return False
+            asset = model_manager.asset_by_key(key)
             env_pendente = bool(needs_llm_env) and not _llm_env.llm_env_ready()
             extra_gb = 3.0 if env_pendente else 0.0
             disk = model_manager.check_disk_space(float(asset.estimated_gb) + extra_gb)
@@ -9745,7 +9806,9 @@ if QT_IMPORT_ERROR is None:
             if answer != QMessageBox.StandardButton.Yes:
                 return False
             dialog = QProgressDialog(f"Baixando {titulo}...", "Cancelar", 0, 100, self)
-            dialog.setWindowTitle(titulo.capitalize())
+            # So a primeira letra: .capitalize() rebaixava o resto e
+            # produzia "Analise local (qwen3.5-4b)".
+            dialog.setWindowTitle(titulo[:1].upper() + titulo[1:])
             dialog.setWindowModality(Qt.WindowModality.WindowModal)
             dialog.setAutoClose(False)
             dialog.show()
@@ -9756,10 +9819,12 @@ if QT_IMPORT_ERROR is None:
                     dialog.setLabelText(str(detail["message"]))
                 QApplication.processEvents()
 
+            self._model_download_busy = True
             try:
                 failures = model_manager.download_optional_model(
                     key, progress_callback=on_progress, should_cancel=dialog.wasCanceled)
             finally:
+                self._model_download_busy = False
                 dialog.close()
             if failures:
                 QMessageBox.warning(

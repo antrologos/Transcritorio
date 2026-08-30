@@ -72,12 +72,15 @@ with tempfile.TemporaryDirectory() as tmp:
     assert botao is not None and botao.text() == "Baixar"
     print("PASS: gpu8 libera o Qwen para download")
 
-    # --- instalado (estrutura HF fake no cache): Instalado com Remover ---
+    # --- instalado (estrutura HF fake COMPLETA, com blob de peso real) ---
     repo_dir = cache / ("models--" + ENCODER.repo_id.replace("/", "--"))
     (repo_dir / "snapshots" / "abc123").mkdir(parents=True)
     (repo_dir / "refs").mkdir()
     (repo_dir / "refs" / "main").write_text("abc123", encoding="utf-8")
     (repo_dir / "snapshots" / "abc123" / "peso.bin").write_bytes(b"x" * 2048)
+    (repo_dir / "blobs").mkdir()
+    # >= _WEIGHT_BLOB_MIN_BYTES (4 MB): abaixo disso e "sem pesos"
+    (repo_dir / "blobs" / "hash1").write_bytes(b"x" * (5 * 1024 * 1024))
     dlg = _abre(cache)
     r = _linha(dlg, ENCODER.label)
     assert dlg.table.item(r, dlg.COL_STATUS).text() == "Instalado"
@@ -94,6 +97,56 @@ with tempfile.TemporaryDirectory() as tmp:
     print("PASS: variante Whisper disponivel tem botao de baixar")
 
 del os.environ["TRANSCRITORIO_FAKE_HARDWARE"]
+
+# --- asset_by_key: fixos e opcionais pela mesma porta (F4) ---
+alinhador = model_manager.asset_by_key("alignment_pt")
+assert alinhador.key == "alignment_pt" and alinhador.gated is False
+assert model_manager.asset_by_key("llm_qwen").key == "llm_qwen"
+assert model_manager.asset_by_key("diarization").gated is True
+try:
+    model_manager.asset_by_key("nao_existe")
+    raise AssertionError("chave inexistente deveria levantar KeyError")
+except KeyError:
+    pass
+print("PASS: asset_by_key")
+
+with tempfile.TemporaryDirectory() as tmp2:
+    cache2 = Path(tmp2)
+    os.environ["TRANSCRITORIO_FAKE_HARDWARE"] = "gpu8"
+
+    # --- fixos pendentes ganham acao: alinhador (Baixar direto, ungated),
+    # diarizacao (Baixar -> fluxo de conta/token) — antes eram becos ---
+    dlg = _abre(cache2)
+    r = _linha(dlg, model_manager.friendly_name("alignment_pt"))
+    assert r is not None
+    assert dlg.table.item(r, dlg.COL_STATUS).text() == "Pendente"
+    botao = dlg.table.cellWidget(r, dlg.COL_ACTION)
+    assert botao is not None and botao.text() == "Baixar", "alinhador pendente sem rota"
+    assert "1.4" in dlg.table.item(r, dlg.COL_SIZE).text(), \
+        dlg.table.item(r, dlg.COL_SIZE).text()
+    r = _linha(dlg, model_manager.friendly_name("diarization"))
+    botao = dlg.table.cellWidget(r, dlg.COL_ACTION)
+    assert botao is not None and botao.text() == "Baixar", "diarizacao pendente sem rota"
+    print("PASS: fixos pendentes tem botao Baixar")
+
+    # --- download PARCIAL de opcional: "Incompleto" com Baixar (retoma) ---
+    repo_dir = cache2 / ("models--" + QWEN.repo_id.replace("/", "--"))
+    (repo_dir / "snapshots" / "abc").mkdir(parents=True)
+    (repo_dir / "refs").mkdir()
+    (repo_dir / "refs" / "main").write_text("abc", encoding="utf-8")
+    (repo_dir / "snapshots" / "abc" / "parcial.bin").write_bytes(b"x" * 512)
+    dlg = _abre(cache2)
+    r = _linha(dlg, QWEN.label)
+    assert dlg.table.item(r, dlg.COL_STATUS).text() == "Incompleto", \
+        dlg.table.item(r, dlg.COL_STATUS).text()
+    botao = dlg.table.cellWidget(r, dlg.COL_ACTION)
+    assert botao is not None and botao.text() == "Baixar", "parcial sem retomada"
+    print("PASS: download parcial aparece como Incompleto com retomada")
+    del os.environ["TRANSCRITORIO_FAKE_HARDWARE"]
+
+# --- rotulo do alinhador nao mente mais o tamanho (era 6,9 GB) ---
+assert "6,9" not in model_manager.friendly_name("alignment_pt")
+print("PASS: rotulo do alinhador corrigido")
 
 # --- ModelSetupDialog com tudo em cache: "tudo pronto", OK desabilitado ---
 from types import SimpleNamespace
