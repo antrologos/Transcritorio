@@ -1216,42 +1216,76 @@ if QT_IMPORT_ERROR is None:
             try:
                 total_weight = max(1, sum(max(1, weight) for weight in self.weights))
                 completed_weight = 0
+                # Skip-and-continue: falha num step COM grupo (interview_id)
+                # pula os steps restantes DAQUELE arquivo e o lote segue;
+                # steps SEM grupo (jobs de passo unico) mantem o aborto.
+                seen_groups: set[str] = set()
+                failed_groups: set[str] = set()
                 for index, step in enumerate(self.steps, start=1):
                     if self.cancel_after_step:
                         self.finished_ok.emit(f"{self.label} cancelado.")
                         return
-                    message, func, accepts_progress = self.unpack_step(step)
+                    message, func, accepts_progress, group = self.unpack_step(step)
+                    if group is not None:
+                        seen_groups.add(group)
                     weight = max(1, self.weights[index - 1] if index - 1 < len(self.weights) else 1)
                     start_percent = int((completed_weight / total_weight) * 100)
                     end_percent = int(((completed_weight + weight) / total_weight) * 100)
+                    if group is not None and group in failed_groups:
+                        completed_weight += weight  # barra nao congela
+                        continue
                     self.progress.emit(f"Etapa {index} de {len(self.steps)}: {message}", start_percent)
-                    if accepts_progress:
-                        result = func(
-                            self.step_progress_callback(index, len(self.steps), message, start_percent, end_percent),
-                            self.is_cancel_requested,
-                        )
-                    else:
-                        result = func()
-                    failures = getattr(result, "failures", 0)
-                    if failures:
+                    try:
+                        if accepts_progress:
+                            result = func(
+                                self.step_progress_callback(index, len(self.steps), message, start_percent, end_percent),
+                                self.is_cancel_requested,
+                            )
+                        else:
+                            result = func()
+                        failures = getattr(result, "failures", 0)
+                        if failures:
+                            raise RuntimeError(f"{message}: {failures} falha(s).")
+                    except Exception as exc:
                         if self.cancel_after_step:
                             self.finished_ok.emit(f"{self.label} cancelado.")
                             return
-                        raise RuntimeError(f"{message}: {failures} falha(s).")
+                        if group is None:
+                            raise
+                        failed_groups.add(group)
+                        completed_weight += weight
+                        self.progress.emit(
+                            f"Etapa {index} de {len(self.steps)}: {message} — falhou; "
+                            "continuando com o proximo arquivo.",
+                            end_percent,
+                        )
+                        _logger.warning("Arquivo %s falhou no lote: %s", group, exc)
+                        continue
                     completed_weight += weight
                     self.progress.emit(f"Etapa {index} de {len(self.steps)} concluida: {message}", end_percent)
                     if self.cancel_after_step and index < len(self.steps):
                         self.finished_ok.emit(f"{self.label} interrompido apos a etapa atual.")
                         return
+                if failed_groups:
+                    resumo = (f"{self.label} concluído com {len(failed_groups)} "
+                              "arquivo(s) com falha — veja a coluna Transcrição "
+                              "e a Fila de tarefas.")
+                    if seen_groups and failed_groups >= seen_groups:
+                        self.failed.emit(resumo)  # todos falharam: vermelho
+                        return
+                    self.progress.emit(resumo, 100)
+                    self.finished_ok.emit(resumo)
+                    return
                 self.progress.emit(f"{self.label} concluido.", 100)
                 self.finished_ok.emit(f"{self.label} concluido.")
             except Exception as exc:  # GUI boundary
                 self.failed.emit(sanitize_message(str(exc)))
 
-        def unpack_step(self, step: tuple) -> tuple[str, Callable, bool]:
+        def unpack_step(self, step: tuple) -> tuple[str, Callable, bool, str | None]:
+            group = str(step[3]) if len(step) >= 4 and step[3] else None
             if len(step) >= 3:
-                return str(step[0]), step[1], bool(step[2])
-            return str(step[0]), step[1], False
+                return str(step[0]), step[1], bool(step[2]), group
+            return str(step[0]), step[1], False, None
 
         def step_progress_callback(self, index: int, total: int, message: str, start_percent: int, end_percent: int) -> Callable[[dict[str, Any]], None]:
             def callback(detail: dict[str, Any]) -> None:
@@ -8998,7 +9032,9 @@ if QT_IMPORT_ERROR is None:
                     )
                     raise
 
-            return (message, run, accepts_progress)
+            # 4o campo = grupo (interview_id): o PipelineWorker usa para o
+            # skip-and-continue — falha num arquivo pula so os steps dele.
+            return (message, run, accepts_progress, interview_id)
 
         def _exclusive_diarization_exists(self, interview_id: str) -> bool:
             try:
