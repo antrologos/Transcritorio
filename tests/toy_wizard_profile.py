@@ -48,6 +48,13 @@ chaves = {a.key for a in model_manager.get_required_models(
 assert chaves == {"asr_tiny"}, chaves
 print("PASS: get_required_models por perfil")
 
+# --- recomendacao de MODELO acompanha a maquina (pura) ---
+assert caps.recommended_asr_variant(caps.parse_fake_hardware("gpu24")) == "large-v3-turbo"
+assert caps.recommended_asr_variant(caps.parse_fake_hardware("cpu")) == "small"
+assert caps.recommended_asr_variant(caps.parse_fake_hardware("minimo")) == "base"
+assert caps.recommended_asr_variant(caps.parse_fake_hardware("gpu2")) == "small"
+print("PASS: recommended_asr_variant")
+
 # --- assistente em maquina de CPU: recomenda Padrao, marca sem impor ---
 wizard = FirstRunWizard()
 assert wizard.selected_profile == "padrao", wizard.selected_profile
@@ -83,6 +90,24 @@ select_page = wizard.page(FirstRunWizard.PAGE_MODEL_SELECT)
 assert select_page.FIXED_GB == 0.0
 wizard._profile_radios["padrao"].setChecked(True)
 assert select_page.FIXED_GB > 1.0
+
+# em CPU o modelo pre-marcado e o small, NAO o turbo — e so ele
+marcados = select_page.selected_asr_variants()
+assert marcados == ["small"], marcados
+assert "Recomendado para esta máquina" in select_page._checkboxes["small"].text()
+assert "Recomendado" not in select_page._checkboxes["large-v3-turbo"].text()
+assert wizard.selected_asr_variants == ["small"]
+# marcar um segundo modelo NAO desmarca o primeiro, e o rotulo enumera
+select_page._checkboxes["tiny"].setChecked(True)
+assert set(select_page.selected_asr_variants()) == {"small", "tiny"}
+assert "2 modelos" in select_page.total_label.text()
+select_page._checkboxes["tiny"].setChecked(False)
+assert "Será baixado" in select_page.total_label.text()
+
+# pagina de download tem o botao de cancelar (oculto ate comecar)
+download_page = wizard.page(FirstRunWizard.PAGE_DOWNLOAD)
+assert hasattr(download_page, "cancel_download_button")
+assert download_page.cancel_download_button.isVisible() is False
 print("PASS: fluxo e avisos do assistente (maquina de CPU)")
 
 # --- persistencia do perfil ---

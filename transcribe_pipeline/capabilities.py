@@ -208,6 +208,20 @@ def capability_status(
     return "pronta", "", 0.0
 
 
+def recommended_asr_variant(hw: Hardware) -> str:
+    """Variante do Whisper recomendada para a maquina (pura).
+
+    Em GPU o turbo e o melhor custo-beneficio. Em CPU, modelos grandes
+    levam horas por entrevista: small equilibra qualidade e tempo; em
+    maquina apertada, base. Sugestao, nunca imposicao.
+    """
+    if hw.has_gpu and (hw.vram_gb is None or hw.vram_gb >= 4.0):
+        return "large-v3-turbo"
+    if (hw.ram_gb is not None and hw.ram_gb < 8) or hw.cores <= 2:
+        return "base"
+    return "small"
+
+
 def recommended_profile(hw: Hardware) -> str:
     """Perfil sugerido para a maquina (pura). Sugestao, nunca imposicao."""
     if hw.has_gpu and (hw.vram_gb is None or hw.vram_gb >= 6.0):

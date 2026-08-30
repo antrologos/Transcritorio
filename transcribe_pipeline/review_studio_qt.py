@@ -3116,7 +3116,14 @@ if QT_IMPORT_ERROR is None:
             # decide isso e o PERFIL (essencial = so transcrever).
             self.wants_diarization = True
             self.selected_profile = "padrao"
-            self.selected_asr_variants: list[str] = [model_manager.DEFAULT_ASR_VARIANT]
+            # O modelo default tambem acompanha a maquina (em CPU, o turbo
+            # levaria horas por entrevista).
+            from . import capabilities as _caps
+            try:
+                default_variant = _caps.recommended_asr_variant(_caps.hardware_snapshot())
+            except Exception:  # noqa: BLE001 - sonda nunca impede o wizard
+                default_variant = model_manager.DEFAULT_ASR_VARIANT
+            self.selected_asr_variants: list[str] = [default_variant]
             self.setWindowTitle(f"{APP_NAME} — Configuração inicial")
             self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
             self.setFixedWidth(680)
@@ -3193,8 +3200,9 @@ if QT_IMPORT_ERROR is None:
             layout = QVBoxLayout(page)
             hardware = caps.hardware_snapshot()
             recomendado = caps.recommended_profile(hardware)
-            tamanhos = caps.model_sizes_from_registry()
-            em_cache = caps.cached_model_keys()
+            variante = caps.recommended_asr_variant(hardware)
+            tamanhos = caps.model_sizes_from_registry(variante)
+            em_cache = caps.cached_model_keys(variante)
             detectado = QLabel(f"Este computador tem: {caps.describe_hardware(hardware)}.")
             detectado.setWordWrap(True)
             layout.addWidget(detectado)
@@ -3401,45 +3409,54 @@ if QT_IMPORT_ERROR is None:
 
         def __init__(self, wizard: "FirstRunWizard") -> None:
             super().__init__()
-            from . import model_manager
+            from . import capabilities as caps, model_manager
             self._model_manager = model_manager
             self._wizard = wizard
             self.setTitle("Escolha o modelo de transcrição")
+            # A recomendacao acompanha a MAQUINA, nao um default fixo: em
+            # CPU, um modelo grande leva horas por entrevista (feedback do
+            # 1o teste real da pagina de perfis, 2026-08-30).
+            self._recommended_key = caps.recommended_asr_variant(caps.hardware_snapshot())
             layout = QVBoxLayout(self)
             intro = QLabel(
-                "Selecione quais modelos de transcrição deseja baixar. "
-                "Modelos maiores produzem transcrições melhores, mas "
-                "demoram mais e ocupam mais espaço.\n\n"
-                "Você pode instalar modelos adicionais depois nas configurações."
+                "O modelo recomendado para esta máquina já vem marcado.\n\n"
+                "Cada caixa marcada é um modelo que SERÁ BAIXADO — marque mais "
+                "de um só se quiser comparar qualidades; para instalar um único "
+                "modelo, deixe apenas uma caixa marcada. Modelos maiores acertam "
+                "mais, porém demoram mais e ocupam mais espaço.\n\n"
+                "Você pode instalar ou remover modelos depois, em Transcrever > "
+                "Gerenciar modelos."
             )
             intro.setWordWrap(True)
             layout.addWidget(intro)
 
             self._checkboxes: dict[str, QCheckBox] = {}
+            # O recomendado da maquina aparece sempre no grupo de cima,
+            # mesmo quando e um modelo pequeno (maquinas de CPU).
+            top_keys = list(self.RECOMMENDED)
+            other_keys = [k for k in self.OTHERS if k != self._recommended_key]
+            if self._recommended_key not in top_keys:
+                top_keys.append(self._recommended_key)
 
-            # Recommended models (visible by default)
-            for key in self.RECOMMENDED:
+            def _make_checkbox(key: str) -> QCheckBox:
                 info = self._model_manager.ASR_VARIANTS[key]
-                suffix = "  ★ Recomendado" if key == self._model_manager.DEFAULT_ASR_VARIANT else ""
+                suffix = ("  ★ Recomendado para esta máquina"
+                          if key == self._recommended_key else "")
                 cb = QCheckBox(f"{info['label']}  ({self._fmt(info['estimated_gb'])}){suffix}")
-                cb.setChecked(key == self._model_manager.DEFAULT_ASR_VARIANT)
+                cb.setChecked(key == self._recommended_key)
                 cb.setToolTip(info["desc"])
                 cb.stateChanged.connect(self._on_changed)
-                layout.addWidget(cb)
                 self._checkboxes[key] = cb
+                return cb
 
-            # Other models (in collapsible group)
-            others_group = QGroupBox("Outros modelos (menores, menor qualidade)")
+            for key in top_keys:
+                layout.addWidget(_make_checkbox(key))
+
+            others_group = QGroupBox("Outros modelos")
             others_group.setCheckable(False)
             others_layout = QVBoxLayout(others_group)
-            for key in self.OTHERS:
-                info = self._model_manager.ASR_VARIANTS[key]
-                cb = QCheckBox(f"{info['label']}  ({self._fmt(info['estimated_gb'])})")
-                cb.setChecked(False)
-                cb.setToolTip(info["desc"])
-                cb.stateChanged.connect(self._on_changed)
-                others_layout.addWidget(cb)
-                self._checkboxes[key] = cb
+            for key in other_keys:
+                others_layout.addWidget(_make_checkbox(key))
             layout.addWidget(others_group)
 
             layout.addStretch()
@@ -3472,11 +3489,22 @@ if QT_IMPORT_ERROR is None:
             total = self.total_gb()
             # estimated_gb e tamanho EM DISCO (download real e ~metade, o cache
             # HF duplica) — rotular como "espaco em disco", nao "download".
+            # Enumerar o que sera baixado tira a duvida "marquei dois, vem
+            # os dois?" — sim, e o rotulo diz com todas as letras.
+            nomes = [
+                f"{self._model_manager.ASR_VARIANTS[k]['label']} ({self._fmt(self._model_manager.ASR_VARIANTS[k]['estimated_gb'])})"
+                for k, cb in self._checkboxes.items() if cb.isChecked()
+            ]
             extras = self.FIXED_GB
-            sufixo = (" (inclui os componentes do perfil escolhido)"
+            if not nomes:
+                self.total_label.setText("Marque ao menos um modelo para continuar.")
+                return
+            linha = "Será baixado: " if len(nomes) == 1 else f"Serão baixados {len(nomes)} modelos: "
+            sufixo = (" + componentes do perfil escolhido"
                       if extras else " (perfil Essencial: só o modelo de transcrição)")
             self.total_label.setText(
-                f"Espaço em disco necessário: ~{self._fmt(total)}{sufixo}")
+                f"{linha}{', '.join(nomes)}{sufixo}.\n"
+                f"Espaço em disco necessário: ~{self._fmt(total)}.")
 
         def selected_asr_variants(self) -> list[str]:
             return [k for k, cb in self._checkboxes.items() if cb.isChecked()]
@@ -3610,9 +3638,17 @@ if QT_IMPORT_ERROR is None:
             self.progress_bar = QProgressBar()
             self.progress_bar.setRange(0, 0)
             layout.addWidget(self.progress_bar)
+            # Feedback do 1o teste real (2026-08-30): "não tem como cancelar
+            # o download". O botao interrompe SEM perder o progresso — o
+            # cache parcial e retomado no proximo download.
+            self.cancel_download_button = QPushButton("Cancelar download")
+            self.cancel_download_button.setVisible(False)
+            self.cancel_download_button.clicked.connect(self._on_cancel_clicked)
+            layout.addWidget(self.cancel_download_button)
             layout.addStretch()
             from .progress_bar_fallback import ProgressBarController
             self._bar_ctrl = ProgressBarController()
+            self._cancelled_by_user = False
 
         def initializePage(self) -> None:
             if self._download_started:
@@ -3643,7 +3679,21 @@ if QT_IMPORT_ERROR is None:
             self._worker.progress.connect(self._on_progress)
             self._worker.finished_ok.connect(self._on_done)
             self._worker.failed.connect(self._on_failed)
+            self._cancelled_by_user = False
+            self.cancel_download_button.setVisible(True)
+            self.cancel_download_button.setEnabled(True)
             self._worker.start()
+
+        def _on_cancel_clicked(self) -> None:
+            if self._worker is None or not self._worker.isRunning():
+                return
+            self._cancelled_by_user = True
+            self.cancel_download_button.setEnabled(False)
+            self.progress_label.setText(
+                "Cancelando... o que já foi baixado fica guardado e será "
+                "aproveitado se você retomar.")
+            self.progress_label.setStyleSheet(_style_muted())
+            self._worker.request_cancel()
 
         def isComplete(self) -> bool:
             return self._download_done
@@ -3655,6 +3705,7 @@ if QT_IMPORT_ERROR is None:
         def _on_done(self) -> None:
             self._download_done = True
             self._wizard.download_completed = True
+            self.cancel_download_button.setVisible(False)
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(100)
             self.progress_label.setText("Componentes baixados e verificados com sucesso!")
@@ -3662,10 +3713,20 @@ if QT_IMPORT_ERROR is None:
             self.completeChanged.emit()
 
         def _on_failed(self, message: str) -> None:
+            self.cancel_download_button.setVisible(False)
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(0)
-            self.progress_label.setText(f"Erro: {message}\n\nVerifique sua conexão e tente novamente.")
-            self.progress_label.setStyleSheet(_style_err())
+            if self._cancelled_by_user:
+                # Cancelar nao e erro: dizer o que aconteceu e como seguir.
+                self.progress_label.setText(
+                    "Download cancelado. O que já foi baixado fica guardado.\n"
+                    "Use ← Voltar para mudar a escolha e avance para retomar — "
+                    "ou feche com \"Pular por agora\" e retome depois em "
+                    "Transcrever > Gerenciar modelos.")
+                self.progress_label.setStyleSheet(_style_muted())
+            else:
+                self.progress_label.setText(f"Erro: {message}\n\nVerifique sua conexão e tente novamente.")
+                self.progress_label.setStyleSheet(_style_err())
             self._download_started = False  # allow retry via Back + Next
 
     class _SetupDownloadThread(QThread):
