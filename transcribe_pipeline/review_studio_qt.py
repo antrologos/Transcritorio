@@ -3061,6 +3061,21 @@ if QT_IMPORT_ERROR is None:
             for value, label in device_options:
                 self.device_combo.addItem(label, value)
             self.device_combo.setCurrentIndex(max(0, self.device_combo.findData(str(config.get("asr_device") or "auto"))))
+            # Honestidade do combo: sem placa NVIDIA, "cuda" e uma escolha
+            # que so falharia depois — desabilitar COM motivo (nunca
+            # esconder), e uma config "cuda" orfa cai para "auto".
+            from . import capabilities as _caps_dev
+            if not _caps_dev.hardware_snapshot().has_gpu:
+                idx_cuda = self.device_combo.findData("cuda")
+                try:
+                    item = self.device_combo.model().item(idx_cuda)
+                    item.setEnabled(False)
+                    item.setToolTip("Nenhuma placa NVIDIA foi encontrada neste computador.")
+                except Exception:  # noqa: BLE001 - modelo nao-standard: segue sem flag
+                    pass
+                if str(config.get("asr_device") or "auto") == "cuda":
+                    self.device_combo.setCurrentIndex(
+                        max(0, self.device_combo.findData("auto")))
             grid.addWidget(QLabel("Dispositivo:"), 1, 0)
             grid.addWidget(self.device_combo, 1, 1)
 
@@ -3145,7 +3160,7 @@ if QT_IMPORT_ERROR is None:
 
             layout.addWidget(advanced_group)
 
-            hint = QLabel("Batch controla quantos trechos o Whisper processa por vez. Aumentar pode acelerar em GPU com memoria sobrando; reduzir evita falta de memoria. Para computador sem GPU NVIDIA, use CPU com int8 ou float32.")
+            hint = QLabel("Batch controla quantos trechos o Whisper processa por vez. Aumentar pode acelerar em GPU com memoria sobrando; reduzir evita falta de memoria. Para computador sem GPU NVIDIA, use CPU com int8 ou float32. Você pode alternar entre CUDA e CPU aqui a qualquer momento — o selo \"Motor\" no topo da janela mostra o que está em uso e abre esta tela.")
             hint.setStyleSheet(_style_muted())
             hint.setWordWrap(True)
             layout.addWidget(hint)
@@ -5511,6 +5526,9 @@ if QT_IMPORT_ERROR is None:
             self.project_label = QLabel(self.project_header_text())
             self.project_label.setStyleSheet(_style_muted())
             self.project_label.setTextFormat(Qt.TextFormat.RichText)
+            self.project_label.setToolTip(
+                "Clique em \"Modelo\" ou \"Motor\" para configurar a transcrição "
+                "(modelo Whisper, dispositivo CUDA/CPU, idioma).")
             self.project_label.linkActivated.connect(lambda _link: self.configure_engine())
             header.addWidget(self.project_label)
             root_layout.addLayout(header)
@@ -5741,12 +5759,16 @@ if QT_IMPORT_ERROR is None:
             backend = _runtime_local.describe_backend(asr_device)
             # Color the backend badge: green for GPU acceleration, amber when
             # only CPU is available so the user sees it at a glance.
+            # E um LINK (mesmo destino do "Modelo"): o seletor CUDA/CPU
+            # sempre existiu no dialogo do Motor, mas o selo nao-clicavel
+            # o tornava indescobrivel (teste real 2026-08-30).
             is_accel = "CUDA" in backend or "MLX" in backend
             badge_color = "#2e7d32" if is_accel else "#b8860b"
             badge = (
-                f'<span style="color:{badge_color};font-weight:600;">'
+                f'<a href="engine-settings" style="color:{badge_color};'
+                f'font-weight:600;text-decoration:underline;">'
                 f'Motor: {backend}'
-                f'</span>'
+                f'</a>'
             )
             return (f"Projeto: {name}  |  "
                     f'<a href="engine-settings" style="color:#888;text-decoration:underline;">Modelo: {model}</a>'

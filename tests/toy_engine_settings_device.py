@@ -1,0 +1,75 @@
+"""Toy test: combo Dispositivo honesto + selo Motor clicavel (SL-E).
+
+Bugs originais: o combo oferecia "GPU NVIDIA (CUDA)" mesmo em maquina
+sem placa (escolha que so falharia depois), e o selo "Motor: ..." do
+cabecalho nao era clicavel — o proprio autor nao achou como alternar
+para CPU (o seletor sempre existiu no dialogo do Motor).
+"""
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+try:
+    from PySide6.QtWidgets import QApplication
+except ImportError as exc:  # pragma: no cover - CI minimo sem Qt
+    print(f"SKIP: PySide6 ausente ({exc})")
+    sys.exit(0)
+
+from transcribe_pipeline.review_studio_qt import EngineSettingsDialog, ReviewStudioWindow
+
+app = QApplication.instance() or QApplication([])
+
+
+def _item_cuda(dlg):
+    idx = dlg.device_combo.findData("cuda")
+    assert idx >= 0
+    return dlg.device_combo.model().item(idx)
+
+
+# --- sem GPU: item CUDA desabilitado com motivo; config "cuda" cai p/ auto ---
+os.environ["TRANSCRITORIO_FAKE_HARDWARE"] = "cpu"
+dlg = EngineSettingsDialog({"asr_device": "cuda"})
+assert _item_cuda(dlg).isEnabled() is False
+assert "NVIDIA" in _item_cuda(dlg).toolTip()
+assert dlg.device_combo.currentData() == "auto", dlg.device_combo.currentData()
+# CPU continua escolhivel
+assert dlg.device_combo.findData("cpu") >= 0
+print("PASS: sem GPU o CUDA fica desabilitado com motivo e cai para auto")
+
+# --- com GPU: CUDA habilitado e escolha preservada ---
+os.environ["TRANSCRITORIO_FAKE_HARDWARE"] = "gpu8"
+dlg2 = EngineSettingsDialog({"asr_device": "cuda"})
+assert _item_cuda(dlg2).isEnabled() is True
+assert dlg2.device_combo.currentData() == "cuda"
+# quem TEM CUDA pode escolher CPU (pedido do usuario 2026-08-30)
+dlg2.device_combo.setCurrentIndex(dlg2.device_combo.findData("cpu"))
+assert dlg2.updates()["asr_device"] == "cpu"
+del os.environ["TRANSCRITORIO_FAKE_HARDWARE"]
+print("PASS: com GPU a alternancia CUDA<->CPU funciona")
+
+# --- selo "Motor" do cabecalho e um LINK para engine-settings ---
+class _Janela:
+    project_header_text = ReviewStudioWindow.project_header_text
+
+    def __init__(self):
+        from types import SimpleNamespace
+        self.context = SimpleNamespace(
+            project={"project_name": "Teste"},
+            config={"asr_model": "tiny", "asr_device": "auto"},
+            paths=SimpleNamespace(project_root=Path("C:/tmp/teste")),
+        )
+
+
+html = _Janela().project_header_text()
+assert 'href="engine-settings"' in html
+# o selo Motor precisa estar DENTRO de um <a> (dois links: Modelo e Motor)
+assert html.count('href="engine-settings"') >= 2, html
+assert "Motor:" in html
+print("PASS: selo Motor virou link para a configuracao")
+
+print("PASS: toy_engine_settings_device")
