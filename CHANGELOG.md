@@ -8,6 +8,27 @@ assinatura digital, e o SignPath recusou a assinatura gratuita. O canal
 oficial passa a ser **PyPI + uv** (`uv tool install transcritorio`); ver
 `docs/INSTALL_WINDOWS.md` e `docs/LEGACY_STANDALONE.md`.
 
+- **Checagem geral pós-lote** (três varreduras exaustivas; ~50 achados,
+  criticos corrigidos): "Perguntar" agora oferece o modelo de análise
+  ANTES do preparo do encoder (ordem de gates invertida escondia a
+  oferta) e nenhum clique fica mudo (pergunta vazia, Enter em botão
+  desabilitado); o gate de modelos propaga o escopo ao preparador (fim
+  do beco "não há nada para baixar" do Melhorar falantes) e a ação
+  original é RETOMADA sozinha quando o download termina; VRAM abaixo do
+  mínimo virou aviso "por sua conta e risco" (não veto — placa de 4 GB
+  com o modelo baixado volta a funcionar); gerenciador baixa também o
+  alinhador e a separação de falantes pendentes e mostra downloads
+  parciais como "Incompleto" com retomada; cancelar um job não marca
+  mais "Falha" nem abre diálogos de resultado; a causa real de uma
+  falha aparece no aviso e a mensagem final não é mais apagada pelo
+  refresh; "Atualizar transcrição editável" e "Reprocessar falantes"
+  passam a atualizar o que o usuário vê; ações destrutivas habilitam
+  pela mesma régua que executam (e o botão direito age na linha
+  clicada); disco removido/config sumida/arquivo travado não quebram
+  mais em silêncio; editor congelado durante retranscrição do arquivo
+  aberto (fim da corrida que perdia texto digitado); drop zone lista só
+  os formatos realmente aceitos; "Mostrar no Explorer" seleciona o
+  arquivo de verdade.
 - **Coerência de funcionalidades** (lote pós-teste real do primeiro uso):
   - Todos os gates de clique de IA passam pelo registro de capacidades:
     a memória de vídeo mínima entra na decisão (uma GPU de 2 GB não
