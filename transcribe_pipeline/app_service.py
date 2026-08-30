@@ -354,14 +354,47 @@ def models_status_text(
     asr_variants: list[str] | None = None,
     include_diarization: bool = True,
     include_alignment: bool = True,
+    align_languages: tuple[str, ...] | None = None,
 ) -> str:
     return model_manager.status_text(
         asr_variants=asr_variants, include_diarization=include_diarization,
-        include_alignment=include_alignment)
+        include_alignment=include_alignment, align_languages=align_languages)
 
 
-def required_models_ready(asr_variants: list[str] | None = None, include_diarization: bool = True, include_alignment: bool = True) -> bool:
-    return model_manager.all_required_models_cached(asr_variants=asr_variants, include_diarization=include_diarization, include_alignment=include_alignment)
+def required_models_ready(asr_variants: list[str] | None = None, include_diarization: bool = True, include_alignment: bool = True, align_languages: tuple[str, ...] | None = None) -> bool:
+    return model_manager.all_required_models_cached(asr_variants=asr_variants, include_diarization=include_diarization, include_alignment=include_alignment, align_languages=align_languages)
+
+
+def alignment_languages_for(context: ProjectContext, ids: list[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Idiomas de alinhamento exigidos pelo LOTE (etapa 4).
+
+    Retorna (suportados, avisos): "suportados" sao os codigos com pacote
+    de alinhamento que o gate deve exigir/oferecer; "avisos" sao os
+    casos que sairao SEM tempos por palavra ("automático" ou codigo sem
+    pacote) — a GUI informa ANTES do job, em vez do ValueError tardio.
+    Considera o default do projeto e o metadado por arquivo (coluna
+    language: vazio/"project" herdam; "auto" = detecção)."""
+    default_raw = (context.config or {}).get("asr_language")
+    suportadas: set[str] = set()
+    avisos: set[str] = set()
+    for interview_id in ids:
+        meta = (context.metadata.get(interview_id) or {})
+        lang_meta = str(meta.get("language") or "").strip()
+        if lang_meta in ("", "project"):
+            lang = default_raw
+        elif lang_meta == "auto":
+            lang = None
+        else:
+            lang = lang_meta
+        if lang is None:
+            avisos.add("automático")
+            continue
+        code = model_manager.normalize_language(lang)
+        if model_manager.align_language_supported(code):
+            suportadas.add(code)
+        else:
+            avisos.add(code)
+    return tuple(sorted(suportadas)), tuple(sorted(avisos))
 
 
 def download_models(
@@ -371,11 +404,12 @@ def download_models(
     asr_variants: list[str] | None = None,
     include_diarization: bool = True,
     include_alignment: bool = True,
+    align_languages: tuple[str, ...] | None = None,
 ) -> JobResult:
-    failures = model_manager.download_required_models(token=token, progress_callback=progress_callback, should_cancel=should_cancel, asr_variants=asr_variants, include_diarization=include_diarization, include_alignment=include_alignment)
+    failures = model_manager.download_required_models(token=token, progress_callback=progress_callback, should_cancel=should_cancel, asr_variants=asr_variants, include_diarization=include_diarization, include_alignment=include_alignment, align_languages=align_languages)
     if failures:
         return JobResult("models", failures, "Falha ao baixar um ou mais modelos.")
-    verify_failures = model_manager.verify_required_models(progress_callback=progress_callback, asr_variants=asr_variants, include_diarization=include_diarization, include_alignment=include_alignment)
+    verify_failures = model_manager.verify_required_models(progress_callback=progress_callback, asr_variants=asr_variants, include_diarization=include_diarization, include_alignment=include_alignment, align_languages=align_languages)
     # Ternario CRITICO: sem isto a mensagem seria "Modelos prontos..."
     # mesmo em falha, causando UI mostrar sucesso como erro. Bug visto
     # pelo Rogerio em 2026-04-22 depois do download completar mas verify

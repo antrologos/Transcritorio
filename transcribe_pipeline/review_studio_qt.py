@@ -4477,6 +4477,7 @@ if QT_IMPORT_ERROR is None:
             asr_variants: list[str] | None = None,
             include_diarization: bool = True,
             include_alignment: bool = True,
+            align_languages: tuple[str, ...] | None = None,
         ) -> None:
             super().__init__(parent)
             self.setWindowTitle("Preparar modelos locais")
@@ -4492,12 +4493,14 @@ if QT_IMPORT_ERROR is None:
                 "asr_variants": asr_variants,
                 "include_diarization": include_diarization,
                 "include_alignment": include_alignment,
+                "align_languages": align_languages,
             }
             try:
                 pendentes = [item for item in _mm.status(
                     asr_variants=asr_variants,
                     include_diarization=include_diarization,
-                    include_alignment=include_alignment) if not item.cached]
+                    include_alignment=include_alignment,
+                    align_languages=align_languages) if not item.cached]
                 self._nada_pendente = not pendentes
             except Exception:  # noqa: BLE001 - config invalida nao trava o dialogo
                 pendentes = []
@@ -5549,7 +5552,8 @@ if QT_IMPORT_ERROR is None:
 
         def show_model_setup(self, asr_variants: list[str] | None = None,
                              include_diarization: bool | None = None,
-                             include_alignment: bool | None = None) -> None:
+                             include_alignment: bool | None = None,
+                             align_languages: tuple[str, ...] | None = None) -> None:
             # Escopo parametrizavel (F2): ensure_models_ready passa o SEU —
             # recalcular aqui do zero fazia "Melhorar falantes" (que exige
             # diarizacao) cair num dialogo "nao ha nada para baixar".
@@ -5562,9 +5566,17 @@ if QT_IMPORT_ERROR is None:
                          if include_diarization is None else bool(include_diarization))
             scope_align = (_settings.alignment_default()
                            if include_alignment is None else bool(include_alignment))
+            # Idiomas do lote (etapa 4): default = o do projeto.
+            scope_langs = align_languages
+            if scope_langs is None and self.context is not None:
+                from . import model_manager as _mm_lang
+                code = _mm_lang.normalize_language(
+                    (self.context.config or {}).get("asr_language"))
+                scope_langs = (code,) if code else None
             dialog = ModelSetupDialog(
                 self, asr_variants=scope_variants,
-                include_diarization=scope_dia, include_alignment=scope_align)
+                include_diarization=scope_dia, include_alignment=scope_align,
+                align_languages=scope_langs)
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 return
             token = dialog.token()
@@ -5573,13 +5585,14 @@ if QT_IMPORT_ERROR is None:
                 [
                     (
                         "Baixando e verificando modelos locais...",
-                        lambda progress, should_cancel, hf_token=token, variants=scope_variants, include_dia=scope_dia, include_align=scope_align: app_service.download_models(
+                        lambda progress, should_cancel, hf_token=token, variants=scope_variants, include_dia=scope_dia, include_align=scope_align, langs=scope_langs: app_service.download_models(
                             token=hf_token,
                             progress_callback=progress,
                             should_cancel=should_cancel,
                             asr_variants=variants,
                             include_diarization=include_dia,
                             include_alignment=include_align,
+                            align_languages=langs,
                         ),
                         True,
                     )
@@ -5635,12 +5648,15 @@ if QT_IMPORT_ERROR is None:
 
         def ensure_models_ready(self, require_diarization: bool | None = None,
                                 asr_variants: list[str] | None = None,
-                                retry: Callable[[], None] | None = None) -> bool:
+                                retry: Callable[[], None] | None = None,
+                                align_languages: tuple[str, ...] | None = None) -> bool:
             """Gate de modelos obrigatorios da acao que esta comecando.
 
             retry: a PROPRIA acao, para ser reexecutada quando o download
             (assincrono) terminar — o re-teste imediato antigo nunca via o
-            download pronto e a acao morria em silencio."""
+            download pronto e a acao morria em silencio.
+            align_languages (etapa 4): pacotes de idioma exigidos pelo
+            LOTE (default: idioma do projeto, "pt" na duvida)."""
             if not self.ensure_ffmpeg():
                 return False
             # asr_variants: quem vai transcrever com um modelo DIFERENTE do
@@ -5654,13 +5670,15 @@ if QT_IMPORT_ERROR is None:
             from . import app_settings as _settings
             include_align = _settings.alignment_default()
             if app_service.required_models_ready(variants, include_diarization=include_dia,
-                                                 include_alignment=include_align):
+                                                 include_alignment=include_align,
+                                                 align_languages=align_languages):
                 return True
             from . import model_manager as _mm
             partial = False
             try:
                 partial = _mm.has_partial_cache(asr_variants=variants, include_diarization=include_dia,
-                                                include_alignment=include_align)
+                                                include_alignment=include_align,
+                                                align_languages=align_languages)
             except Exception:
                 partial = False
             if partial:
@@ -5681,7 +5699,8 @@ if QT_IMPORT_ERROR is None:
                     faltando = [item for item in _mm.status(
                         asr_variants=variants,
                         include_diarization=include_dia,
-                        include_alignment=include_align) if not item.cached]
+                        include_alignment=include_align,
+                        align_languages=align_languages) if not item.cached]
                 except Exception:  # noqa: BLE001
                     faltando = []
                 if faltando:
@@ -5702,9 +5721,11 @@ if QT_IMPORT_ERROR is None:
                 self._retry_after_models = retry
                 self.show_model_setup(asr_variants=variants,
                                       include_diarization=include_dia,
-                                      include_alignment=include_align)
+                                      include_alignment=include_align,
+                                      align_languages=align_languages)
                 if app_service.required_models_ready(variants, include_diarization=include_dia,
-                                                     include_alignment=include_align):
+                                                     include_alignment=include_align,
+                                                     align_languages=align_languages):
                     # Caso raro (cache ficou completo sem download novo).
                     self._retry_after_models = None
                     self._invalidate_capability_cache()
@@ -7969,15 +7990,17 @@ if QT_IMPORT_ERROR is None:
             estado_cache = getattr(self, "_caps_cache", None)
             if estado_cache is None:
                 variante = None
+                idioma = None
                 try:
                     if self.context is not None:
                         variante = str(self.context.config.get("asr_model") or "") or None
+                        idioma = self.context.config.get("asr_language")
                 except Exception:  # noqa: BLE001
                     variante = None
                 estado_cache = (
                     _caps.hardware_snapshot(),
-                    _caps.cached_model_keys(variante),
-                    _caps.model_sizes_from_registry(variante),
+                    _caps.cached_model_keys(variante, idioma),
+                    _caps.model_sizes_from_registry(variante, idioma),
                 )
                 self._caps_cache = estado_cache
             hardware, em_cache, tamanhos = estado_cache
@@ -9206,16 +9229,31 @@ if QT_IMPORT_ERROR is None:
             # que e a pasta A/B 02_asr_variants exclusiva da CLI.
             if not self.save_current_turn():
                 return
-            if not self.ensure_models_ready(
-                    asr_variants=[asr_model] if asr_model else None,
-                    retry=lambda i=ids, m=asr_model, c=confirmed_recreate:
-                        self.run_full_transcription_job(ids=i, asr_model=m,
-                                                        confirmed_recreate=c)):
-                return
             ids = ids or self.selected_ids_for_job(fallback_current=True)
             if not ids:
                 QMessageBox.information(self, "Selecione uma entrevista", "Selecione uma entrevista para transcrever.")
                 return
+            # Etapa 4: o gate considera os IDIOMAS do lote (default do
+            # projeto + metadado por arquivo) — pacote de alinhamento
+            # faltante e oferecido ANTES; idioma sem pacote e avisado
+            # ANTES (o WhisperX antigo estourava DEPOIS de transcrever).
+            langs_lote, avisos_idioma = app_service.alignment_languages_for(self.context, ids)
+            if not self.ensure_models_ready(
+                    asr_variants=[asr_model] if asr_model else None,
+                    align_languages=langs_lote,
+                    retry=lambda i=list(ids), m=asr_model, c=confirmed_recreate:
+                        self.run_full_transcription_job(ids=i, asr_model=m,
+                                                        confirmed_recreate=c)):
+                return
+            from . import app_settings as _settings_e4
+            if avisos_idioma and _settings_e4.alignment_default():
+                QMessageBox.information(
+                    self, "Sem tempos por palavra",
+                    "Alguns arquivos deste lote serão transcritos SEM tempos "
+                    f"por palavra (idioma: {', '.join(avisos_idioma)}).\n\n"
+                    "O texto e os tempos por bloco saem normalmente. Idiomas "
+                    "com pacote de alinhamento podem ser escolhidos no Motor "
+                    "(link \"Modelo\"/\"Motor\" no topo).")
             # Retranscrever e uma decisao EXPLICITA (pipeline-safety): o
             # baseline sera sobrescrito e a transcricao editavel recriada.
             # confirmed_recreate=True vem de fluxos que ja avisaram

@@ -17,6 +17,40 @@ from .utils import append_jsonl, now_utc, run_command_stream
 ProgressCallback = Callable[[dict[str, Any]], None]
 
 
+def resolve_align_action(config: dict, cache_dir=None) -> tuple[str, str, str]:
+    """Decisao de alinhamento ANTES de transcrever (etapa 4). Testavel.
+
+    Retorna (acao, valor, motivo):
+    - ("explicit", repo, "")  : asr_align_model definido (rota expert da CLI)
+    - ("model", repo, "")     : pacote do idioma em cache -> --align_model
+    - ("no_align", "", motivo): sem tempos por palavra, com o porque
+
+    Regras: Automatico (idioma None) NUNCA alinha — o WhisperX sem
+    --language alinharia com INGLES e baixaria pesos da pytorch.org em
+    runtime; e nos nunca deixamos o WhisperX baixar alinhador (rotas
+    nao-pinadas). Idioma sem pacote transcreve normalmente, so sem
+    tempos por palavra.
+    """
+    if config.get("asr_align_model"):
+        return ("explicit", str(config["asr_align_model"]), "")
+    language = config.get("asr_language")
+    lang = model_manager.normalize_language(language)
+    if not lang:
+        return ("no_align", "",
+                "idioma Automático: a detecção não permite alinhador confiável")
+    if not model_manager.align_language_supported(lang):
+        return ("no_align", "", f"sem pacote de alinhamento para o idioma '{lang}'")
+    asset = model_manager.align_asset_for(lang)
+    try:
+        path = model_manager.cached_snapshot_path(
+            asset.repo_id, cache_dir, revision=asset.revision)
+        if path and model_manager._snapshot_has_weights(path):
+            return ("model", asset.repo_id, "")
+    except Exception:  # noqa: BLE001 - cache ilegivel = tratar como ausente
+        pass
+    return ("no_align", "", f"pacote de alinhamento de '{lang}' não instalado")
+
+
 def run_whisperx(
     rows: list[dict[str, str]],
     config: dict,
@@ -43,21 +77,6 @@ def run_whisperx(
 
     failures = 0
     token_env = str(config["model_download_token_env"])
-
-    def _alignment_cached(cfg: dict) -> bool:
-        """O alinhador do idioma esta em cache? So conhecemos o do
-        portugues (alignment_pt); para outros idiomas, manter o
-        comportamento atual — o tratamento por idioma e a etapa 4."""
-        language = str(cfg.get("asr_language") or "pt").strip().lower()
-        if language != "pt":
-            return True
-        try:
-            asset = next(a for a in model_manager._FIXED_MODELS if a.key == "alignment_pt")
-            path = model_manager.cached_snapshot_path(
-                asset.repo_id, None, revision=asset.revision)
-            return bool(path and model_manager._snapshot_has_weights(path))
-        except Exception:  # noqa: BLE001 - em duvida, nao mudar o comando
-            return True
     cache_only = bool(config.get("asr_model_cache_only", True))
     model_cache_dir = str(config.get("model_cache_dir") or runtime.model_cache_dir())
     runtime.apply_secure_hf_environment(offline=cache_only, token_env=token_env)
@@ -121,16 +140,18 @@ def run_whisperx(
         add_optional_arg(command, "--vad_onset", config.get("asr_vad_onset"))
         add_optional_arg(command, "--vad_offset", config.get("asr_vad_offset"))
         add_optional_arg(command, "--chunk_size", config.get("asr_chunk_size"))
-        add_optional_arg(command, "--align_model", config.get("asr_align_model"))
-        # Perfil essencial / alinhador ausente (etapa 3): sem o modelo de
-        # alinhamento em cache, o WhisperX offline morreria DEPOIS de
-        # transcrever tudo. --no_align degrada com graca: a transcricao sai
-        # com tempos por bloco, sem tempos por palavra.
-        if (cache_only and not config.get("asr_align_model")
-                and not _alignment_cached(config)):
+        # Etapa 4: a decisao de alinhamento acontece ANTES de transcrever —
+        # nunca deixamos o WhisperX escolher (ele alinharia "auto" com
+        # ingles, baixaria pesos nao-pinados da pytorch.org em runtime e
+        # estouraria ValueError DEPOIS da transcricao em idiomas sem
+        # alinhador). --no_align degrada com graca: tempos por bloco.
+        align_acao, align_valor, align_motivo = resolve_align_action(config)
+        if align_acao in ("explicit", "model"):
+            command.extend(["--align_model", align_valor])
+        else:
             command.append("--no_align")
-            print(f"[Transcritorio] Modelo de alinhamento nao instalado; transcrevendo "
-                  f"{row['interview_id']} sem tempos por palavra.")
+            print(f"[Transcritorio] Transcrevendo {row['interview_id']} sem "
+                  f"tempos por palavra ({align_motivo}).")
         if config.get("diarize", True):
             command.append("--diarize")
             add_optional_arg(command, "--min_speakers", config.get("min_speakers"))
@@ -167,6 +188,12 @@ def run_whisperx(
                 # configurados — o log deve registrar o que realmente rodou.
                 "compute_type": compute_type,
                 "batch_size": batch_size,
+                # Etapa 4: registrar o idioma e a decisao de alinhamento
+                # EFETIVOS — o JSON do WhisperX nao preserva o idioma
+                # detectado, entao este log e a unica trilha auditavel.
+                "language": model_manager.normalize_language(config.get("asr_language")) or "auto",
+                "align": (align_valor if align_acao in ("explicit", "model")
+                          else f"no_align: {align_motivo}"),
                 "variant": config.get("asr_variant") or "",
                 "output_dir": str(output_dir),
                 "command": redacted,

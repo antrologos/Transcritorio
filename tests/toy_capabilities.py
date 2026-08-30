@@ -18,7 +18,10 @@ MINIMA = cap.Hardware(has_gpu=False, vram_gb=None, ram_gb=4.0, cores=2, free_dis
 GPU_PEQUENA = cap.Hardware(has_gpu=True, vram_gb=2.0, ram_gb=16.0, cores=8, free_disk_gb=90.0)
 GPU_BOA = cap.Hardware(has_gpu=True, vram_gb=8.0, ram_gb=32.0, cores=16, free_disk_gb=400.0)
 
-TAMANHOS = {cap.ASR_MODEL_TOKEN: 3.1, "alignment_pt": 1.4, "diarization": 0.07,
+# Etapa 4: tempos_por_palavra usa o token @align (resolvido pelo idioma
+# configurado), nao mais a chave fixa "alignment_pt".
+TAMANHOS = {cap.ASR_MODEL_TOKEN: 3.1, cap.ALIGN_MODEL_TOKEN: 1.4,
+            "diarization": 0.07,
             "search_encoder": 0.5, "ner_gliner": 1.1, "llm_qwen": 8.7}
 
 # --- registro coerente ---

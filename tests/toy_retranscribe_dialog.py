@@ -65,7 +65,7 @@ class _JanelaGate:
 recebidos: list[list[str]] = []
 
 
-def _fake_ready(variants, include_diarization, include_alignment):
+def _fake_ready(variants, include_diarization, include_alignment, align_languages=None):
     recebidos.append(list(variants))
     return True
 

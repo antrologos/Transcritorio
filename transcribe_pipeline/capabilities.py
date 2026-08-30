@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 ASR_MODEL_TOKEN = "@asr"  # resolvido para a variante escolhida no projeto
+ALIGN_MODEL_TOKEN = "@align"  # resolvido para o pacote do IDIOMA configurado (etapa 4)
 
 # Simulacao de maquina para TESTE do assistente ("cpu", "minimo",
 # "gpu2", "gpu24"...). Sem isso seria impossivel ver, numa maquina boa,
@@ -62,7 +63,9 @@ CAPABILITIES: tuple[Capability, ...] = (
         "tempos_por_palavra",
         "Tempos por palavra",
         "duplo clique numa palavra vai ao áudio; corte no ponto exato",
-        models=("alignment_pt",),
+        # Etapa 4: o modelo e FUNCAO do idioma configurado (@align),
+        # como o @asr e funcao da variante escolhida.
+        models=(ALIGN_MODEL_TOKEN,),
     ),
     Capability(
         "busca_semantica",
@@ -302,8 +305,13 @@ def cpu_speed_warning(hw: Hardware) -> str:
             "levar várias horas — prefira o modelo menor.")
 
 
-def model_sizes_from_registry(asr_variant: str | None = None) -> dict[str, float]:
-    """{chave do modelo: GB} a partir do registro (I/O leve, sem rede)."""
+def model_sizes_from_registry(asr_variant: str | None = None,
+                              align_language: str | None = None) -> dict[str, float]:
+    """{chave do modelo: GB} a partir do registro (I/O leve, sem rede).
+
+    align_language (etapa 4): resolve o @align para o idioma configurado
+    do projeto; sem pacote (auto/idioma exotico) o tamanho e 0.0 — nao
+    ha download que habilite tempos por palavra nesse caso."""
     from . import model_manager
 
     tamanhos: dict[str, float] = {}
@@ -312,10 +320,17 @@ def model_sizes_from_registry(asr_variant: str | None = None) -> dict[str, float
     variante = asr_variant or model_manager.DEFAULT_ASR_VARIANT
     info: dict[str, Any] = model_manager.ASR_VARIANTS.get(variante, {})
     tamanhos[ASR_MODEL_TOKEN] = float(info.get("estimated_gb", 0.0))
+    idioma = model_manager.normalize_language(align_language) or "pt"
+    if model_manager.align_language_supported(idioma):
+        tamanhos[ALIGN_MODEL_TOKEN] = float(
+            model_manager.align_asset_for(idioma).estimated_gb)
+    else:
+        tamanhos[ALIGN_MODEL_TOKEN] = 0.0
     return tamanhos
 
 
-def cached_model_keys(asr_variant: str | None = None) -> set[str]:
+def cached_model_keys(asr_variant: str | None = None,
+                      align_language: str | None = None) -> set[str]:
     """Chaves de modelo ja presentes no cache (I/O de disco, sem rede)."""
     from . import model_manager, runtime
 
@@ -331,6 +346,16 @@ def cached_model_keys(asr_variant: str | None = None) -> set[str]:
     try:
         if variante in model_manager.installed_asr_variants(cache):
             presentes.add(ASR_MODEL_TOKEN)
+    except Exception:  # noqa: BLE001
+        pass
+    idioma = model_manager.normalize_language(align_language) or "pt"
+    try:
+        if model_manager.align_language_supported(idioma):
+            asset = model_manager.align_asset_for(idioma)
+            snap = model_manager.cached_snapshot_path(
+                asset.repo_id, cache, revision=asset.revision)
+            if snap is not None and model_manager._snapshot_has_weights(snap):
+                presentes.add(ALIGN_MODEL_TOKEN)
     except Exception:  # noqa: BLE001
         pass
     return presentes

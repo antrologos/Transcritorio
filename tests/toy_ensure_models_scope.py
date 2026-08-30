@@ -68,7 +68,7 @@ class _Janela:
         pass
 
     def show_model_setup(self, asr_variants=None, include_diarization=None,
-                         include_alignment=None):
+                         include_alignment=None, align_languages=None):
         self.chamadas_setup.append({
             "asr_variants": asr_variants,
             "include_diarization": include_diarization,
@@ -86,7 +86,8 @@ _PENDENTE_DIA = SimpleNamespace(
 
 def _roda(janela, **kwargs):
     with patch.object(rs, "QMessageBox", _FakeQMB), \
-         patch.object(rs.app_service, "required_models_ready", lambda *a, **k: False), \
+         patch.object(rs.app_service, "required_models_ready",
+                      lambda *a, **k: False), \
          patch.object(model_manager, "has_partial_cache", lambda **k: False), \
          patch.object(model_manager, "status", lambda **k: [_PENDENTE_DIA]), \
          patch("transcribe_pipeline.app_settings.alignment_default", lambda: False):

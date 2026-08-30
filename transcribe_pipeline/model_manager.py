@@ -379,7 +379,7 @@ def optional_model(key: str) -> ModelAsset:
 
 
 def asset_by_key(key: str) -> ModelAsset:
-    """Asset por chave, FIXO ou opcional (F4).
+    """Asset por chave, FIXO, opcional ou pacote de idioma (F4/E4).
 
     Permite ao gerenciador baixar por item tambem os fixos ungated
     (ex.: o alinhador pendente numa instalacao essencial — antes nao
@@ -387,7 +387,157 @@ def asset_by_key(key: str) -> ModelAsset:
     for asset in _OPTIONAL_MODELS + _FIXED_MODELS:
         if asset.key == key:
             return asset
+    if key.startswith("alignment_"):
+        lang = key[len("alignment_"):]
+        if align_language_supported(lang):
+            return align_asset_for(lang)
     raise KeyError(f"Modelo desconhecido: {key}")
+
+
+# ---------------------------------------------------------------------------
+# Pacotes de idioma (etapa 4): alinhadores wav2vec2 POR IDIOMA.
+#
+# Rota unica HF (familia jonatasgrosman, Apache-2.0), SHAs pinadas em
+# 2026-08-30 via API do HF — nunca a rota torchaudio do WhisperX, que
+# baixa de download.pytorch.org em runtime, sem pin e imune ao nosso
+# modo offline. O ASR (Whisper) e a diarizacao (pyannote) sao
+# multilingues: idioma NAO custa download neles; so o alinhador e por
+# lingua (~1,2 GB cada, com os excludes que ja economizavam 2,29 GB
+# no pt).
+# ---------------------------------------------------------------------------
+
+_ALIGN_EXCLUDE_BASE: tuple[str, ...] = (
+    "flax_model.msgpack",
+    "tf_model.h5",
+    "language_model/*",
+    "*eval_results*.txt",
+    "log_*.txt",
+    "eval.py",
+    "full_eval.sh",
+)
+
+ALIGN_LANGUAGES: dict[str, dict[str, Any]] = {
+    # code: {label pt-BR, repo, revision (SHA pinada), estimated_gb,
+    #        extra_exclude (opcional)}
+    "pt": {"label": "Português",
+           "repo": "jonatasgrosman/wav2vec2-large-xlsr-53-portuguese",
+           "revision": "634ac655299bcdc46c83bc01da9bab52d2987e4f",
+           "estimated_gb": 1.4},
+    "en": {"label": "Inglês",
+           "repo": "jonatasgrosman/wav2vec2-large-xlsr-53-english",
+           "revision": "569a6236e92bd5f7652a0420bfe9bb94c5664080",
+           # o repo en publica os MESMOS pesos em .bin e .safetensors;
+           # o transformers prefere safetensors — cortar o .bin duplicado.
+           "estimated_gb": 1.2, "extra_exclude": ("pytorch_model.bin",)},
+    "es": {"label": "Espanhol",
+           "repo": "jonatasgrosman/wav2vec2-large-xlsr-53-spanish",
+           "revision": "96d7e9b4e4a78af515a3c6d3cee7c0826045d276",
+           "estimated_gb": 1.2},
+    "fr": {"label": "Francês",
+           "repo": "jonatasgrosman/wav2vec2-large-xlsr-53-french",
+           "revision": "7c79e105a6525d38e1e69f640b974b4a679723cc",
+           "estimated_gb": 1.2},
+    "de": {"label": "Alemão",
+           "repo": "jonatasgrosman/wav2vec2-large-xlsr-53-german",
+           "revision": "4b8a02957378d0f2da2ef74091156b032c485a89",
+           "estimated_gb": 1.2},
+    "it": {"label": "Italiano",
+           "repo": "jonatasgrosman/wav2vec2-large-xlsr-53-italian",
+           "revision": "dab04a3e00d8326052f3fb22a6ff276b822f6131",
+           "estimated_gb": 1.2},
+    "nl": {"label": "Holandês",
+           "repo": "jonatasgrosman/wav2vec2-large-xlsr-53-dutch",
+           "revision": "46f221381d200f7bef268309b3f02023ccf11fcc",
+           "estimated_gb": 1.2},
+    "ar": {"label": "Árabe",
+           "repo": "jonatasgrosman/wav2vec2-large-xlsr-53-arabic",
+           "revision": "af46c2d8531b8dcbb5e23b952f739b372c2e5d2d",
+           "estimated_gb": 1.2},
+    "el": {"label": "Grego",
+           "repo": "jonatasgrosman/wav2vec2-large-xlsr-53-greek",
+           "revision": "489b34fb35fc5876af6193d419772cb9d6d1d531",
+           "estimated_gb": 1.2},
+    "fa": {"label": "Persa",
+           "repo": "jonatasgrosman/wav2vec2-large-xlsr-53-persian",
+           "revision": "234714078a1398a9db88194c5a40fefe6f376dc1",
+           "estimated_gb": 1.2},
+    "fi": {"label": "Finlandês",
+           "repo": "jonatasgrosman/wav2vec2-large-xlsr-53-finnish",
+           "revision": "a497f86c265cffe9f5d6f0162bc7862dc3e11c00",
+           "estimated_gb": 1.2},
+    "hu": {"label": "Húngaro",
+           "repo": "jonatasgrosman/wav2vec2-large-xlsr-53-hungarian",
+           "revision": "2bd0786e71cad097c4e6ce9b3e45b40c74ad8f37",
+           "estimated_gb": 1.2},
+    "ja": {"label": "Japonês",
+           "repo": "jonatasgrosman/wav2vec2-large-xlsr-53-japanese",
+           "revision": "cf031e020336460d15a417eba710bbc5bb43be9a",
+           "estimated_gb": 1.2},
+    "pl": {"label": "Polonês",
+           "repo": "jonatasgrosman/wav2vec2-large-xlsr-53-polish",
+           "revision": "6b1cea36bd8bc5f65ec8081667cd9c0207d51970",
+           "estimated_gb": 1.2},
+    "ru": {"label": "Russo",
+           "repo": "jonatasgrosman/wav2vec2-large-xlsr-53-russian",
+           "revision": "2329100508896c6d9b157019803ab5601e6f3406",
+           "estimated_gb": 1.2},
+    "zh": {"label": "Chinês (mandarim)",
+           "repo": "jonatasgrosman/wav2vec2-large-xlsr-53-chinese-zh-cn",
+           "revision": "99ccb2737be22b8bb50dcfcc39ad4d567fb90cfd",
+           "estimated_gb": 1.2},
+}
+
+
+def normalize_language(language: Any) -> str:
+    return str(language or "").strip().lower()
+
+
+def _ensure_nltk_punkt() -> None:
+    """O alinhamento do WhisperX usa o tokenizer punkt do NLTK e o baixa
+    EM RUNTIME se faltar — rede-surpresa no meio da transcricao (e falha
+    dura numa maquina offline). Provisionar junto do download do pacote
+    de idioma, quando rede e esperada. Falha aqui nunca impede o
+    download do modelo."""
+    try:
+        import nltk
+        try:
+            nltk.data.find("tokenizers/punkt_tab")
+            return
+        except LookupError:
+            pass
+        nltk.download("punkt_tab", quiet=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def align_language_supported(language: Any) -> bool:
+    """Ha pacote de alinhamento para este idioma? (pura)"""
+    return normalize_language(language) in ALIGN_LANGUAGES
+
+
+def align_asset_for(language: Any) -> ModelAsset:
+    """ModelAsset do pacote de alinhamento do idioma (etapa 4).
+
+    Para pt devolve o proprio asset fixo legado (mesma chave
+    "alignment_pt", mesmo cache); demais idiomas sao sintetizados da
+    tabela, no molde dos assets asr_{variant}."""
+    lang = normalize_language(language)
+    spec = ALIGN_LANGUAGES.get(lang)
+    if spec is None:
+        raise KeyError(f"Idioma sem pacote de alinhamento: {language!r}")
+    if lang == "pt":
+        for asset in _FIXED_MODELS:
+            if asset.key == "alignment_pt":
+                return asset
+    return ModelAsset(
+        key=f"alignment_{lang}",
+        label=f"Alinhamento {spec['label']}",
+        repo_id=str(spec["repo"]),
+        purpose="timestamps por palavra",
+        estimated_gb=float(spec["estimated_gb"]),
+        revision=str(spec["revision"]),
+        download_exclude=_ALIGN_EXCLUDE_BASE + tuple(spec.get("extra_exclude") or ()),
+    )
 
 
 def download_optional_model(
@@ -406,6 +556,8 @@ def download_optional_model(
     if asset.gated:
         print(f"{asset.label} exige conta/token: use o preparador de modelos.")
         return 1
+    if key.startswith("alignment_"):
+        _ensure_nltk_punkt()
     cache_dir = runtime.model_cache_dir()
     cache_dir.mkdir(parents=True, exist_ok=True)
     if optional_model_cached(asset, cache_dir):
@@ -478,6 +630,7 @@ def get_required_models(
     asr_variants: list[str] | None = None,
     include_diarization: bool = True,
     include_alignment: bool = True,
+    align_languages: tuple[str, ...] | None = None,
 ) -> tuple[ModelAsset, ...]:
     """Build the list of required models based on selected ASR variants.
 
@@ -485,7 +638,10 @@ def get_required_models(
     entra quando ``include_diarization=True``: quem so quer transcrever nao
     pode ser obrigado a criar conta/token (v0.2, diarizacao opcional).
     ``include_alignment=False`` (perfil essencial): sem tempos por palavra,
-    a transcricao roda com ``--no_align`` — e 1,4 GB a menos de download.
+    a transcricao roda com ``--no_align`` — e ~1,2 GB a menos por idioma.
+    ``align_languages`` (etapa 4): pacotes de idioma exigidos pelo LOTE
+    (default: so pt, compatibilidade com todos os chamadores antigos);
+    idiomas sem pacote sao ignorados aqui — o aviso e da GUI.
     """
     if asr_variants is None:
         asr_variants = [DEFAULT_ASR_VARIANT]
@@ -504,12 +660,21 @@ def get_required_models(
             estimated_gb=info["estimated_gb"],
             revision=info.get("revision"),
         ))
-    skip = set()
-    if not include_diarization:
-        skip.add("diarization")
-    if not include_alignment:
-        skip.add("alignment_pt")
-    assets.extend(a for a in _FIXED_MODELS if a.key not in skip)
+    for asset in _FIXED_MODELS:
+        if asset.key == "diarization" and not include_diarization:
+            continue
+        if asset.key == "alignment_pt":
+            continue  # alinhadores entram pelo bloco de idiomas abaixo
+        assets.append(asset)
+    if include_alignment:
+        linguas = align_languages if align_languages is not None else ("pt",)
+        vistos: set[str] = set()
+        for lang in linguas:
+            code = normalize_language(lang)
+            if code in vistos or not align_language_supported(code):
+                continue
+            vistos.add(code)
+            assets.append(align_asset_for(code))
     return tuple(assets)
 
 
@@ -690,6 +855,7 @@ def has_partial_cache(
     asr_variants: list[str] | None = None,
     include_diarization: bool = True,
     include_alignment: bool = True,
+    align_languages: tuple[str, ...] | None = None,
 ) -> bool:
     """True iff at least one required model has *any* file on disk but no full weight.
 
@@ -697,7 +863,8 @@ def has_partial_cache(
     from 'interrupted' (show 'Retomar download inconcluso?').
     """
     for asset in get_required_models(asr_variants, include_diarization=include_diarization,
-                                     include_alignment=include_alignment):
+                                     include_alignment=include_alignment,
+                                     align_languages=align_languages):
         path = cached_snapshot_path(asset.repo_id, cache_dir, revision=asset.revision)
         if path is None:
             continue
@@ -716,9 +883,11 @@ def status(
     asr_variants: list[str] | None = None,
     include_diarization: bool = True,
     include_alignment: bool = True,
+    align_languages: tuple[str, ...] | None = None,
 ) -> list[ModelStatus]:
     models = get_required_models(asr_variants, include_diarization=include_diarization,
-                                 include_alignment=include_alignment)
+                                 include_alignment=include_alignment,
+                                 align_languages=align_languages)
     result: list[ModelStatus] = []
     for asset in models:
         path = cached_snapshot_path(asset.repo_id, cache_dir, revision=asset.revision)
@@ -732,10 +901,11 @@ def all_required_models_cached(
     asr_variants: list[str] | None = None,
     include_diarization: bool = True,
     include_alignment: bool = True,
+    align_languages: tuple[str, ...] | None = None,
 ) -> bool:
     return all(item.cached for item in status(
         cache_dir, asr_variants=asr_variants, include_diarization=include_diarization,
-        include_alignment=include_alignment))
+        include_alignment=include_alignment, align_languages=align_languages))
 
 
 def status_as_dict(
@@ -743,6 +913,7 @@ def status_as_dict(
     asr_variants: list[str] | None = None,
     include_diarization: bool = True,
     include_alignment: bool = True,
+    align_languages: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     cache = cache_dir or runtime.model_cache_dir()
     return {
@@ -760,7 +931,8 @@ def status_as_dict(
             }
             for item in status(cache, asr_variants=asr_variants,
                                include_diarization=include_diarization,
-                               include_alignment=include_alignment)
+                               include_alignment=include_alignment,
+                               align_languages=align_languages)
         ],
     }
 
@@ -770,10 +942,12 @@ def status_text(
     asr_variants: list[str] | None = None,
     include_diarization: bool = True,
     include_alignment: bool = True,
+    align_languages: tuple[str, ...] | None = None,
 ) -> str:
     data = status_as_dict(cache_dir, asr_variants=asr_variants,
                           include_diarization=include_diarization,
-                          include_alignment=include_alignment)
+                          include_alignment=include_alignment,
+                          align_languages=align_languages)
     lines = [f"Cache de modelos: {data['cache_dir']}"]
     for item in data["models"]:
         state = "baixado" if item["cached"] else "pendente"
@@ -817,16 +991,25 @@ def friendly_name(key: str) -> str:
     fixed = _FRIENDLY_FIXED_MODELS.get(key)
     if fixed:
         return fixed
+    if key.startswith("alignment_"):
+        spec = ALIGN_LANGUAGES.get(key[len("alignment_"):])
+        if spec:
+            return (f"Alinhamento de tempo ({spec['label']}, "
+                    f"{spec['estimated_gb']:.1f} GB)".replace(".", ","))
     return key
 
 
 def _known_repos() -> set[str]:
-    """Conjunto de repo_ids conhecidos (ASR + fixos + opcionais)."""
+    """Conjunto de repo_ids conhecidos (ASR + fixos + opcionais + idiomas)."""
     known: set[str] = set()
     for info in ASR_VARIANTS.values():
         repo = info.get("repo")
         if repo:
             known.add(str(repo))
+    # Pacotes de idioma (etapa 4): sem isto, alinhadores de outros
+    # idiomas virariam "orfaos" e a limpeza os apagaria.
+    for spec in ALIGN_LANGUAGES.values():
+        known.add(str(spec["repo"]))
     for asset in _FIXED_MODELS + _OPTIONAL_MODELS:
         if asset.repo_id:
             known.add(str(asset.repo_id))
@@ -1282,6 +1465,7 @@ def download_required_models(
     asr_variants: list[str] | None = None,
     include_diarization: bool = True,
     include_alignment: bool = True,
+    align_languages: tuple[str, ...] | None = None,
 ) -> int:
     cache_dir = runtime.model_cache_dir()
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -1296,7 +1480,10 @@ def download_required_models(
     _clear_stale_hf_locks(cache_dir)
     token_value = token if token is not None else os.environ.get(token_env)
     models = get_required_models(asr_variants, include_diarization=include_diarization,
-                                 include_alignment=include_alignment)
+                                 include_alignment=include_alignment,
+                                 align_languages=align_languages)
+    if any(a.key.startswith("alignment_") for a in models):
+        _ensure_nltk_punkt()
     failures = 0
     total = max(1, len(models))
     # Compute per-model progress ranges weighted by estimated size
@@ -1390,6 +1577,7 @@ def verify_required_models(
     asr_variants: list[str] | None = None,
     include_diarization: bool = True,
     include_alignment: bool = True,
+    align_languages: tuple[str, ...] | None = None,
 ) -> int:
     """Verifica se os modelos obrigatorios estao no cache local.
 
@@ -1405,7 +1593,8 @@ def verify_required_models(
     # baixou/configurou — verificar sempre REQUIRED_MODELS (default) gerava
     # falha falsa apos download bem-sucedido de outra variante.
     assets = get_required_models(asr_variants, include_diarization=include_diarization,
-                                 include_alignment=include_alignment)
+                                 include_alignment=include_alignment,
+                                 align_languages=align_languages)
     total = max(1, len(assets))
     _download_diag_log(f"[verify] start cache_dir={cache_dir} assets={total}")
     for index, asset in enumerate(assets, start=1):
