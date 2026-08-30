@@ -6374,8 +6374,24 @@ if QT_IMPORT_ERROR is None:
                     self.project_label.setText(self.project_header_text())
                 self.update_action_states()
                 return
-            self.context = app_service.load_project(config_path=self.context.config_path)
-            self.statuses = app_service.list_interviews(self.context)
+            try:
+                self.context = app_service.load_project(config_path=self.context.config_path)
+                self.statuses = app_service.list_interviews(self.context)
+                self._refresh_error_shown = False
+            except Exception as exc:  # noqa: BLE001 - volume removido/sem permissao
+                # load_project faz mkdir/escrita e refresh roda de ~15
+                # lugares: um pendrive/Dropbox indisponivel derrubava o slot
+                # em silencio (excepthook sem console) e a janela ficava
+                # meio-atualizada. Avisar UMA vez e manter o estado atual.
+                _logger.warning("refresh_interviews: projeto inacessivel: %s", exc)
+                if not getattr(self, "_refresh_error_shown", False):
+                    self._refresh_error_shown = True
+                    QMessageBox.warning(
+                        self, "Projeto inacessível",
+                        "Não foi possível reler a pasta do projeto — o disco pode "
+                        "ter sido removido ou estar sem permissão de escrita.\n\n"
+                        f"{sanitize_message(str(exc))}")
+                return
             self._status_map = {s.interview_id: s for s in self.statuses}
             if hasattr(self, "project_label"):
                 self.project_label.setText(self.project_header_text())
@@ -9180,7 +9196,9 @@ if QT_IMPORT_ERROR is None:
             steps: list[tuple] = []
             weights: list[int] = []
             # Dynamic weights from benchmark data (tests/benchmark_exhaustive_2026-04-19.csv)
-            asr_model = asr_model or str(self.context.config.get("asr_model", "large-v3-turbo"))
+            # `or` DENTRO do str(): config com `asr_model: null` virava a
+            # string "None" nos overrides.
+            asr_model = asr_model or str(self.context.config.get("asr_model") or "large-v3-turbo")
             # _pipeline_weights espera o device EFETIVO ("cuda"/"cpu") — com o
             # default "auto" (v0.2+) e preciso resolver antes do lookup.
             from . import runtime as _runtime_w

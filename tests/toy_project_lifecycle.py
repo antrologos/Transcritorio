@@ -76,4 +76,25 @@ with tempfile.TemporaryDirectory() as tmp:
     assert reaberto2.paths.project_root == root
 print("PASS: open_project sem auto-criacao")
 
+# --- run_config.yaml sumido: recriar com os defaults da MAQUINA (F8) ---
+# Os defaults de fabrica ressetavam um projeto essencial para turbo +
+# diarizacao, e o usuario so descobria no gate de download.
+import tempfile as _tf2
+
+from unittest.mock import patch as _patch
+
+with _tf2.TemporaryDirectory() as tmp:
+    root = Path(tmp) / "Sumiu.transcricao"
+    app_service.create_project(root, project_name="Sumiu")
+    config_path = root / "Transcricoes" / "00_config" / "run_config.yaml"
+    assert config_path.exists()
+    config_path.unlink()  # sync/limpeza levou o arquivo
+    with _patch("transcribe_pipeline.app_settings.asr_model_default", lambda: "tiny"), \
+         _patch("transcribe_pipeline.app_settings.diarize_default", lambda: False):
+        ctx = app_service.load_project(config_path=config_path)
+    assert ctx.config.get("asr_model") == "tiny", ctx.config.get("asr_model")
+    assert ctx.config.get("diarize") is False
+    assert config_path.exists(), "config nao foi regravada"
+print("PASS: config sumida herda os defaults da maquina")
+
 print("PASS: toy_project_lifecycle")

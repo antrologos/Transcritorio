@@ -65,6 +65,13 @@ def load_project(config_path: Path | None = None, project_root: Path | None = No
     paths = make_paths(config, base_dir=infer_project_root_from_config_path(config_path))
     ensure_directories(paths)
     if not config_path.exists():
+        # run_config.yaml sumiu (sync/limpeza): recriar com os defaults da
+        # MAQUINA (mesma herenca do create_project) — os de fabrica
+        # ressetavam um projeto essencial para turbo + diarizacao, e o
+        # usuario so descobria quando o gate pedia 3,1 GB + token.
+        from . import app_settings
+        config["asr_model"] = app_settings.asr_model_default()
+        config["diarize"] = app_settings.diarize_default()
         write_config(config_path, config, header=["# Local transcription pipeline configuration."])
     write_empty_speaker_map(paths.manifest_dir / "speakers_map.csv")
     manifest_path = paths.manifest_dir / "manifest.csv"
@@ -480,6 +487,7 @@ def delete_transcription_outputs(context: ProjectContext, ids: list[str]) -> tup
     from .search import index_dir
 
     deleted = 0
+    bloqueados: list[str] = []
     paths = context.paths
     dirs_to_clean = [
         paths.asr_dir,
@@ -504,8 +512,14 @@ def delete_transcription_outputs(context: ProjectContext, ids: list[str]) -> tup
                 if f.parent.name == "backups":
                     continue  # copias de seguranca sobrevivem a limpeza
                 if f.is_file() and is_interview_artifact(f.name, interview_id):
-                    f.unlink()
-                    deleted += 1
+                    try:
+                        f.unlink()
+                        deleted += 1
+                    except OSError:
+                        # Handle aberto (Word/antivirus/indexador no
+                        # Dropbox): terminar o resto e reportar no fim,
+                        # em vez de abortar a limpeza pela metade.
+                        bloqueados.append(str(f))
         context = update_job(context, interview_id, {
             "status": "Pendente",
             "stage": "",
@@ -515,6 +529,13 @@ def delete_transcription_outputs(context: ProjectContext, ids: list[str]) -> tup
             "last_error": "",
             "estimated_finish_at": "",
         })
+    if bloqueados:
+        listagem = "\n".join(bloqueados[:10])
+        extra = f"\n(+{len(bloqueados) - 10} outros)" if len(bloqueados) > 10 else ""
+        raise RuntimeError(
+            f"{deleted} arquivo(s) apagado(s), mas {len(bloqueados)} nao "
+            "puderam ser removidos (abertos em outro programa?):\n"
+            f"{listagem}{extra}\nFeche-os e repita a limpeza.")
     return deleted, context
 
 

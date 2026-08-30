@@ -88,4 +88,23 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "E1.waveform.json" in originais, originais
     print("PASS: lixeira enxerga o waveform cache real")
 
+    # --- arquivo TRAVADO (handle aberto): limpeza termina o resto e
+    # reporta o que ficou, em vez de abortar pela metade (F8) ---
+    (paths.asr_dir / "E2.json").write_text("{}", encoding="utf-8")
+    (paths.asr_dir / "E2.srt").write_text("", encoding="utf-8")
+    jobs_gravados.clear()
+    with (paths.asr_dir / "E2.json").open("r", encoding="utf-8"):
+        travado = None
+        with patch.object(app_service, "update_job", _fake_update_job):
+            try:
+                app_service.delete_transcription_outputs(contexto, ["E2"])
+            except RuntimeError as exc:
+                travado = str(exc)
+    assert travado is not None, "arquivo travado deveria gerar relatorio"
+    assert "E2.json" in travado and "Feche" in travado, travado
+    assert not (paths.asr_dir / "E2.srt").exists(), "o resto nao foi limpo"
+    assert jobs_gravados and jobs_gravados[-1][1]["status"] == "Pendente", \
+        "job nao foi resetado apos limpeza parcial"
+    print("PASS: limpeza parcial reporta o que ficou e termina o resto")
+
 print("PASS: toy_delete_outputs_safety")
