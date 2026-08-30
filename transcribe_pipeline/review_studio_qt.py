@@ -2821,10 +2821,10 @@ if QT_IMPORT_ERROR is None:
             self.query_input.setPlaceholderText("uma pergunta, um tema, uma situação…")
             self.query_input.returnPressed.connect(self.run_question)
             row.addWidget(self.query_input, 1)
-            ask_button = QPushButton("✨ Perguntar")
-            ask_button.setToolTip("A AI responde com base nos trechos, citando-os (pode levar ~1 min).")
-            ask_button.clicked.connect(self.run_question)
-            row.addWidget(ask_button)
+            self.ask_button = QPushButton("✨ Perguntar")
+            self.ask_button.setToolTip("A AI responde com base nos trechos, citando-os (pode levar ~1 min).")
+            self.ask_button.clicked.connect(self.run_question)
+            row.addWidget(self.ask_button)
             explore_button = QPushButton("Encontrar trechos")
             explore_button.setToolTip("So encontra os trechos pelo significado, sem compor resposta (rapido).")
             explore_button.clicked.connect(self.run_explore)
@@ -2855,6 +2855,43 @@ if QT_IMPORT_ERROR is None:
             close_button.clicked.connect(self.close)
             bottom.addWidget(close_button)
             layout.addLayout(bottom)
+            self._announce_readiness()
+
+        def _announce_readiness(self) -> None:
+            """Estado visivel JA NA ABERTURA (feedback 2026-08-30, 2a
+            rodada): sem isto a janela parecia identica com e sem os
+            modelos instalados — o usuario so descobria o que falta
+            clicando. Incompativel desabilita o Perguntar com motivo;
+            instalavel anuncia o download que o clique vai oferecer."""
+            try:
+                resumo_estado, resumo_motivo, resumo_gb = (
+                    self._window._capability_state("resumo_perguntar"))
+                busca_estado, _busca_motivo, busca_gb = (
+                    self._window._capability_state("busca_semantica"))
+            except Exception:  # noqa: BLE001 - sonda nunca derruba a janela
+                return
+            partes: list[str] = []
+            if resumo_estado == "incompativel":
+                self.ask_button.setEnabled(False)
+                self.ask_button.setToolTip(resumo_motivo)
+                partes.append(
+                    f"\"Perguntar\" não está disponível nesta máquina "
+                    f"({resumo_motivo}) — \"Encontrar trechos\" funciona normalmente.")
+            elif resumo_estado == "instalavel":
+                partes.append(
+                    f"\"Perguntar\" usa o modelo de análise (~{resumo_gb:.1f} GB), "
+                    "ainda não instalado neste computador — o clique oferece o download.")
+            from . import search as _search
+            try:
+                encoder_ok = _search.encoder_cached()
+            except Exception:  # noqa: BLE001
+                encoder_ok = True
+            if busca_estado == "instalavel" and not encoder_ok:
+                partes.append(
+                    f"\"Encontrar trechos\" baixa um modelo de ~{busca_gb:.1f} GB "
+                    "na primeira utilização.")
+            if partes:
+                self.status_label.setText("\n".join(partes))
 
         def _ready_query(self) -> tuple[list[str], str] | None:
             """Gating comum de perguntar/explorar: contexto, consulta, escopo
