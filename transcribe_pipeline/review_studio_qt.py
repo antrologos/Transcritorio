@@ -6031,6 +6031,10 @@ if QT_IMPORT_ERROR is None:
                         item.setData(Qt.ItemDataRole.UserRole, status.interview_id)
                         if display_title != status.interview_id:
                             item.setToolTip(status.interview_id)
+                    if column == COL_TRANSCRICAO and str(value) == "Falha":
+                        item.setToolTip(str((job or {}).get("last_error") or "")
+                                        or "A última transcrição falhou — veja "
+                                           "Transcrever → Fila de tarefas.")
                     self.interview_table.setItem(row, column, item)
             self.interview_table.blockSignals(False)
             self.interview_table.setSortingEnabled(not manual_order_active)
@@ -6065,7 +6069,8 @@ if QT_IMPORT_ERROR is None:
                 if status_filter == "Transcritas":
                     show_by_status = state_text == "Transcrita"
                 elif status_filter == "Pendentes":
-                    show_by_status = state_text == "Não transcrita"
+                    # Arquivo com falha continua pendente de transcricao.
+                    show_by_status = state_text in ("Não transcrita", "Falha")
                 elif status_filter == "Processando":
                     show_by_status = state_text.startswith("Processando")
                 show_by_text = (text_filter in real_id or text_filter in displayed_text) if text_filter else True
@@ -6084,7 +6089,12 @@ if QT_IMPORT_ERROR is None:
             if job.get("status") in {"Na fila", "Rodando"}:
                 return f"Processando {job.get('progress', 0)}%"
             if status.review_exists or status.canonical_exists:
+                # Falha em RETRANSCRICAO nao esconde transcricao utilizavel.
                 return "Transcrita"
+            if job.get("status") == "Falha":
+                # Antes aparecia como "Não transcrita" e o erro so existia
+                # na Fila de tarefas.
+                return "Falha"
             return "Não transcrita"
 
         def selected_interview_id(self) -> str | None:
