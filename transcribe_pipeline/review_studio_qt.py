@@ -1812,6 +1812,12 @@ if QT_IMPORT_ERROR is None:
                     date_str = datetime.fromtimestamp(dt).strftime("%d/%m/%Y") if dt else "-"
                     rows.append((label, repo, size, status, date_str, True, None, "", ""))
                 else:
+                    if info.get("demo_only"):
+                        # Decisao 2026-08-30 (endurecida): tiny/base NAO sao
+                        # oferecidos em lugar nenhum. So aparecem quando JA
+                        # instalados (ramo acima) — senao ficariam
+                        # irremoviveis.
+                        continue
                     gb = float(info.get("estimated_gb") or 0.0)
                     rows.append((label, repo, 0, "Disponivel", "-", False,
                                  f"asr:{key}", f"~{gb:.1f} GB" if gb else "-", ""))

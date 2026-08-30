@@ -91,8 +91,9 @@ header("CENARIO 1 - Dialog populado com cache simulado")
 with patch.object(runtime, "model_cache_dir", return_value=cache_root):
     dlg = ModelManagerDialog(lambda: win.context, win)
 
-# Esperado: 6 ASR + 2 fixos + 3 opcionais de IA (SL-D) + 1 orfao = 12 linhas
-assert dlg.table.rowCount() == 12, f"esperava 12 linhas, got {dlg.table.rowCount()}"
+# Esperado: 5 ASR (tiny instalado aparece; base demo NAO instalado some —
+# demos nao sao oferecidos, 2026-08-30) + 2 fixos + 3 opcionais + 1 orfao = 11
+assert dlg.table.rowCount() == 11, f"esperava 11 linhas, got {dlg.table.rowCount()}"
 check(f"1.1 tabela com {dlg.table.rowCount()} linhas")
 
 # Verificar cada linha tem dados

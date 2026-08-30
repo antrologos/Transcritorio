@@ -88,17 +88,33 @@ with tempfile.TemporaryDirectory() as tmp:
     assert botao is not None and botao.text() == "Remover"
     print("PASS: opcional instalado pode ser removido")
 
-    # --- variante Whisper NAO instalada tambem ganha Baixar por item ---
-    # (o tiny continua BAIXAVEL pelo gerenciador, mas rotulado como
-    # demonstracao — decisao 2026-08-30)
-    r = _linha(dlg, model_manager.friendly_name("tiny"))
+    # --- variante Whisper NAO instalada ganha Baixar por item ---
+    r = _linha(dlg, model_manager.friendly_name("small"))
     assert r is not None
-    assert "Demonstra" in model_manager.friendly_name("tiny"), \
-        model_manager.friendly_name("tiny")
     assert dlg.table.item(r, dlg.COL_STATUS).text() == "Disponivel"
     botao = dlg.table.cellWidget(r, dlg.COL_ACTION)
     assert botao is not None and botao.text() == "Baixar"
     print("PASS: variante Whisper disponivel tem botao de baixar")
+
+    # --- tiny/base NAO sao OFERECIDOS em lugar nenhum (decisao 2026-08-30,
+    # endurecida: "sequer deveriam ser oferecidos") ---
+    assert _linha(dlg, model_manager.friendly_name("tiny")) is None, \
+        "tiny nao instalado apareceu como oferta"
+    assert _linha(dlg, model_manager.friendly_name("base")) is None, \
+        "base nao instalado apareceu como oferta"
+    # ...mas um demo JA INSTALADO segue visivel (senao vira irremovivel)
+    tiny_dir = cache / "models--Systran--faster-whisper-tiny"
+    (tiny_dir / "snapshots" / "abc").mkdir(parents=True)
+    (tiny_dir / "refs").mkdir()
+    (tiny_dir / "refs" / "main").write_text("abc", encoding="utf-8")
+    (tiny_dir / "snapshots" / "abc" / "model.bin").write_bytes(b"x" * 1024)
+    dlg = _abre(cache)
+    r = _linha(dlg, model_manager.friendly_name("tiny"))
+    assert r is not None, "tiny instalado sumiu do gerenciador (irremovivel!)"
+    assert "Demonstra" in model_manager.friendly_name("tiny")
+    botao = dlg.table.cellWidget(r, dlg.COL_ACTION)
+    assert botao is not None and botao.text() == "Remover"
+    print("PASS: demo nao e oferecido; instalado segue removivel")
 
 del os.environ["TRANSCRITORIO_FAKE_HARDWARE"]
 
