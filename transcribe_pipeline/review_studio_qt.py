@@ -2781,7 +2781,11 @@ if QT_IMPORT_ERROR is None:
             from . import search as _search
             ctx = self._window.context
             query = self.query_input.text().strip()
-            if ctx is None or not query:
+            if not query:
+                self.count_label.setText(
+                    "Digite uma palavra ou expressão para buscar.")
+                return
+            if ctx is None:
                 return
             self._refresh_scope()
             ids = self._scope_ids()
@@ -2823,6 +2827,7 @@ if QT_IMPORT_ERROR is None:
             row.addWidget(self.query_input, 1)
             self.ask_button = QPushButton("✨ Perguntar")
             self.ask_button.setToolTip("A AI responde com base nos trechos, citando-os (pode levar ~1 min).")
+            self._ask_tooltip_base = self.ask_button.toolTip()
             self.ask_button.clicked.connect(self.run_question)
             row.addWidget(self.ask_button)
             explore_button = QPushButton("Encontrar trechos")
@@ -2862,7 +2867,11 @@ if QT_IMPORT_ERROR is None:
             rodada): sem isto a janela parecia identica com e sem os
             modelos instalados — o usuario so descobria o que falta
             clicando. Incompativel desabilita o Perguntar com motivo;
-            instalavel anuncia o download que o clique vai oferecer."""
+            instalavel anuncia o download que o clique vai oferecer.
+
+            IDEMPOTENTE: o dialogo e cacheado pela janela, entao cada
+            reabertura re-anuncia — comecar limpando o estado anterior
+            (botao, tooltip, rodape) para nada grudar."""
             try:
                 resumo_estado, resumo_motivo, resumo_gb = (
                     self._window._capability_state("resumo_perguntar"))
@@ -2870,6 +2879,10 @@ if QT_IMPORT_ERROR is None:
                     self._window._capability_state("busca_semantica"))
             except Exception:  # noqa: BLE001 - sonda nunca derruba a janela
                 return
+            self.ask_button.setEnabled(True)
+            self.ask_button.setToolTip(getattr(
+                self, "_ask_tooltip_base", self.ask_button.toolTip()))
+            self.status_label.setText("")
             partes: list[str] = []
             if resumo_estado == "incompativel":
                 self.ask_button.setEnabled(False)
@@ -2930,6 +2943,13 @@ if QT_IMPORT_ERROR is None:
 
         def run_explore(self) -> None:
             from . import search as _search
+            if not self.query_input.text().strip():
+                self.status_label.setText(
+                    "Descreva um tema ou faça uma pergunta antes de buscar.")
+                return
+            if self._worker and self._worker.isRunning():
+                self.status_label.setText("Aguarde a consulta atual terminar.")
+                return
             ready = self._ready_query()
             if ready is None:
                 return
@@ -2946,16 +2966,30 @@ if QT_IMPORT_ERROR is None:
 
         def run_question(self) -> None:
             from . import ask as _ask
-            ready = self._ready_query()
-            if ready is None:
+            if not self.query_input.text().strip():
+                # Antes: return None silencioso — clique morto.
+                self.status_label.setText(
+                    "Digite uma pergunta antes de clicar em Perguntar.")
                 return
-            # Mesmo gate de clique do resumo (registro de capacidades +
-            # oferta de download): antes, a falta do modelo/GPU virava
-            # texto morto no rodape — o unico fluxo de AI sem baixador.
+            if self._worker and self._worker.isRunning():
+                self.status_label.setText("Aguarde a consulta atual terminar.")
+                return
+            if not self.ask_button.isEnabled():
+                # Enter contornava o botao desabilitado (maquina
+                # incompativel): repetir o motivo no rodape, sem modal.
+                self.status_label.setText(self.ask_button.toolTip())
+                return
+            # Gate da LLM ANTES do preparo do encoder: na ordem antiga a
+            # instalacao essencial via so o "Preparar (~0,5 GB)" e a
+            # oferta do modelo de analise nunca disparava (bug relatado
+            # no teste real de 2026-08-30).
             if not self._window._ensure_llm_model():
                 self.status_label.setText(
                     "A resposta com AI não está disponível — use "
                     "\"Encontrar trechos\", que funciona nesta máquina.")
+                return
+            ready = self._ready_query()
+            if ready is None:
                 return
             ids, query = ready
             paths = self._window.context.paths
@@ -3015,7 +3049,11 @@ if QT_IMPORT_ERROR is None:
             ctx = self._window.context
             if ctx is None or (self._worker and self._worker.isRunning()):
                 return
-            ids = self._project_ids()
+            # Indexar o ESCOPO escolhido: o rotulo do botao prometia o
+            # escopo e o codigo indexava o projeto inteiro (num projeto
+            # grande, "1 arquivo, ~1 min" virava dezenas de minutos).
+            self._refresh_scope()
+            ids = self._scope_ids() or self._project_ids()
             paths = ctx.paths
             need_download = not _search.encoder_cached()
             self.prepare_button.setEnabled(False)
@@ -3038,9 +3076,11 @@ if QT_IMPORT_ERROR is None:
                 return
             self.prepare_button.setVisible(False)
             # O encoder baixado aqui muda o estado das capacidades na
-            # janela principal (tooltips/notas) — invalidar o cache dela.
+            # janela principal (tooltips/notas) — invalidar o cache dela
+            # e re-anunciar o estado desta janela.
             try:
                 self._window._invalidate_capability_cache()
+                self._announce_readiness()
             except Exception:  # noqa: BLE001 - estado da janela nunca derruba o preparo
                 pass
             self.status_label.setText("Exploração pronta.")
@@ -6782,6 +6822,10 @@ if QT_IMPORT_ERROR is None:
                 return
             if getattr(self, "_explore_dialog", None) is None:
                 self._explore_dialog = ExploreDialog(self)
+            else:
+                # Dialogo cacheado: re-anunciar o estado (modelos podem
+                # ter sido baixados/removidos desde a ultima abertura).
+                self._explore_dialog._announce_readiness()
             self._explore_dialog.show()
             self._explore_dialog.raise_()
             self._explore_dialog.query_input.setFocus()

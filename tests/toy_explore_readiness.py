@@ -81,6 +81,25 @@ assert dlg.status_label.text() == ""
 assert dlg.ask_button.isEnabled() is True
 print("PASS: tudo pronto abre limpo")
 
+# --- idempotencia: o estado ANTIGO nao pode grudar (dialogo e cacheado) ---
+dlg = _Dialogo({
+    "resumo_perguntar": ("incompativel", "precisa de uma placa NVIDIA", 0.0),
+    "busca_semantica": ("instalavel", "falta baixar", 0.5),
+})
+with patch("transcribe_pipeline.search.encoder_cached", lambda: False):
+    dlg._announce_readiness()
+assert dlg.ask_button.isEnabled() is False
+# a "maquina" muda (ex.: modelos baixados / outro retrato): re-anunciar limpa
+dlg._window = _JanelaPrincipal({
+    "resumo_perguntar": ("pronta", "", 0.0),
+    "busca_semantica": ("pronta", "", 0.0),
+})
+with patch("transcribe_pipeline.search.encoder_cached", lambda: True):
+    dlg._announce_readiness()
+assert dlg.ask_button.isEnabled() is True, "botao ficou preso no estado antigo"
+assert dlg.status_label.text() == "", "aviso antigo grudou"
+print("PASS: re-anunciar limpa o estado anterior")
+
 # --- sonda quebrada nunca derruba a abertura ---
 class _JanelaQuebrada:
     def _capability_state(self, key):
