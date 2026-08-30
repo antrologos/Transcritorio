@@ -2014,6 +2014,11 @@ if QT_IMPORT_ERROR is None:
                 QMessageBox.information(self, "Modelo removido", f"{freed} liberados.")
             else:
                 QMessageBox.warning(self, "Nao foi possivel remover", str(result["error"]))
+            # Remover muda o estado das capacidades: sem isto os tooltips
+            # da janela seguiam dizendo "pronta" para um modelo apagado.
+            parent = self.parent()
+            if parent is not None and hasattr(parent, "_invalidate_capability_cache"):
+                parent._invalidate_capability_cache()
             self._populate()
 
         def _remove_orphans(self) -> None:
@@ -2044,6 +2049,9 @@ if QT_IMPORT_ERROR is None:
             if errors:
                 msg += "\n\nFalhas:\n" + "\n".join(errors)
             QMessageBox.information(self, "Orfaos removidos", msg)
+            parent = self.parent()
+            if parent is not None and hasattr(parent, "_invalidate_capability_cache"):
+                parent._invalidate_capability_cache()
             self._populate()
 
         def _open_download_wizard(self) -> None:
@@ -4566,6 +4574,9 @@ if QT_IMPORT_ERROR is None:
             # Retrato (hardware + modelos em cache) que decide o que fica
             # disponivel; None = recalcular na proxima consulta.
             self._caps_cache: tuple[Any, set[str], dict[str, float]] | None = None
+            # Acao a reexecutar quando o worker "Preparar modelos" concluir
+            # (a retomada real do gate ensure_models_ready — F2).
+            self._retry_after_models: Callable[[], None] | None = None
             self.current_turn_id: str | None = None
             self.current_play_row: int | None = None
             self.media_candidates: list[Path] = []
@@ -5437,14 +5448,21 @@ if QT_IMPORT_ERROR is None:
             dialog = ModelManagerDialog(lambda: self.context, self)
             dialog.exec()
 
-        def show_model_setup(self) -> None:
+        def show_model_setup(self, asr_variants: list[str] | None = None,
+                             include_diarization: bool | None = None,
+                             include_alignment: bool | None = None) -> None:
+            # Escopo parametrizavel (F2): ensure_models_ready passa o SEU —
+            # recalcular aqui do zero fazia "Melhorar falantes" (que exige
+            # diarizacao) cair num dialogo "nao ha nada para baixar".
             if self.worker and self.worker.isRunning():
                 QMessageBox.information(self, "Tarefa em andamento", "Aguarde a tarefa atual terminar antes de preparar modelos.")
                 return
             from . import app_settings as _settings
-            scope_variants = self._configured_asr_variants()
-            scope_dia = self._configured_diarize()
-            scope_align = _settings.alignment_default()
+            scope_variants = asr_variants or self._configured_asr_variants()
+            scope_dia = (self._configured_diarize()
+                         if include_diarization is None else bool(include_diarization))
+            scope_align = (_settings.alignment_default()
+                           if include_alignment is None else bool(include_alignment))
             dialog = ModelSetupDialog(
                 self, asr_variants=scope_variants,
                 include_diarization=scope_dia, include_alignment=scope_align)
@@ -5517,7 +5535,13 @@ if QT_IMPORT_ERROR is None:
             return False
 
         def ensure_models_ready(self, require_diarization: bool | None = None,
-                                asr_variants: list[str] | None = None) -> bool:
+                                asr_variants: list[str] | None = None,
+                                retry: Callable[[], None] | None = None) -> bool:
+            """Gate de modelos obrigatorios da acao que esta comecando.
+
+            retry: a PROPRIA acao, para ser reexecutada quando o download
+            (assincrono) terminar — o re-teste imediato antigo nunca via o
+            download pronto e a acao morria em silencio."""
             if not self.ensure_ffmpeg():
                 return False
             # asr_variants: quem vai transcrever com um modelo DIFERENTE do
@@ -5551,20 +5575,46 @@ if QT_IMPORT_ERROR is None:
                 )
             else:
                 title = "Modelos locais pendentes"
-                msg = (
-                    "Os modelos de transcrição e separação de falantes ainda "
-                    "não foram baixados neste computador. Deseja preparar os "
-                    "modelos agora?"
-                )
+                # Mensagem honesta: NOMEAR o que falta (a frase generica
+                # dizia que faltava "transcricao e separacao de falantes"
+                # quando so faltava o pyannote de ~0,1 GB).
+                try:
+                    faltando = [item for item in _mm.status(
+                        asr_variants=variants,
+                        include_diarization=include_dia,
+                        include_alignment=include_align) if not item.cached]
+                except Exception:  # noqa: BLE001
+                    faltando = []
+                if faltando:
+                    linhas = "\n".join(
+                        f"• {item.asset.label} (~{item.asset.estimated_gb:.1f} GB)"
+                        for item in faltando)
+                    msg = ("Para esta ação, falta baixar neste computador:\n"
+                           f"{linhas}\n\nDeseja preparar agora?")
+                else:
+                    msg = ("Os modelos necessários para esta ação ainda não "
+                           "foram baixados neste computador. Deseja preparar "
+                           "agora?")
             answer = QMessageBox.question(self, title, msg)
             if answer == QMessageBox.StandardButton.Yes:
-                self.show_model_setup()
-                # U1.8: se o download concluiu, a acao original SEGUE — antes
-                # o usuario tinha que clicar em Transcrever de novo.
+                # A retomada REAL acontece quando o worker "Preparar
+                # modelos" terminar (on_worker_done) — o download e
+                # assincrono e o re-teste imediato antigo nunca o via.
+                self._retry_after_models = retry
+                self.show_model_setup(asr_variants=variants,
+                                      include_diarization=include_dia,
+                                      include_alignment=include_align)
                 if app_service.required_models_ready(variants, include_diarization=include_dia,
                                                      include_alignment=include_align):
+                    # Caso raro (cache ficou completo sem download novo).
+                    self._retry_after_models = None
                     self._invalidate_capability_cache()
                     return True
+                if not (self.worker and self.worker.isRunning()):
+                    # Dialogo cancelado: nenhum download comecou.
+                    self._retry_after_models = None
+                    self.progress_label.setText(
+                        "Preparação cancelada — a ação não foi executada.")
             return False
 
         def _open_project_path(self, project_path: Path) -> None:
@@ -8963,7 +9013,10 @@ if QT_IMPORT_ERROR is None:
             if not self.save_current_turn():
                 return
             if not self.ensure_models_ready(
-                    asr_variants=[asr_model] if asr_model else None):
+                    asr_variants=[asr_model] if asr_model else None,
+                    retry=lambda i=ids, m=asr_model, c=confirmed_recreate:
+                        self.run_full_transcription_job(ids=i, asr_model=m,
+                                                        confirmed_recreate=c)):
                 return
             ids = ids or self.selected_ids_for_job(fallback_current=True)
             if not ids:
@@ -9439,7 +9492,8 @@ if QT_IMPORT_ERROR is None:
         def run_diarization_job(self) -> None:
             if not self.save_current_turn():
                 return
-            if not self.ensure_models_ready(require_diarization=True):
+            if not self.ensure_models_ready(require_diarization=True,
+                                            retry=self.run_diarization_job):
                 return
             ids = self.selected_ids_for_job()
             if not ids:
@@ -9461,7 +9515,8 @@ if QT_IMPORT_ERROR is None:
                 return
             if not self.save_current_turn(force=True):
                 return
-            if not self.ensure_models_ready(require_diarization=True):
+            if not self.ensure_models_ready(require_diarization=True,
+                                            retry=self.improve_speakers_current_file):
                 return
             interview_id = self.current_interview_id
             answer = QMessageBox.question(
@@ -9915,6 +9970,11 @@ if QT_IMPORT_ERROR is None:
             self.progress_bar.setValue(max(0, min(100, percent)))
 
         def on_worker_done(self, message: str) -> None:
+            finished_label = self.current_job_label
+            # Qualquer job pode ter mexido em modelos (Preparar modelos,
+            # downloads no meio de acoes): invalidar o retrato de
+            # capacidades evita tooltips/notas mentindo apos o download.
+            self._invalidate_capability_cache()
             self.progress_bar.setRange(0, 100)
             self.progress_label.setText(message)
             if "interrompido" in message:
@@ -9924,6 +9984,13 @@ if QT_IMPORT_ERROR is None:
             self.current_job_label = ""
             self._reset_orphan_queue_jobs()
             self.refresh_interviews()
+            # Retomada da acao que esperava modelos (F2): o download e
+            # assincrono, entao e AQUI que "a acao original segue".
+            retry = getattr(self, "_retry_after_models", None)
+            if retry is not None and finished_label == "Preparar modelos":
+                self._retry_after_models = None
+                if "interrompido" not in message and "cancelado" not in message:
+                    QTimer.singleShot(0, retry)
             if self.current_interview_id:
                 current_id = self.current_interview_id
                 status = self.status_by_interview_id(current_id)
@@ -9999,6 +10066,8 @@ if QT_IMPORT_ERROR is None:
             self.progress_label.setText("Falha.")
             self.progress_bar.setValue(0)
             self.current_job_label = ""
+            self._retry_after_models = None  # download falhou: nao retomar
+            self._invalidate_capability_cache()
             dialog = QMessageBox(self)
             dialog.setIcon(QMessageBox.Icon.Critical)
             dialog.setWindowTitle("Não foi possível concluir a tarefa")
