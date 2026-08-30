@@ -190,6 +190,47 @@ wizard_ia._profile_radios["padrao"].setChecked(True)
 assert wizard_ia._ai_download_group.isHidden() is True
 print("PASS: Completo pergunta (maquina de CPU: depois recomendado)")
 
+# --- pagina de idiomas (E4-2): pt pre-marcado; essencial pula ---
+wizard_l = FirstRunWizard()  # cpu -> perfil padrao recomendado
+assert len(wizard_l._lang_checkboxes) == 16
+assert wizard_l._lang_checkboxes["pt"].isChecked()
+assert not wizard_l._lang_checkboxes["en"].isChecked()
+assert wizard_l.selected_languages == ("pt",)
+wizard_l._lang_checkboxes["en"].setChecked(True)
+assert set(wizard_l.selected_languages) == {"en", "pt"}
+# fluxo padrao: a pagina de idiomas vem depois da escolha de modelo
+wizard_l.restart()
+for _ in range(4):  # welcome -> profile -> account -> terms -> model
+    wizard_l.next()
+assert wizard_l.currentId() == FirstRunWizard.PAGE_MODEL_SELECT
+assert wizard_l.nextId() == FirstRunWizard.PAGE_LANGS
+wizard_l.next()
+assert wizard_l.currentId() == FirstRunWizard.PAGE_LANGS
+assert wizard_l.nextId() == FirstRunWizard.PAGE_TOKEN
+# essencial (sem alinhamento) pula a pagina de idiomas
+wizard_l._profile_radios["essencial"].setChecked(True)
+wizard_l.restart()
+wizard_l.next(); wizard_l.next()
+assert wizard_l.currentId() == FirstRunWizard.PAGE_MODEL_SELECT
+assert wizard_l.nextId() == FirstRunWizard.PAGE_DOWNLOAD
+print("PASS: pagina de idiomas no fluxo certo")
+
+# um UNICO idioma escolhido vira o default de projetos novos da maquina
+wizard_l2 = FirstRunWizard()
+wizard_l2._profile_radios["padrao"].setChecked(True)
+wizard_l2._lang_checkboxes["pt"].setChecked(False)
+wizard_l2._lang_checkboxes["en"].setChecked(True)
+assert wizard_l2.selected_languages == ("en",)
+wizard_l2.done(1)
+assert app_settings.language_default() == "en", app_settings.language_default()
+# varios idiomas: mantem o pt como default neutro
+wizard_l3 = FirstRunWizard()
+wizard_l3._profile_radios["padrao"].setChecked(True)
+wizard_l3._lang_checkboxes["en"].setChecked(True)
+wizard_l3.done(1)
+assert app_settings.language_default() == "pt"
+print("PASS: idioma unico vira default da maquina")
+
 # --- maquina com GPU boa: recomenda Completo, sem avisos ---
 os.environ["TRANSCRITORIO_FAKE_HARDWARE"] = "gpu24"
 wizard2 = FirstRunWizard()

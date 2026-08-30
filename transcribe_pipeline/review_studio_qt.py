@@ -1842,6 +1842,35 @@ if QT_IMPORT_ERROR is None:
                                  ("O download exige conta gratuita no Hugging Face "
                                   "e aceite dos termos do modelo."
                                   if asset.gated else "")))
+            # Pacotes de idioma (etapa 4): alinhadores por lingua, alem do
+            # pt (que ja aparece nos fixos). Baixar por item / remover.
+            for lang_code, lang_spec in sorted(
+                    model_manager.ALIGN_LANGUAGES.items(),
+                    key=lambda kv: kv[1]["label"]):
+                if lang_code == "pt":
+                    continue
+                lang_asset = model_manager.align_asset_for(lang_code)
+                entry = scan_by_repo.get(lang_asset.repo_id)
+                instalado = False
+                if entry is not None:
+                    try:
+                        snap = model_manager.cached_snapshot_path(
+                            lang_asset.repo_id, cache_root, revision=lang_asset.revision)
+                        instalado = (snap is not None
+                                     and model_manager._snapshot_has_weights(snap))
+                    except Exception:  # noqa: BLE001
+                        instalado = False
+                rotulo_lang = f"Idioma: {lang_spec['label']} (tempos por palavra)"
+                if instalado:
+                    size = int(entry.get("size_on_disk", 0))
+                    dt = model_manager.model_install_date(lang_asset.repo_id, cache_root)
+                    date_str = datetime.fromtimestamp(dt).strftime("%d/%m/%Y") if dt else "-"
+                    rows.append((rotulo_lang, lang_asset.repo_id, size, "Instalado",
+                                 date_str, True, None, "", ""))
+                else:
+                    rows.append((rotulo_lang, lang_asset.repo_id, 0, "Disponivel",
+                                 "-", False, f"opt:{lang_asset.key}",
+                                 f"~{lang_asset.estimated_gb:.1f} GB", ""))
             # Opcionais de IA (antes invisiveis: 8,7 GB de Qwen baixados
             # ficavam irremoviveis, e nao havia escolha por item).
             from . import capabilities as _caps
@@ -2179,16 +2208,14 @@ if QT_IMPORT_ERROR is None:
             grid = QGridLayout()
             self.apply_language = QCheckBox("Aplicar língua")
             self.language_combo = QComboBox()
-            for code, label in [
-                ("pt", "Português"),
-                ("auto", "Automático"),
-                ("en", "Inglês"),
-                ("es", "Espanhol"),
-                ("fr", "Francês"),
-                ("de", "Alemão"),
-                ("it", "Italiano"),
-            ]:
-                self.language_combo.addItem(label, code)
+            # Etapa 4: gerado do registro de pacotes de idioma (uma fonte).
+            from . import model_manager as _mm_lang
+            _ordenados = sorted(_mm_lang.ALIGN_LANGUAGES.items(),
+                                key=lambda kv: (kv[0] != "pt", kv[1]["label"]))
+            self.language_combo.addItem(_ordenados[0][1]["label"], "pt")
+            self.language_combo.addItem("Automático", "auto")
+            for _code, _spec in _ordenados[1:]:
+                self.language_combo.addItem(str(_spec["label"]), _code)
             grid.addWidget(self.apply_language, 0, 0)
             grid.addWidget(self.language_combo, 0, 1, 1, 3)
 
@@ -3257,17 +3284,33 @@ if QT_IMPORT_ERROR is None:
             grid.addWidget(QLabel("Precisao:"), 2, 0)
             grid.addWidget(self.compute_combo, 2, 1)
 
+            # Etapa 4: combo gerado do REGISTRO de pacotes de idioma, com
+            # marcacao honesta de tempos por palavra (instalado / a baixar).
+            # "Automatico" declara a limitacao: deteccao nao permite
+            # alinhador confiavel.
+            from . import model_manager as _mm_lang
             self.language_combo = QComboBox()
-            for value, label in [
-                ("pt", "Portugues"),
-                ("auto", "Automatico"),
-                ("en", "Ingles"),
-                ("es", "Espanhol"),
-                ("fr", "Frances"),
-                ("de", "Alemao"),
-                ("it", "Italiano"),
-            ]:
-                self.language_combo.addItem(label, value)
+
+            def _sufixo_idioma(codigo: str) -> str:
+                try:
+                    asset = _mm_lang.align_asset_for(codigo)
+                    snap = _mm_lang.cached_snapshot_path(
+                        asset.repo_id, None, revision=asset.revision)
+                    if snap is not None and _mm_lang._snapshot_has_weights(snap):
+                        return ""
+                    return f"  (tempos por palavra: baixa ~{asset.estimated_gb:.1f} GB)"
+                except Exception:  # noqa: BLE001
+                    return ""
+
+            ordenados = sorted(_mm_lang.ALIGN_LANGUAGES.items(),
+                               key=lambda kv: (kv[0] != "pt", kv[1]["label"]))
+            self.language_combo.addItem(
+                f"{ordenados[0][1]['label']}{_sufixo_idioma('pt')}", "pt")
+            self.language_combo.addItem(
+                "Automático — detecta o idioma; sem tempos por palavra", "auto")
+            for code, spec in ordenados[1:]:
+                self.language_combo.addItem(
+                    f"{spec['label']}{_sufixo_idioma(code)}", code)
             language = str(config.get("asr_language") or "auto")
             self.language_combo.setCurrentIndex(max(0, self.language_combo.findData(language)))
             grid.addWidget(QLabel("Idioma padrao:"), 3, 0)
@@ -3502,6 +3545,7 @@ if QT_IMPORT_ERROR is None:
         PAGE_TOKEN = 4
         PAGE_DOWNLOAD = 5
         PAGE_DONE = 6
+        PAGE_LANGS = 9  # etapa 4: idiomas das gravacoes (pacotes de alinhamento)
         # id 7 era a antiga pagina sim/nao de falantes (v0.2), substituida
         # pela PAGE_PROFILE na etapa 3; nao reusar o id.
 
@@ -3537,6 +3581,7 @@ if QT_IMPORT_ERROR is None:
             self.setPage(self.PAGE_ACCOUNT, self._make_account_page())
             self.setPage(self.PAGE_TERMS, self._make_terms_page())
             self.setPage(self.PAGE_MODEL_SELECT, _ModelSelectWizardPage(self))
+            self.setPage(self.PAGE_LANGS, self._make_langs_page())
             self.setPage(self.PAGE_TOKEN, self._make_token_page())
             self.setPage(self.PAGE_DOWNLOAD, self._make_download_page())
             self.setPage(self.PAGE_DONE, self._make_done_page())
@@ -3547,10 +3592,12 @@ if QT_IMPORT_ERROR is None:
             # conta/termos/token (modelos ASR sao publicos — nao exigem
             # token); padrao/completo incluem falantes (pyannote gated).
             if self.selected_profile != "essencial":
+                # PAGE_LANGS (etapa 4): so faz sentido com alinhamento —
+                # os pacotes de idioma sao exatamente os alinhadores.
                 seq = [
                     self.PAGE_WELCOME, self.PAGE_PROFILE, self.PAGE_ACCOUNT,
-                    self.PAGE_TERMS, self.PAGE_MODEL_SELECT, self.PAGE_TOKEN,
-                    self.PAGE_DOWNLOAD, self.PAGE_DONE,
+                    self.PAGE_TERMS, self.PAGE_MODEL_SELECT, self.PAGE_LANGS,
+                    self.PAGE_TOKEN, self.PAGE_DOWNLOAD, self.PAGE_DONE,
                 ]
             else:
                 seq = [
@@ -3592,6 +3639,11 @@ if QT_IMPORT_ERROR is None:
                         recomendado = getattr(select_page, "_recommended_key", None)
                         updates["asr_model_default"] = (
                             recomendado if recomendado in escolhidos else escolhidos[0])
+                    # Etapa 4: um UNICO idioma escolhido vira o default de
+                    # projetos novos; varios (ou nenhum) = pt neutro.
+                    idiomas = self.selected_languages
+                    updates["language_default"] = (
+                        idiomas[0] if len(idiomas) == 1 else "pt")
                     app_settings.save(updates)
                 except Exception as exc:
                     _logger.warning("nao foi possivel salvar app_settings: %s", exc)
@@ -3730,6 +3782,42 @@ if QT_IMPORT_ERROR is None:
                     and getattr(self, "_ai_gb", 0) > 0
                     and hasattr(self, "_ai_now_radio")
                     and self._ai_now_radio.isChecked())
+
+        def _make_langs_page(self) -> QWizardPage:
+            """Idiomas das gravacoes (etapa 4): decide QUAIS pacotes de
+            alinhamento baixar. pt pre-marcado; a escolha e por conforto
+            (tempos por palavra), nunca requisito — qualquer idioma
+            transcreve."""
+            from . import model_manager as _mm
+            page = QWizardPage()
+            page.setTitle("Em que idiomas são as suas gravações?")
+            layout = QVBoxLayout(page)
+            intro = QLabel(
+                "Cada idioma marcado baixa um pacote de tempos por palavra "
+                "(~1,2 GB) — é o que faz o duplo clique numa palavra levar o "
+                "áudio até ela.\n"
+                "Gravações em outros idiomas transcrevem normalmente, apenas "
+                "sem os tempos por palavra. Você pode baixar mais idiomas "
+                "depois em Transcrever > Gerenciar modelos.")
+            intro.setWordWrap(True)
+            layout.addWidget(intro)
+            grade = QGridLayout()
+            self._lang_checkboxes: dict[str, QCheckBox] = {}
+            ordenados = sorted(_mm.ALIGN_LANGUAGES.items(),
+                               key=lambda kv: (kv[0] != "pt", kv[1]["label"]))
+            for indice, (code, spec) in enumerate(ordenados):
+                cb = QCheckBox(str(spec["label"]))
+                cb.setChecked(code == "pt")
+                grade.addWidget(cb, indice // 4, indice % 4)
+                self._lang_checkboxes[code] = cb
+            layout.addLayout(grade)
+            layout.addStretch()
+            return page
+
+        @property
+        def selected_languages(self) -> tuple[str, ...]:
+            caixas = getattr(self, "_lang_checkboxes", {})
+            return tuple(sorted(c for c, cb in caixas.items() if cb.isChecked()))
 
         # -- Page factories --
 
@@ -4154,6 +4242,17 @@ if QT_IMPORT_ERROR is None:
             # vez de deixar o limiar generico decidir.
             select_page = self._wizard.page(FirstRunWizard.PAGE_MODEL_SELECT)
             required_gb = getattr(select_page, "total_gb", lambda: None)()
+            # Etapa 4: pacotes de idioma escolhidos (padrao/completo) entram
+            # no download e na conta de disco. Essencial: sem alinhamento.
+            align_langs: tuple[str, ...] | None = None
+            if getattr(self._wizard, "selected_profile", "padrao") != "essencial":
+                align_langs = getattr(self._wizard, "selected_languages", ("pt",))
+                for code in align_langs or ():
+                    # pt ja esta no FIXED_GB da pagina de modelos — somar
+                    # so os idiomas EXTRAS para nao contar em dobro.
+                    if code != "pt" and model_manager.align_language_supported(code):
+                        required_gb = (required_gb or 0.0) + float(
+                            model_manager.align_asset_for(code).estimated_gb)
             # Completo com "baixar IA agora": os opcionais entram no download
             # do assistente (e na conta de disco).
             optional_keys: tuple[str, ...] = ()
@@ -4187,6 +4286,7 @@ if QT_IMPORT_ERROR is None:
                 include_diarization=bool(getattr(self._wizard, "wants_diarization", True)),
                 include_alignment=getattr(self._wizard, "selected_profile", "padrao") != "essencial",
                 optional_keys=optional_keys,
+                align_languages=align_langs,
             )
             self._worker.progress.connect(self._on_progress)
             self._worker.finished_ok.connect(self._on_done)
@@ -4253,13 +4353,15 @@ if QT_IMPORT_ERROR is None:
 
         def __init__(self, token: str, asr_variants: list[str] | None = None,
                      include_diarization: bool = True, include_alignment: bool = True,
-                     optional_keys: tuple[str, ...] = ()) -> None:
+                     optional_keys: tuple[str, ...] = (),
+                     align_languages: tuple[str, ...] | None = None) -> None:
             super().__init__()
             self.token = token
             self.asr_variants = asr_variants
             self.include_diarization = include_diarization
             self.include_alignment = include_alignment
             self.optional_keys = tuple(optional_keys)
+            self.align_languages = align_languages
             self._cancel_requested = False
 
         def request_cancel(self) -> None:
@@ -4279,6 +4381,7 @@ if QT_IMPORT_ERROR is None:
                     asr_variants=self.asr_variants,
                     include_diarization=self.include_diarization,
                     include_alignment=self.include_alignment,
+                    align_languages=self.align_languages,
                 )
                 result_failures = getattr(result, "failures", 0)
                 result_message = getattr(result, "message", "")

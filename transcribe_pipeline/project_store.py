@@ -236,15 +236,17 @@ METADATA_COLUMNS = [
     "updated_at",
 ]
 
-LANGUAGE_LABELS = {
-    "auto": "Automático",
-    "pt": "Português",
-    "en": "Inglês",
-    "es": "Espanhol",
-    "fr": "Francês",
-    "de": "Alemão",
-    "it": "Italiano",
-}
+def _language_labels() -> dict[str, str]:
+    """Rotulos de idioma a partir do registro de pacotes (etapa 4) —
+    uma unica fonte para tabela e combos; "auto" e a excecao fixa."""
+    from . import model_manager
+    labels = {"auto": "Automático"}
+    for code, spec in model_manager.ALIGN_LANGUAGES.items():
+        labels[code] = str(spec["label"])
+    return labels
+
+
+LANGUAGE_LABELS = _language_labels()
 
 
 def safe_project_filename(project_name: str) -> str:

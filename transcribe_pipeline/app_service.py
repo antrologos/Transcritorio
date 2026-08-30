@@ -106,6 +106,9 @@ def create_project(project_root: Path, project_name: str | None = None) -> Proje
         from . import app_settings
         config["diarize"] = app_settings.diarize_default()
         config["asr_model"] = app_settings.asr_model_default()
+        # Etapa 4: quem instalou um unico idioma no assistente cria
+        # projetos nesse idioma (pt e o neutro).
+        config["asr_language"] = app_settings.language_default()
     except Exception:
         pass
     write_config(config_path, config, header=["# Local transcription pipeline configuration."])

@@ -92,8 +92,9 @@ with patch.object(runtime, "model_cache_dir", return_value=cache_root):
     dlg = ModelManagerDialog(lambda: win.context, win)
 
 # Esperado: 5 ASR (tiny instalado aparece; base demo NAO instalado some —
-# demos nao sao oferecidos, 2026-08-30) + 2 fixos + 3 opcionais + 1 orfao = 11
-assert dlg.table.rowCount() == 11, f"esperava 11 linhas, got {dlg.table.rowCount()}"
+# demos nao sao oferecidos, 2026-08-30) + 2 fixos + 15 pacotes de idioma
+# (etapa 4; pt ja esta nos fixos) + 3 opcionais + 1 orfao = 26
+assert dlg.table.rowCount() == 26, f"esperava 26 linhas, got {dlg.table.rowCount()}"
 check(f"1.1 tabela com {dlg.table.rowCount()} linhas")
 
 # Verificar cada linha tem dados

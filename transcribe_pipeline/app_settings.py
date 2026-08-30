@@ -72,3 +72,16 @@ def install_profile() -> str:
 def alignment_default() -> bool:
     """O perfil essencial dispensa o alinhador (sem tempos por palavra)."""
     return install_profile() != "essencial"
+
+
+def language_default() -> str:
+    """Idioma default de projetos NOVOS (escolha do assistente, etapa 4).
+
+    Quando o usuario marca UM unico idioma na instalacao, projetos novos
+    nascem nele; com varios (ou nenhum registro), o default neutro e pt.
+    Sempre um codigo do registro de pacotes de idioma — nunca "auto".
+    """
+    from . import model_manager
+
+    valor = model_manager.normalize_language(load().get("language_default"))
+    return valor if model_manager.align_language_supported(valor) else "pt"

@@ -96,6 +96,15 @@ with tempfile.TemporaryDirectory() as tmp:
     assert botao is not None and botao.text() == "Baixar"
     print("PASS: variante Whisper disponivel tem botao de baixar")
 
+    # --- pacotes de idioma (etapa 4): 15 nao-pt listados com Baixar ---
+    r = _linha(dlg, "Idioma: Holandês (tempos por palavra)")
+    assert r is not None, "pacote de idioma nao listado"
+    assert dlg.table.item(r, dlg.COL_STATUS).text() == "Disponivel"
+    botao = dlg.table.cellWidget(r, dlg.COL_ACTION)
+    assert botao is not None and botao.text() == "Baixar"
+    assert "1.2" in dlg.table.item(r, dlg.COL_SIZE).text()
+    print("PASS: pacotes de idioma no gerenciador")
+
     # --- tiny/base NAO sao OFERECIDOS em lugar nenhum (decisao 2026-08-30,
     # endurecida: "sequer deveriam ser oferecidos") ---
     assert _linha(dlg, model_manager.friendly_name("tiny")) is None, \

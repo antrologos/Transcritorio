@@ -242,8 +242,8 @@ with patch.object(runtime, "model_cache_dir", return_value=cache_root):
     mm_dialog = ModelManagerDialog(lambda: win.context, win)
 
 # 5 ASR (base demo nao-instalado nao e oferecido, 2026-08-30) + 2 fixos
-# + 3 opcionais de IA + 1 orfao = 11 linhas
-assert mm_dialog.table.rowCount() == 11
+# + 15 pacotes de idioma (etapa 4) + 3 opcionais de IA + 1 orfao = 26 linhas
+assert mm_dialog.table.rowCount() == 26
 check(f"6.1 tabela: {mm_dialog.table.rowCount()} linhas")
 
 # Espacamento total valido

@@ -72,4 +72,20 @@ assert html.count('href="engine-settings"') >= 2, html
 assert "Motor:" in html
 print("PASS: selo Motor virou link para a configuracao")
 
+# --- combo de idioma gerado do registro (etapa 4): 16 + Automatico ---
+os.environ["TRANSCRITORIO_FAKE_HARDWARE"] = "gpu8"
+dlg3 = EngineSettingsDialog({"asr_language": "nl"})
+assert dlg3.language_combo.count() == 17, dlg3.language_combo.count()
+assert dlg3.language_combo.currentData() == "nl"
+codigos = {dlg3.language_combo.itemData(i) for i in range(dlg3.language_combo.count())}
+assert {"pt", "auto", "nl", "ja", "zh"} <= codigos, codigos
+# Automatico declara a limitacao; idioma sem pacote instalado anuncia o download
+idx_auto = dlg3.language_combo.findData("auto")
+assert "sem tempos por palavra" in dlg3.language_combo.itemText(idx_auto)
+idx_nl = dlg3.language_combo.findData("nl")
+assert "baixa ~1.2 GB" in dlg3.language_combo.itemText(idx_nl), \
+    dlg3.language_combo.itemText(idx_nl)
+del os.environ["TRANSCRITORIO_FAKE_HARDWARE"]
+print("PASS: combo de idioma honesto")
+
 print("PASS: toy_engine_settings_device")
