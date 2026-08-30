@@ -8,6 +8,48 @@ assinatura digital, e o SignPath recusou a assinatura gratuita. O canal
 oficial passa a ser **PyPI + uv** (`uv tool install transcritorio`); ver
 `docs/INSTALL_WINDOWS.md` e `docs/LEGACY_STANDALONE.md`.
 
+- **Coerência de funcionalidades** (lote pós-teste real do primeiro uso):
+  - Todos os gates de clique de IA passam pelo registro de capacidades:
+    a memória de vídeo mínima entra na decisão (uma GPU de 2 GB não
+    recebe mais oferta de 8,7 GB), e toda oferta de download declara
+    tamanho, requisito de hardware com a placa detectada, espaço em
+    disco e o ambiente de análise (~3 GB) preparado na primeira
+    utilização. O "Perguntar" da janela de AI ganhou o mesmo baixador
+    das demais ações (antes o erro virava texto morto no rodapé).
+  - Botões da barra passam a seguir o estado das ações (o botão
+    "Perguntar às entrevistas com AI" contornava os bloqueios).
+  - **Transcrever novamente...**: botão contextual e item de menu para
+    refazer a transcrição do arquivo aberto, escolhendo entre os
+    modelos instalados. Retranscrever agora TEM efeito: a transcrição
+    editável é recriada do novo resultado (com confirmação explícita e
+    cópia de segurança das edições em `edits/backups/`); o painel
+    mostra o modelo que produziu a transcrição aberta.
+  - "Limpar transcricao gerada...": preserva as cópias de segurança,
+    faz backup prévio de revisões editadas, remove o índice de busca
+    órfão e mira apenas a seleção visual (caixas de marcação escolhem o
+    que transcrever, nunca o que apagar).
+  - Lote com skip-and-continue: falha num arquivo não aborta mais os
+    seguintes; o estado "Falha" aparece na coluna Transcrição (tooltip
+    com a causa) e o filtro "Pendentes" o inclui.
+  - Gerenciar modelos lista também os modelos de IA (Qwen, nomes,
+    busca) com estado por máquina, baixar por item e remover; variantes
+    Whisper não instaladas também ganham "Baixar". "Instalar
+    modelos..." do diálogo do Motor agora abre o gerenciador; o
+    preparador de modelos com tudo em cache diz "não há nada para
+    baixar" e desabilita o botão.
+  - Assistente: o perfil Completo pergunta se baixa os modelos de IA
+    agora (~10 GB) ou na primeira utilização, com o recomendado
+    assinalado pela máquina.
+  - Marcar "Separar falantes" sem o modelo presente oferece preparar na
+    hora, explicando a conta gratuita do Hugging Face (a exigência não
+    fica mais para a hora de transcrever); remontagens decidem a fonte
+    de falantes por arquivo (perfil Essencial não falha mais).
+  - O selo "Motor: CUDA/CPU" do cabeçalho virou link para a
+    configuração (alternância CUDA↔CPU descobrível); sem placa NVIDIA
+    o item CUDA fica desabilitado com o motivo.
+  - Diálogos de aceleração NVIDIA citam a memória de vídeo detectada e
+    avisam quando ela é pequena demais para valer a pena.
+
 - Verificação acústica de trocas de falante (novo passo pós-render,
   `check-boundaries`): compara a voz dos dois lados de cada troca com o
   modelo de embedding da diarização (benchmark: AUC 0,961) e marca com
