@@ -1829,13 +1829,16 @@ if QT_IMPORT_ERROR is None:
                     continue
                 cap = _caps.capability_for_model(asset.key)
                 bloqueio = _caps.hardware_blocker(cap, hw) if cap is not None else ""
+                aviso = _caps.hardware_warning(cap, hw) if cap is not None else ""
                 gb_hint = f"~{asset.estimated_gb:.1f} GB"
                 if bloqueio:
                     rows.append((asset.label, asset.repo_id, 0, "Incompativel",
                                  "-", False, None, gb_hint, f"{cap.label} {bloqueio}."))
                 else:
                     rows.append((asset.label, asset.repo_id, 0, "Disponivel",
-                                 "-", False, f"opt:{asset.key}", gb_hint, ""))
+                                 "-", False, f"opt:{asset.key}", gb_hint,
+                                 (f"Atenção: {cap.label} {aviso}. Por sua conta e risco."
+                                  if aviso else "")))
             # Orfaos
             for repo in model_manager.orphan_repos(cache_root):
                 entry = scan_by_repo.get(repo)
@@ -2902,6 +2905,13 @@ if QT_IMPORT_ERROR is None:
                 partes.append(
                     f"\"Perguntar\" usa o modelo de análise (~{resumo_gb:.1f} GB), "
                     "ainda não instalado neste computador — o clique oferece o download.")
+            try:
+                aviso_resumo = self._window._capability_warning("resumo_perguntar")
+            except Exception:  # noqa: BLE001
+                aviso_resumo = ""
+            if resumo_estado != "incompativel" and aviso_resumo:
+                partes.append(f"Atenção: \"Perguntar\" {aviso_resumo} — "
+                              "por sua conta e risco.")
             from . import search as _search
             try:
                 encoder_ok = _search.encoder_cached()
@@ -3542,8 +3552,13 @@ if QT_IMPORT_ERROR is None:
                              "resumo e perguntas com AI local."),
             }
             self._profile_radios: dict[str, QRadioButton] = {}
-            for chave, rotulo, _caps_keys in caps.PROFILES:
-                gb = caps.profile_size(chave, tamanhos, em_cache)
+            for chave, rotulo, caps_keys in caps.PROFILES:
+                # Nao cobrar modelos DURO-bloqueados (ex.: Qwen sem GPU):
+                # o total anunciava ~8,7 GB que nunca seriam baixados.
+                chaves_ok = tuple(
+                    k for k in caps_keys
+                    if not caps.hardware_blocker(caps.capability(k), hardware))
+                gb = caps.profile_size(chaves_ok, tamanhos, em_cache)
                 marca = "   ← recomendado para esta máquina" if chave == recomendado else ""
                 radio = QRadioButton(f"{rotulo} (~{gb:.1f} GB de componentes){marca}")
                 radio.toggled.connect(
@@ -3621,6 +3636,13 @@ if QT_IMPORT_ERROR is None:
                     avisos.append(
                         f"Atenção: o resumo e as perguntas com AI {bloqueio}. "
                         "Você pode instalar mesmo assim — as demais funções valem.")
+                else:
+                    aviso_vram = caps.hardware_warning(
+                        caps.capability("resumo_perguntar"), hardware)
+                    if aviso_vram:
+                        avisos.append(
+                            f"Atenção: o resumo e as perguntas com AI {aviso_vram} "
+                            "— por sua conta e risco.")
             aviso_cpu = caps.cpu_speed_warning(hardware)
             if aviso_cpu:
                 avisos.append(aviso_cpu)
@@ -7832,6 +7854,17 @@ if QT_IMPORT_ERROR is None:
             return _caps.capability_status(
                 _caps.capability(key), hardware, em_cache, tamanhos)
 
+        def _capability_warning(self, key: str) -> str:
+            """Aviso "roda, mas por conta e risco" (VRAM abaixo do minimo)
+            desta capacidade NESTA maquina; "" sem ressalvas."""
+            from . import capabilities as _caps
+            try:
+                cache = getattr(self, "_caps_cache", None)
+                hw = cache[0] if cache else _caps.hardware_snapshot()
+                return _caps.hardware_warning(_caps.capability(key), hw)
+            except Exception:  # noqa: BLE001 - aviso nunca derruba a UI
+                return ""
+
         def _invalidate_capability_cache(self) -> None:
             self._caps_cache = None
             self.update_action_states()
@@ -7936,13 +7969,18 @@ if QT_IMPORT_ERROR is None:
             # Nunca clique-morto, nunca erro.
             resumo_estado, resumo_motivo, resumo_gb = self._capability_state("resumo_perguntar")
             resumo_travado = resumo_estado == "incompativel"
+            notas_resumo: list[str] = []
+            if resumo_estado == "instalavel":
+                notas_resumo.append(f"Baixa o modelo de análise (~{resumo_gb:.1f} GB) "
+                                    "na primeira utilização.")
+            resumo_aviso = self._capability_warning("resumo_perguntar")
+            if not resumo_travado and resumo_aviso:
+                notas_resumo.append(f"Atenção: {resumo_aviso} — por sua conta e risco.")
             self._set_action(
                 self.summarize_action,
                 not busy and has_review and not resumo_travado,
                 reason_busy if busy else (resumo_motivo if resumo_travado else reason_open),
-                enabled_note=(f"Baixa o modelo de análise (~{resumo_gb:.1f} GB) na "
-                              "primeira utilização."
-                              if resumo_estado == "instalavel" else ""),
+                enabled_note=" ".join(notas_resumo),
             )
             busca_estado, _busca_motivo, busca_gb = self._capability_state("busca_semantica")
             self._set_action(self.explore_action, not busy and has_project,
@@ -9688,6 +9726,10 @@ if QT_IMPORT_ERROR is None:
                 if hw.vram_gb:
                     linha += f" — a sua tem {hw.vram_gb:.0f} GB"
                 partes.append(linha + ".")
+                aviso_hw = _caps.hardware_warning(cap, hw)
+                if aviso_hw:
+                    partes.append(f"Atenção: {cap.label} {aviso_hw}. "
+                                  "Baixar e usar é por sua conta e risco.")
             if env_pendente:
                 partes.append("Na primeira utilização, o aplicativo também prepara "
                               "um ambiente de análise local (~3 GB adicionais, "

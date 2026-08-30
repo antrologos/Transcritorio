@@ -185,17 +185,33 @@ def describe_hardware(hw: Hardware) -> str:
 
 
 def hardware_blocker(cap: Capability, hw: Hardware) -> str:
-    """Motivo pelo qual a MAQUINA nao dá conta; "" se dá (pura).
+    """Motivo pelo qual a maquina NAO RODA a capacidade; "" se roda (pura).
 
-    Vram desconhecida nao bloqueia: preferimos deixar tentar a barrar
-    por uma sonda que falhou.
+    Bloqueio DURO apenas: sem placa NVIDIA quando a capacidade exige.
+    VRAM abaixo do minimo NAO bloqueia — vira hardware_warning
+    ("recomendar, nunca decidir": o usuario tenta por conta e risco;
+    barrar por VRAM desligava o resumo de quem ja tinha o modelo
+    baixado numa placa de 4 GB — regressao corrigida em 2026-08-30).
+    Vram desconhecida tambem nao bloqueia: preferimos deixar tentar a
+    barrar por uma sonda que falhou.
     """
     if cap.needs_gpu and not hw.has_gpu:
         return ("precisa de uma placa de vídeo NVIDIA; este computador "
                 "não tem uma disponível")
-    if cap.min_vram_gb and hw.vram_gb is not None and hw.vram_gb < cap.min_vram_gb:
-        return (f"precisa de cerca de {cap.min_vram_gb:.0f} GB de memória de vídeo; "
-                f"esta placa tem {hw.vram_gb:.0f} GB")
+    return ""
+
+
+def hardware_warning(cap: Capability, hw: Hardware) -> str:
+    """Aviso de "roda, mas por conta e risco"; "" sem ressalvas (pura).
+
+    So se aplica quando a maquina RODA (ha placa): abaixo do minimo de
+    VRAM o recurso pode falhar ao carregar ou ficar lento — o usuario
+    decide, avisado.
+    """
+    if (cap.min_vram_gb and hw.has_gpu and hw.vram_gb is not None
+            and hw.vram_gb < cap.min_vram_gb):
+        return (f"recomenda cerca de {cap.min_vram_gb:.0f} GB de memória de vídeo; "
+                f"esta placa tem {hw.vram_gb:.0f} GB — pode falhar ou ficar lento")
     return ""
 
 

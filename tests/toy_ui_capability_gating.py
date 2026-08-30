@@ -70,12 +70,16 @@ janela._set_action(acao, estado != "incompativel", motivo)
 assert acao.isEnabled() is False and "NVIDIA" in acao.toolTip()
 print("PASS: sem GPU o resumo fica desabilitado com motivo")
 
-# --- GPU pequena: a VRAM minima do registro bloqueia com motivo claro ---
+# --- GPU pequena: NAO bloqueia (por conta e risco), mas o AVISO existe ---
+# Regressao corrigida em 2026-08-30: barrar por VRAM desligava o resumo de
+# quem ja tinha o modelo baixado numa placa pequena.
 GPU_2GB = caps.Hardware(has_gpu=True, vram_gb=2.0, ram_gb=16.0, cores=8, free_disk_gb=50.0)
 janela = _Janela(GPU_2GB, {caps.ASR_MODEL_TOKEN, "llm_qwen"})
-estado, motivo, _gb = janela._capability_state("resumo_perguntar")
-assert estado == "incompativel" and "memória de vídeo" in motivo, (estado, motivo)
-print("PASS: GPU de 2 GB e incompativel com o resumo, com motivo")
+estado, _motivo, _gb = janela._capability_state("resumo_perguntar")
+assert estado == "pronta", (estado, _motivo)
+assert "memória de vídeo" in caps.hardware_warning(
+    caps.capability("resumo_perguntar"), GPU_2GB)
+print("PASS: GPU de 2 GB roda com aviso, nao bloqueia")
 
 # --- com GPU e modelo ausente: INSTALAVEL -> continua habilitada ---
 janela = _Janela(GPU_BOA, {caps.ASR_MODEL_TOKEN})

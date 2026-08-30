@@ -137,13 +137,36 @@ try:
     assert ok is False and not _FakeQMB.perguntas and _FakeQMB.avisos
     print("PASS: disco insuficiente aborta antes da pergunta")
 
-    # --- _ensure_llm_model: GPU de 2 GB = incompativel, mesmo com modelo em cache ---
+    # --- _ensure_llm_model: GPU de 2 GB com modelo em cache SEGUE rodando ---
+    # (regressao corrigida 2026-08-30: VRAM baixa e aviso, nao veto)
     _FakeQMB._reset()
     janela2 = _Janela(GPU2, {"llm_qwen"})
-    ok = janela2._ensure_llm_model()
+    with patch("transcribe_pipeline.summarize.summarize_ready", lambda: (True, "")):
+        ok = janela2._ensure_llm_model()
+    assert ok is True and not _FakeQMB.infos, _FakeQMB.infos
+    print("PASS: GPU pequena com modelo baixado continua funcionando")
+
+    # --- sem GPU nenhuma: bloqueio DURO continua valendo ---
+    _FakeQMB._reset()
+    SEM_GPU = caps.Hardware(has_gpu=False, ram_gb=16.0, cores=8, free_disk_gb=50.0)
+    janela2b = _Janela(SEM_GPU, {"llm_qwen"})
+    ok = janela2b._ensure_llm_model()
     assert ok is False and not _FakeQMB.perguntas
-    assert _FakeQMB.infos and "memória de vídeo" in _FakeQMB.infos[0][1], _FakeQMB.infos
-    print("PASS: VRAM minima entra no gate de clique")
+    assert _FakeQMB.infos and "NVIDIA" in _FakeQMB.infos[0][1], _FakeQMB.infos
+    print("PASS: sem GPU o bloqueio duro permanece")
+
+    # --- GPU de 2 GB SEM modelo: a oferta sai com o aviso de conta e risco ---
+    _FakeQMB._reset(); pedidos_de_disco.clear()
+    janela2c = _Janela(GPU2, set())
+    with patch.object(model_manager, "check_disk_space", _disco_ok), \
+         patch("transcribe_pipeline.llm_env.llm_env_ready", lambda *a, **k: True), \
+         patch("transcribe_pipeline.summarize.summarize_ready",
+               lambda: (False, "modelo ausente")):
+        ok = janela2c._ensure_llm_model()
+    assert ok is False and _FakeQMB.perguntas
+    texto = _FakeQMB.perguntas[0][1]
+    assert "conta e risco" in texto, texto
+    print("PASS: oferta em GPU pequena avisa conta e risco")
 
     # --- _ensure_llm_model: GPU boa sem modelo -> oferta com needs_llm_env ---
     _FakeQMB._reset()

@@ -34,15 +34,22 @@ except KeyError:
     pass
 print("PASS: registro")
 
-# --- hardware_blocker: so a maquina bloqueia, e vram desconhecida nao bloqueia ---
+# --- hardware_blocker: so o bloqueio DURO (sem placa); VRAM baixa vira AVISO ---
+# Regressao corrigida em 2026-08-30: barrar por VRAM decidia PELO usuario
+# ("recomendar, nunca decidir" / "por sua conta e risco") e desligava o
+# resumo de quem ja tinha o modelo baixado numa placa de 4 GB.
 llm = cap.capability("resumo_perguntar")
-assert cap.hardware_blocker(llm, FRACA)                     # sem GPU
-assert "2 GB" in cap.hardware_blocker(llm, GPU_PEQUENA)     # GPU pequena demais
+assert cap.hardware_blocker(llm, FRACA)                     # sem GPU: bloqueio duro
+assert cap.hardware_blocker(llm, GPU_PEQUENA) == ""         # GPU pequena: NAO bloqueia
+assert "2 GB" in cap.hardware_warning(llm, GPU_PEQUENA)     # ...mas avisa
+assert cap.hardware_warning(llm, GPU_BOA) == ""
+assert cap.hardware_warning(llm, FRACA) == ""               # sem GPU o aviso nao se aplica (ja bloqueou)
 assert cap.hardware_blocker(llm, GPU_BOA) == ""
 assert cap.hardware_blocker(llm, cap.Hardware(has_gpu=True, vram_gb=None)) == "", \
     "sonda de VRAM falhou: deve deixar tentar, nao barrar"
+assert cap.hardware_warning(llm, cap.Hardware(has_gpu=True, vram_gb=None)) == ""
 assert cap.hardware_blocker(cap.capability("transcrever"), MINIMA) == ""
-print("PASS: hardware_blocker")
+print("PASS: hardware_blocker + hardware_warning")
 
 # --- capability_status: os quatro cenarios ---
 estado, motivo, gb = cap.capability_status(
@@ -56,10 +63,12 @@ assert estado == "instalavel" and gb == 0.5 and "falta baixar" in motivo
 estado, motivo, gb = cap.capability_status(llm, FRACA, set(), TAMANHOS)
 assert estado == "incompativel" and "NVIDIA" in motivo
 
-# incompativel por VRAM tem prioridade sobre "falta baixar": nao adianta
-# oferecer 8,7 GB para uma placa que nao roda o modelo
-estado, motivo, _gb = cap.capability_status(llm, GPU_PEQUENA, set(), TAMANHOS)
-assert estado == "incompativel" and "memória de vídeo" in motivo
+# GPU pequena NAO e mais "incompativel": a oferta segue, com o aviso de
+# VRAM entrando pelo hardware_warning (por conta e risco do usuario)
+estado, _motivo, gb = cap.capability_status(llm, GPU_PEQUENA, set(), TAMANHOS)
+assert estado == "instalavel" and gb == 8.7, (estado, gb)
+estado, _motivo, _gb = cap.capability_status(llm, GPU_PEQUENA, {"llm_qwen"}, TAMANHOS)
+assert estado == "pronta", "modelo baixado em placa pequena deve continuar utilizavel"
 
 # ja em cache + GPU boa
 estado, _motivo, gb = cap.capability_status(llm, GPU_BOA, {"llm_qwen"}, TAMANHOS)
