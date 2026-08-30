@@ -52,6 +52,12 @@ janela._set_action(acao, False, "motivo B")
 assert acao.toolTip() == f"{ORIGINAL}\n(motivo B)", "tooltip acumulou/truncou"
 janela._set_action(acao, True)
 assert acao.toolTip() == ORIGINAL, "tooltip original nao voltou"
+# nota-quando-habilitada (SL-0): instalavel nao desabilita, mas avisa
+janela._set_action(acao, True, enabled_note="Baixa o modelo (~1,1 GB) na primeira utilização.")
+assert acao.isEnabled() is True
+assert "1,1 GB" in acao.toolTip(), acao.toolTip()
+janela._set_action(acao, True)
+assert acao.toolTip() == ORIGINAL, "nota nao foi removida ao reabilitar sem nota"
 print("PASS: _set_action preserva tooltip multi-linha")
 
 # --- sem GPU: resumo e INCOMPATIVEL -> acao desabilitada COM motivo ---

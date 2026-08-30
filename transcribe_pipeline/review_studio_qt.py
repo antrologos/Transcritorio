@@ -4473,7 +4473,18 @@ if QT_IMPORT_ERROR is None:
         def action_button(self, action: QAction, primary: bool = False) -> QPushButton:
             button = QPushButton(action.text())
             button.setToolTip(action.toolTip())
+            button.setEnabled(action.isEnabled())
             button.clicked.connect(lambda _checked=False, item=action: item.trigger())
+            # O botao precisa SEGUIR a acao: QAction.trigger() dispara mesmo
+            # com a acao desabilitada, entao um botao que nao espelha o
+            # enabled contorna os gates do update_action_states. Os botoes
+            # criados aqui vivem tanto quanto a janela (lambda segura o
+            # botao sem risco de wrapper morto).
+            action.changed.connect(
+                lambda item=action, b=button: (
+                    b.setEnabled(item.isEnabled()),
+                    b.setToolTip(item.toolTip()),
+                ))
             if primary:
                 button.setDefault(True)
                 button.setStyleSheet("font-weight: 700;")
@@ -7166,21 +7177,31 @@ if QT_IMPORT_ERROR is None:
             self.set_save_state(saved_status_message())
             self.progress_label.setText(f"Nome aplicado a {changed} bloco(s) desta voz.")
 
-        def _set_action(self, action: QAction, enabled: bool, disabled_reason: str = "") -> None:
+        def _set_action(self, action: QAction, enabled: bool, disabled_reason: str = "",
+                        enabled_note: str = "") -> None:
             """Habilita/desabilita a acao e explica o motivo no tooltip.
 
             O tooltip ORIGINAL fica guardado na propria acao: usar a
             primeira linha do tooltip corrente como base truncava
             permanentemente os tooltips de varias linhas (Perguntar,
             Resumir) na primeira desabilitacao.
+
+            enabled_note: nota anexada quando a acao FICA habilitada
+            (ex.: "Baixa o modelo de nomes (~1,1 GB) na primeira
+            utilizacao.") — o estado "instalavel" nao desabilita, mas
+            o usuario merece saber antes de clicar.
             """
             base = action.property("tooltip_base")
             if base is None:
                 base = action.toolTip() or action.text()
                 action.setProperty("tooltip_base", base)
             action.setEnabled(enabled)
-            action.setToolTip(f"{base}\n({disabled_reason})"
-                              if (not enabled and disabled_reason) else str(base))
+            if not enabled and disabled_reason:
+                action.setToolTip(f"{base}\n({disabled_reason})")
+            elif enabled and enabled_note:
+                action.setToolTip(f"{base}\n({enabled_note})")
+            else:
+                action.setToolTip(str(base))
 
         def _capability_state(self, key: str) -> tuple[str, str, float]:
             """Estado da capacidade NESTA maquina, com cache.
