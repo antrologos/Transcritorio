@@ -42,3 +42,19 @@ def save(updates: dict[str, Any]) -> None:
 def diarize_default() -> bool:
     """Default de 'diarize' para PROJETOS NOVOS (escolha do wizard)."""
     return bool(load().get("diarize_default", True))
+
+
+def install_profile() -> str:
+    """Perfil de instalacao escolhido no assistente (por maquina).
+
+    "essencial" | "padrao" | "completo". Instalacoes anteriores ao
+    conceito de perfil caem em "padrao" — e o que elas tinham de fato
+    (transcricao + alinhamento + falantes conforme diarize_default).
+    """
+    valor = str(load().get("install_profile") or "").strip().lower()
+    return valor if valor in {"essencial", "padrao", "completo"} else "padrao"
+
+
+def alignment_default() -> bool:
+    """O perfil essencial dispensa o alinhador (sem tempos por palavra)."""
+    return install_profile() != "essencial"

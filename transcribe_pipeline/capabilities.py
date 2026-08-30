@@ -20,10 +20,16 @@ ou rede.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any, Iterable
 
 ASR_MODEL_TOKEN = "@asr"  # resolvido para a variante escolhida no projeto
+
+# Simulacao de maquina para TESTE do assistente ("cpu", "minimo",
+# "gpu2", "gpu24"...). Sem isso seria impossivel ver, numa maquina boa,
+# o que o assistente recomendaria numa fraca.
+FAKE_HARDWARE_ENV = "TRANSCRITORIO_FAKE_HARDWARE"
 
 
 @dataclass(frozen=True)
@@ -111,10 +117,35 @@ def capability(key: str) -> Capability:
     raise KeyError(f"Capacidade desconhecida: {key}")
 
 
+def parse_fake_hardware(spec: str | None) -> Hardware | None:
+    """Retrato SIMULADO a partir do valor do env de teste (pura).
+
+    "cpu" = maquina comum sem placa; "minimo" = maquina apertada;
+    "gpuN" = placa NVIDIA com N GB de video. None = nao simular.
+    """
+    valor = (spec or "").strip().lower()
+    if not valor:
+        return None
+    if valor == "cpu":
+        return Hardware(has_gpu=False, vram_gb=None, ram_gb=8.0, cores=4, free_disk_gb=50.0)
+    if valor == "minimo":
+        return Hardware(has_gpu=False, vram_gb=None, ram_gb=4.0, cores=2, free_disk_gb=12.0)
+    if valor.startswith("gpu"):
+        try:
+            vram = float(valor[3:] or 8)
+        except ValueError:
+            return None
+        return Hardware(has_gpu=True, vram_gb=vram, ram_gb=16.0, cores=8, free_disk_gb=100.0)
+    return None
+
+
 def hardware_snapshot() -> Hardware:
     """Retrato da maquina; degrada em silencio quando a sonda falha."""
     from . import runtime
 
+    fake = parse_fake_hardware(os.environ.get(FAKE_HARDWARE_ENV))
+    if fake is not None:
+        return fake
     return Hardware(
         has_gpu=runtime.has_nvidia_gpu(),
         vram_gb=runtime.total_vram_gb(),

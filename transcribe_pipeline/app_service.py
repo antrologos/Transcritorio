@@ -339,8 +339,8 @@ def models_status_text() -> str:
     return model_manager.status_text()
 
 
-def required_models_ready(asr_variants: list[str] | None = None, include_diarization: bool = True) -> bool:
-    return model_manager.all_required_models_cached(asr_variants=asr_variants, include_diarization=include_diarization)
+def required_models_ready(asr_variants: list[str] | None = None, include_diarization: bool = True, include_alignment: bool = True) -> bool:
+    return model_manager.all_required_models_cached(asr_variants=asr_variants, include_diarization=include_diarization, include_alignment=include_alignment)
 
 
 def download_models(
@@ -349,11 +349,12 @@ def download_models(
     should_cancel: Callable[[], bool] | None = None,
     asr_variants: list[str] | None = None,
     include_diarization: bool = True,
+    include_alignment: bool = True,
 ) -> JobResult:
-    failures = model_manager.download_required_models(token=token, progress_callback=progress_callback, should_cancel=should_cancel, asr_variants=asr_variants, include_diarization=include_diarization)
+    failures = model_manager.download_required_models(token=token, progress_callback=progress_callback, should_cancel=should_cancel, asr_variants=asr_variants, include_diarization=include_diarization, include_alignment=include_alignment)
     if failures:
         return JobResult("models", failures, "Falha ao baixar um ou mais modelos.")
-    verify_failures = model_manager.verify_required_models(progress_callback=progress_callback, asr_variants=asr_variants, include_diarization=include_diarization)
+    verify_failures = model_manager.verify_required_models(progress_callback=progress_callback, asr_variants=asr_variants, include_diarization=include_diarization, include_alignment=include_alignment)
     # Ternario CRITICO: sem isto a mensagem seria "Modelos prontos..."
     # mesmo em falha, causando UI mostrar sucesso como erro. Bug visto
     # pelo Rogerio em 2026-04-22 depois do download completar mas verify

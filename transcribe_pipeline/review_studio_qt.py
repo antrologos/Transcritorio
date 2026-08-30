@@ -3099,19 +3099,23 @@ if QT_IMPORT_ERROR is None:
         PAGE_WELCOME = 0
         PAGE_ACCOUNT = 1
         PAGE_TERMS = 2
+        PAGE_PROFILE = 8  # etapa 3: perfil de instalacao (recomendado, nao imposto)
         PAGE_MODEL_SELECT = 3
         PAGE_TOKEN = 4
         PAGE_DOWNLOAD = 5
         PAGE_DONE = 6
-        PAGE_SPEAKERS = 7  # id novo (v0.2); a ORDEM e controlada por nextId()
+        # id 7 era a antiga pagina sim/nao de falantes (v0.2), substituida
+        # pela PAGE_PROFILE na etapa 3; nao reusar o id.
 
         def __init__(self, parent: QWidget | None = None) -> None:
             super().__init__(parent)
             from . import model_manager
             self.download_completed = False
             # Diarizacao e OPCIONAL (v0.2): quem so quer transcrever pula
-            # conta/termos/token do pyannote gated. Escolha na PAGE_SPEAKERS.
+            # conta/termos/token do pyannote gated. Desde a etapa 3, quem
+            # decide isso e o PERFIL (essencial = so transcrever).
             self.wants_diarization = True
+            self.selected_profile = "padrao"
             self.selected_asr_variants: list[str] = [model_manager.DEFAULT_ASR_VARIANT]
             self.setWindowTitle(f"{APP_NAME} — Configuração inicial")
             self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
@@ -3124,7 +3128,7 @@ if QT_IMPORT_ERROR is None:
             self.setButtonText(QWizard.WizardButton.FinishButton, "Começar a usar")
 
             self.setPage(self.PAGE_WELCOME, self._make_welcome_page())
-            self.setPage(self.PAGE_SPEAKERS, self._make_speakers_page())
+            self.setPage(self.PAGE_PROFILE, self._make_profile_page())
             self.setPage(self.PAGE_ACCOUNT, self._make_account_page())
             self.setPage(self.PAGE_TERMS, self._make_terms_page())
             self.setPage(self.PAGE_MODEL_SELECT, _ModelSelectWizardPage(self))
@@ -3134,17 +3138,18 @@ if QT_IMPORT_ERROR is None:
             self.setStartId(self.PAGE_WELCOME)
 
         def nextId(self) -> int:
-            # Ordem explicita: sem diarizacao, conta/termos/token sao pulados
-            # (modelos ASR/alinhamento sao publicos — nao exigem token).
-            if self.wants_diarization:
+            # Ordem explicita: o perfil decide o caminho. Essencial pula
+            # conta/termos/token (modelos ASR sao publicos — nao exigem
+            # token); padrao/completo incluem falantes (pyannote gated).
+            if self.selected_profile != "essencial":
                 seq = [
-                    self.PAGE_WELCOME, self.PAGE_SPEAKERS, self.PAGE_ACCOUNT,
+                    self.PAGE_WELCOME, self.PAGE_PROFILE, self.PAGE_ACCOUNT,
                     self.PAGE_TERMS, self.PAGE_MODEL_SELECT, self.PAGE_TOKEN,
                     self.PAGE_DOWNLOAD, self.PAGE_DONE,
                 ]
             else:
                 seq = [
-                    self.PAGE_WELCOME, self.PAGE_SPEAKERS,
+                    self.PAGE_WELCOME, self.PAGE_PROFILE,
                     self.PAGE_MODEL_SELECT, self.PAGE_DOWNLOAD, self.PAGE_DONE,
                 ]
             cid = self.currentId()
@@ -3164,38 +3169,87 @@ if QT_IMPORT_ERROR is None:
                 worker.request_cancel()
                 worker.wait()  # bloqueante: should_cancel corta entre blobs/chunks
             if result == QDialog.DialogCode.Accepted:
-                # Persistir a escolha como default de projetos novos
+                # Persistir a escolha como default de projetos novos e o
+                # perfil da MAQUINA (decide alinhamento e gates de inicio).
                 try:
                     from . import app_settings
-                    app_settings.save({"diarize_default": bool(self.wants_diarization)})
+                    app_settings.save({
+                        "diarize_default": bool(self.wants_diarization),
+                        "install_profile": str(self.selected_profile),
+                    })
                 except Exception as exc:
                     _logger.warning("nao foi possivel salvar app_settings: %s", exc)
             super().done(result)
 
-        def _make_speakers_page(self) -> QWizardPage:
+        def _make_profile_page(self) -> QWizardPage:
+            """Perfil de instalacao (etapa 3): o app mostra o que detectou
+            na maquina e MARCA o recomendado — a escolha e sempre do
+            usuario, inclusive contra a recomendacao (com aviso claro).
+            Substitui a antiga pergunta sim/nao de falantes: o perfil ja
+            diz o que entra."""
+            from . import capabilities as caps
             page = QWizardPage()
-            page.setTitle("Identificação de falantes")
+            page.setTitle("O que instalar neste computador?")
             layout = QVBoxLayout(page)
-            intro = QLabel(
-                "Além de transcrever, o Transcritório pode identificar "
-                "automaticamente quem está falando em cada trecho "
-                "(ex.: Entrevistador / Entrevistado).\n\n"
-                "Esse recurso usa um modelo com acesso controlado no Hugging Face "
-                "e por isso pede uma conta gratuita e um token. Se preferir pular "
-                "agora, você poderá ativá-lo depois sem repetir as transcrições."
-            )
-            intro.setWordWrap(True)
-            layout.addWidget(intro)
-            yes_radio = QRadioButton("Sim, separar os falantes (recomendado para entrevistas)")
-            no_radio = QRadioButton("Não, apenas transcrever (sem conta e sem token)")
-            yes_radio.setChecked(True)
-            yes_radio.toggled.connect(
-                lambda checked: setattr(self, "wants_diarization", bool(checked))
-            )
-            layout.addWidget(yes_radio)
-            layout.addWidget(no_radio)
+            hardware = caps.hardware_snapshot()
+            recomendado = caps.recommended_profile(hardware)
+            tamanhos = caps.model_sizes_from_registry()
+            em_cache = caps.cached_model_keys()
+            detectado = QLabel(f"Este computador tem: {caps.describe_hardware(hardware)}.")
+            detectado.setWordWrap(True)
+            layout.addWidget(detectado)
+            descricoes = {
+                "essencial": "Transcrever e exportar entrevistas. Sem conta e sem token.",
+                "padrao": ("Tudo do Essencial + separar quem fala e tempos por palavra "
+                           "(pede uma conta gratuita no Hugging Face)."),
+                "completo": ("Tudo do Padrão + busca por sentido, glossário de nomes, "
+                             "resumo e perguntas com AI local."),
+            }
+            self._profile_radios: dict[str, QRadioButton] = {}
+            for chave, rotulo, _caps_keys in caps.PROFILES:
+                gb = caps.profile_size(chave, tamanhos, em_cache)
+                marca = "   ← recomendado para esta máquina" if chave == recomendado else ""
+                radio = QRadioButton(f"{rotulo} (~{gb:.1f} GB de componentes){marca}")
+                radio.toggled.connect(
+                    lambda checked, k=chave: checked and self._on_profile_chosen(k))
+                layout.addWidget(radio)
+                detalhe = QLabel("      " + descricoes[chave])
+                detalhe.setWordWrap(True)
+                detalhe.setStyleSheet(_style_muted())
+                layout.addWidget(detalhe)
+                self._profile_radios[chave] = radio
+            self._profile_warning = QLabel("")
+            self._profile_warning.setWordWrap(True)
+            self._profile_warning.setStyleSheet(_style_err())
+            layout.addWidget(self._profile_warning)
+            rodape = QLabel(
+                "Tudo pode ser mudado depois em Transcrever > Gerenciar modelos — "
+                "nada aqui é definitivo.")
+            rodape.setWordWrap(True)
+            rodape.setStyleSheet(_style_muted())
+            layout.addWidget(rodape)
             layout.addStretch()
+            self._profile_radios[recomendado].setChecked(True)
             return page
+
+        def _on_profile_chosen(self, chave: str) -> None:
+            from . import capabilities as caps
+            self.selected_profile = chave
+            self.wants_diarization = chave != "essencial"
+            hardware = caps.hardware_snapshot()
+            avisos: list[str] = []
+            if chave == "completo":
+                bloqueio = caps.hardware_blocker(
+                    caps.capability("resumo_perguntar"), hardware)
+                if bloqueio:
+                    avisos.append(
+                        f"Atenção: o resumo e as perguntas com AI {bloqueio}. "
+                        "Você pode instalar mesmo assim — as demais funções valem.")
+            aviso_cpu = caps.cpu_speed_warning(hardware)
+            if aviso_cpu:
+                avisos.append(aviso_cpu)
+            if hasattr(self, "_profile_warning"):
+                self._profile_warning.setText("\n".join(avisos))
 
         # -- Page factories --
 
@@ -3210,9 +3264,9 @@ if QT_IMPORT_ERROR is None:
                 "Nenhum áudio será enviado para a internet. "
                 "Suas gravações ficam sempre no seu computador.\n\n"
                 "Para funcionar, o programa precisa baixar alguns componentes de "
-                "inteligência artificial (arquivos grandes — cerca de 7 GB de download "
-                "no fluxo padrão; o espaço em disco aparece na etapa de seleção). "
-                "Isso é feito uma única vez.\n\n"
+                "inteligência artificial. O tamanho depende do que você escolher "
+                "instalar — de ~1,5 GB no perfil Essencial a alguns GB no completo; "
+                "os números aparecem na próxima etapa. Isso é feito uma única vez.\n\n"
                 "Vamos guiá-lo passo a passo. O processo leva uns 10 minutos "
                 "e você só precisa fazer isso na primeira vez."
             )
@@ -3234,7 +3288,7 @@ if QT_IMPORT_ERROR is None:
 
         def _make_account_page(self) -> QWizardPage:
             page = QWizardPage()
-            page.setTitle("Passo 1 de 5: Criar uma conta gratuita")
+            page.setTitle("Criar uma conta gratuita")
             layout = QVBoxLayout(page)
             account_intro = QLabel(
                 "Os componentes de transcrição ficam em um site chamado Hugging Face — "
@@ -3271,7 +3325,7 @@ if QT_IMPORT_ERROR is None:
 
         def _make_terms_page(self) -> QWizardPage:
             page = QWizardPage()
-            page.setTitle("Passo 2 de 5: Autorizar o modelo de identificação de falantes")
+            page.setTitle("Autorizar o modelo de identificação de falantes")
             layout = QVBoxLayout(page)
             terms_intro = QLabel(
                 "Além do modelo de transcrição (que é livre), usamos um segundo modelo "
@@ -3335,17 +3389,22 @@ if QT_IMPORT_ERROR is None:
         OTHERS = ["medium", "small", "base", "tiny"]
         @property
         def FIXED_GB(self) -> float:
-            """Tamanho dos componentes sempre baixados (alinhamento +
-            falantes), lido do registro — antes era um literal que
-            silenciosamente divergia de _FIXED_MODELS."""
-            return sum(a.estimated_gb for a in self._model_manager._FIXED_MODELS)
+            """Componentes alem do ASR, conforme o PERFIL escolhido — lido
+            do registro (antes era um literal que divergia) e sensivel ao
+            perfil (essencial: nenhum extra)."""
+            perfil = getattr(self._wizard, "selected_profile", "padrao")
+            if perfil == "essencial":
+                return 0.0
+            pular = set() if getattr(self._wizard, "wants_diarization", True) else {"diarization"}
+            return sum(a.estimated_gb for a in self._model_manager._FIXED_MODELS
+                       if a.key not in pular)
 
         def __init__(self, wizard: "FirstRunWizard") -> None:
             super().__init__()
             from . import model_manager
             self._model_manager = model_manager
             self._wizard = wizard
-            self.setTitle("Passo 3 de 5: Escolha o modelo de transcrição")
+            self.setTitle("Escolha o modelo de transcrição")
             layout = QVBoxLayout(self)
             intro = QLabel(
                 "Selecione quais modelos de transcrição deseja baixar. "
@@ -3413,10 +3472,11 @@ if QT_IMPORT_ERROR is None:
             total = self.total_gb()
             # estimated_gb e tamanho EM DISCO (download real e ~metade, o cache
             # HF duplica) — rotular como "espaco em disco", nao "download".
+            extras = self.FIXED_GB
+            sufixo = (" (inclui os componentes do perfil escolhido)"
+                      if extras else " (perfil Essencial: só o modelo de transcrição)")
             self.total_label.setText(
-                f"Espaço em disco necessário: ~{self._fmt(total)} "
-                f"(inclui componentes obrigatórios de alinhamento e identificação de falantes)"
-            )
+                f"Espaço em disco necessário: ~{self._fmt(total)}{sufixo}")
 
         def selected_asr_variants(self) -> list[str]:
             return [k for k, cb in self._checkboxes.items() if cb.isChecked()]
@@ -3436,7 +3496,7 @@ if QT_IMPORT_ERROR is None:
 
         def __init__(self) -> None:
             super().__init__()
-            self.setTitle("Passo 4 de 5: Criar e colar a chave de acesso")
+            self.setTitle("Criar e colar a chave de acesso")
             layout = QVBoxLayout(self)
             token_intro = QLabel(
                 "Agora você precisa criar uma \"chave de acesso\" no Hugging Face. "
@@ -3534,7 +3594,7 @@ if QT_IMPORT_ERROR is None:
             self._worker: "_SetupDownloadThread | None" = None
             self._download_started = False
             self._download_done = False
-            self.setTitle("Passo 5 de 5: Baixar os componentes")
+            self.setTitle("Baixar os componentes")
             self.setFinalPage(False)
             layout = QVBoxLayout(self)
             download_intro = QLabel(
@@ -3578,6 +3638,7 @@ if QT_IMPORT_ERROR is None:
                 token,
                 asr_variants=asr_variants,
                 include_diarization=bool(getattr(self._wizard, "wants_diarization", True)),
+                include_alignment=getattr(self._wizard, "selected_profile", "padrao") != "essencial",
             )
             self._worker.progress.connect(self._on_progress)
             self._worker.finished_ok.connect(self._on_done)
@@ -3612,11 +3673,13 @@ if QT_IMPORT_ERROR is None:
         finished_ok = Signal()
         failed = Signal(str)
 
-        def __init__(self, token: str, asr_variants: list[str] | None = None, include_diarization: bool = True) -> None:
+        def __init__(self, token: str, asr_variants: list[str] | None = None,
+                     include_diarization: bool = True, include_alignment: bool = True) -> None:
             super().__init__()
             self.token = token
             self.asr_variants = asr_variants
             self.include_diarization = include_diarization
+            self.include_alignment = include_alignment
             self._cancel_requested = False
 
         def request_cancel(self) -> None:
@@ -3635,6 +3698,7 @@ if QT_IMPORT_ERROR is None:
                     should_cancel=lambda: self._cancel_requested,
                     asr_variants=self.asr_variants,
                     include_diarization=self.include_diarization,
+                    include_alignment=self.include_alignment,
                 )
                 result_failures = getattr(result, "failures", 0)
                 result_message = getattr(result, "message", "")
@@ -4591,9 +4655,11 @@ if QT_IMPORT_ERROR is None:
                 # a mao, vindo da CLI). Sem este guard a excecao subia no
                 # startup e o app nao abria.
                 try:
+                    from . import app_settings as _settings
                     return app_service.required_models_ready(
                         self._configured_asr_variants(),
                         include_diarization=self._configured_diarize(),
+                        include_alignment=_settings.alignment_default(),
                     )
                 except Exception as exc:  # noqa: BLE001
                     _logger.warning("Verificacao de modelos falhou: %s", exc)
@@ -4730,12 +4796,16 @@ if QT_IMPORT_ERROR is None:
             # falantes / Melhorar falantes) exigem pyannote mesmo com o projeto
             # configurado sem diarizacao.
             include_dia = self._configured_diarize() if require_diarization is None else require_diarization
-            if app_service.required_models_ready(variants, include_diarization=include_dia):
+            from . import app_settings as _settings
+            include_align = _settings.alignment_default()
+            if app_service.required_models_ready(variants, include_diarization=include_dia,
+                                                 include_alignment=include_align):
                 return True
             from . import model_manager as _mm
             partial = False
             try:
-                partial = _mm.has_partial_cache(asr_variants=variants, include_diarization=include_dia)
+                partial = _mm.has_partial_cache(asr_variants=variants, include_diarization=include_dia,
+                                                include_alignment=include_align)
             except Exception:
                 partial = False
             if partial:
@@ -4759,7 +4829,9 @@ if QT_IMPORT_ERROR is None:
                 self.show_model_setup()
                 # U1.8: se o download concluiu, a acao original SEGUE — antes
                 # o usuario tinha que clicar em Transcrever de novo.
-                if app_service.required_models_ready(variants, include_diarization=include_dia):
+                if app_service.required_models_ready(variants, include_diarization=include_dia,
+                                                     include_alignment=include_align):
+                    self._invalidate_capability_cache()
                     return True
             return False
 

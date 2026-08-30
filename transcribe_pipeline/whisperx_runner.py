@@ -43,6 +43,21 @@ def run_whisperx(
 
     failures = 0
     token_env = str(config["model_download_token_env"])
+
+    def _alignment_cached(cfg: dict) -> bool:
+        """O alinhador do idioma esta em cache? So conhecemos o do
+        portugues (alignment_pt); para outros idiomas, manter o
+        comportamento atual — o tratamento por idioma e a etapa 4."""
+        language = str(cfg.get("asr_language") or "pt").strip().lower()
+        if language != "pt":
+            return True
+        try:
+            asset = next(a for a in model_manager._FIXED_MODELS if a.key == "alignment_pt")
+            path = model_manager.cached_snapshot_path(
+                asset.repo_id, None, revision=asset.revision)
+            return bool(path and model_manager._snapshot_has_weights(path))
+        except Exception:  # noqa: BLE001 - em duvida, nao mudar o comando
+            return True
     cache_only = bool(config.get("asr_model_cache_only", True))
     model_cache_dir = str(config.get("model_cache_dir") or runtime.model_cache_dir())
     runtime.apply_secure_hf_environment(offline=cache_only, token_env=token_env)
@@ -107,6 +122,15 @@ def run_whisperx(
         add_optional_arg(command, "--vad_offset", config.get("asr_vad_offset"))
         add_optional_arg(command, "--chunk_size", config.get("asr_chunk_size"))
         add_optional_arg(command, "--align_model", config.get("asr_align_model"))
+        # Perfil essencial / alinhador ausente (etapa 3): sem o modelo de
+        # alinhamento em cache, o WhisperX offline morreria DEPOIS de
+        # transcrever tudo. --no_align degrada com graca: a transcricao sai
+        # com tempos por bloco, sem tempos por palavra.
+        if (cache_only and not config.get("asr_align_model")
+                and not _alignment_cached(config)):
+            command.append("--no_align")
+            print(f"[Transcritorio] Modelo de alinhamento nao instalado; transcrevendo "
+                  f"{row['interview_id']} sem tempos por palavra.")
         if config.get("diarize", True):
             command.append("--diarize")
             add_optional_arg(command, "--min_speakers", config.get("min_speakers"))
