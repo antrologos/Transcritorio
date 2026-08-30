@@ -37,6 +37,69 @@ tecnicos usados pelo programa. Voce nao precisa abri-las.
 Duvidas? Use o menu Ajuda > Documentacao dentro do Transcritorio.
 """
 
+PROJECT_README = "LEIA-ME.txt"
+PROJECT_README_TEXT = """Esta pasta é um projeto do Transcritório
+=========================================
+
+O que está aqui dentro:
+
+  - Transcricoes/     Tudo o que o programa produz (transcrições,
+                      revisões, arquivos técnicos). Não precisa mexer.
+  - Resultados/       As versões finais para leitura (.docx, .md, .srt),
+                      criadas quando você gera os arquivos no programa.
+  - metadados.csv     Informações sobre cada gravação (idioma, falantes).
+  - O arquivo .transcritorio identifica o projeto — abra-o pelo programa
+    (Arquivo > Abrir projeto).
+
+Importante sobre as suas gravações:
+
+  - Os áudios e vídeos originais NÃO são copiados para esta pasta.
+    O projeto apenas os referencia onde eles estão, e nunca os altera.
+
+Para levar o trabalho a outro computador:
+
+  - Copiar esta pasta leva as transcrições e revisões, mas NÃO os
+    áudios: no outro computador, o programa não vai encontrá-los para
+    tocar. Leve também os arquivos de áudio, se precisar ouvi-los lá.
+
+Dúvidas? Use o menu Ajuda dentro do Transcritório.
+"""
+
+
+TRANSCRICOES_README_TEXT = """Pasta técnica do Transcritório
+==============================
+
+As subpastas daqui (00_config, 00_manifest, 01_audio..., 02_asr...,
+05_transcripts_review etc.) são o funcionamento interno do programa:
+áudio preparado, transcrição bruta, separação de vozes, revisões.
+
+Você NÃO precisa abrir nem alterar nada aqui — mexer nesses arquivos
+pode quebrar o projeto.
+
+O que interessa para ler e usar fica na pasta Resultados, ao lado
+desta, criada quando você gera os arquivos no programa.
+"""
+
+
+def write_project_readme_if_missing(paths: Paths) -> None:
+    """LEIA-MEs do projeto, criados uma vez e nunca sobrescritos.
+
+    Um na RAIZ (o que e um projeto, o que e meu, o que e gerado, o que
+    posso levar para outro computador) e um dentro de Transcricoes/ —
+    o primeiro teste real mostrou o usuario diante de onze pastas
+    tecnicas numeradas sem nenhuma explicacao.
+    """
+    for target, text in (
+        (paths.project_root / PROJECT_README, PROJECT_README_TEXT),
+        (paths.output_root / PROJECT_README, TRANSCRICOES_README_TEXT),
+    ):
+        if target.exists():
+            continue
+        try:
+            target.write_text(text, encoding="utf-8")
+        except OSError:
+            pass  # o LEIA-ME nunca pode impedir a criacao do projeto
+
 
 def ensure_results_dir(
     project_root: Path,
@@ -221,8 +284,13 @@ def project_path(paths: Paths) -> Path:
     found = find_project_file(paths.project_root)
     if found is not None:
         return found
-    # Fallback for new projects: use folder name
-    return paths.project_root / safe_project_filename(paths.project_root.name)
+    # Fallback for new projects: use folder name. O sufixo .transcricao da
+    # PASTA sai do nome do descritor — sem isto, o ponto virava "_" e o
+    # arquivo ficava "Meu Projeto_transcricao.transcritorio".
+    name = paths.project_root.name
+    if name.lower().endswith(".transcricao"):
+        name = name[: -len(".transcricao")]
+    return paths.project_root / safe_project_filename(name or paths.project_root.name)
 
 
 def metadata_path(paths: Paths) -> Path:

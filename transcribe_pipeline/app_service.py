@@ -92,17 +92,20 @@ def create_project(project_root: Path, project_name: str | None = None) -> Proje
     config["audio_globs"] = []
     config["audio_files"] = []
     config["audio_roots"] = []
-    # Projetos novos herdam a escolha do wizard (diarizacao opcional, v0.2):
-    # quem optou por "apenas transcrever" nao pode nascer exigindo pyannote.
+    # Projetos novos herdam as escolhas do wizard (por maquina): quem
+    # optou por "apenas transcrever" nao pode nascer exigindo pyannote, e
+    # quem escolheu um modelo nao pode nascer exigindo o turbo de fabrica.
     try:
         from . import app_settings
         config["diarize"] = app_settings.diarize_default()
+        config["asr_model"] = app_settings.asr_model_default()
     except Exception:
         pass
     write_config(config_path, config, header=["# Local transcription pipeline configuration."])
     paths = make_paths(config, base_dir=project_root)
     ensure_directories(paths)
     context = build_context(config_path, config, paths, [])
+    project_store.write_project_readme_if_missing(paths)
     if project_name:
         context.project["project_name"] = project_name
         context = save_project_metadata(context)
@@ -118,7 +121,12 @@ def open_project(project_reference: Path) -> ProjectContext:
     config_path = config_path_for_project_root(reference)
     if config_path.exists():
         return load_project(config_path)
-    return create_project(reference, project_name=reference.name)
+    # NUNCA criar projeto numa pasta alheia em silencio: abrir uma pasta
+    # qualquer virava projeto dentro dela sem o usuario pedir.
+    raise FileNotFoundError(
+        "Esta pasta não é um projeto do Transcritório. "
+        "Para criar um projeto novo, use Arquivo > Novo projeto."
+    )
 
 
 def build_context(config_path: Path, config: dict[str, Any], paths: Paths, rows: list[dict[str, str]]) -> ProjectContext:
@@ -335,8 +343,14 @@ def analyze_channels_interviews(
     return JobResult("channels", failures)
 
 
-def models_status_text() -> str:
-    return model_manager.status_text()
+def models_status_text(
+    asr_variants: list[str] | None = None,
+    include_diarization: bool = True,
+    include_alignment: bool = True,
+) -> str:
+    return model_manager.status_text(
+        asr_variants=asr_variants, include_diarization=include_diarization,
+        include_alignment=include_alignment)
 
 
 def required_models_ready(asr_variants: list[str] | None = None, include_diarization: bool = True, include_alignment: bool = True) -> bool:

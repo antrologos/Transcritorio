@@ -67,6 +67,21 @@ oficial passa a ser **PyPI + uv** (`uv tool install transcritorio`); ver
   transcrição nunca somem em silêncio; projeto sem transcrição alguma
   explica em vez de não fazer nada; o seletor se atualiza ao voltar para
   a janela. Tooltips de buscar/perguntar/resumir declaram o escopo.
+- Primeiro contato com projeto reformado (achados do primeiro teste real):
+  o modelo escolhido no assistente agora vale de verdade — projetos novos
+  nascem pedindo ele (antes, quem instalava o `tiny` criava projetos
+  exigindo o turbo de fábrica e caía num pedido de download de 3,1 GB);
+  "Preparar modelos locais" mostra só o que a SUA instalação precisa e só
+  exige token quando há modelo de acesso restrito pendente; "Novo projeto"
+  ganhou diálogo próprio com o modelo mental à vista e o preview exato da
+  pasta que será criada; sem projeto aberto, a tela mostra "Comece criando
+  um projeto" com os botões que resolvem (nada de tabela vazia nem de modal
+  que manda ao menu); cada projeto novo traz um LEIA-ME na raiz (o que é
+  seu, o que é gerado, o que dá para levar a outro computador) e outro
+  dentro de Transcricoes/ explicando que as onze pastas técnicas não
+  precisam ser abertas; abrir uma pasta qualquer não cria mais um projeto
+  dentro dela em silêncio; e o descritor deixou de sair com o nome
+  mutilado (`Meu Projeto_transcricao.transcritorio`).
 - **✨ Revisar grafias de nomes**: a partir do glossário, mostra cada
   ocorrência de um nome escrito de forma diferente — com a entrevista, o
   tempo e o trecho à vista — e corrige só as que você marcar. A decisão

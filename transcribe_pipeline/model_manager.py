@@ -711,7 +711,12 @@ def all_required_models_cached(
         include_alignment=include_alignment))
 
 
-def status_as_dict(cache_dir: Path | None = None) -> dict[str, Any]:
+def status_as_dict(
+    cache_dir: Path | None = None,
+    asr_variants: list[str] | None = None,
+    include_diarization: bool = True,
+    include_alignment: bool = True,
+) -> dict[str, Any]:
     cache = cache_dir or runtime.model_cache_dir()
     return {
         "cache_dir": str(cache),
@@ -726,13 +731,22 @@ def status_as_dict(cache_dir: Path | None = None) -> dict[str, Any]:
                 "path": str(item.path) if item.path else "",
                 "message": item.message,
             }
-            for item in status(cache)
+            for item in status(cache, asr_variants=asr_variants,
+                               include_diarization=include_diarization,
+                               include_alignment=include_alignment)
         ],
     }
 
 
-def status_text(cache_dir: Path | None = None) -> str:
-    data = status_as_dict(cache_dir)
+def status_text(
+    cache_dir: Path | None = None,
+    asr_variants: list[str] | None = None,
+    include_diarization: bool = True,
+    include_alignment: bool = True,
+) -> str:
+    data = status_as_dict(cache_dir, asr_variants=asr_variants,
+                          include_diarization=include_diarization,
+                          include_alignment=include_alignment)
     lines = [f"Cache de modelos: {data['cache_dir']}"]
     for item in data["models"]:
         state = "baixado" if item["cached"] else "pendente"

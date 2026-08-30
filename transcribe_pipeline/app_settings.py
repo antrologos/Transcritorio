@@ -44,6 +44,20 @@ def diarize_default() -> bool:
     return bool(load().get("diarize_default", True))
 
 
+def asr_model_default() -> str:
+    """Modelo de transcricao escolhido no assistente (por maquina).
+
+    E o default de projetos NOVOS e dos gates sem projeto aberto. Sem
+    isto, quem escolhia o tiny no assistente criava projetos exigindo o
+    turbo — e caia num pedido de download de 3,1 GB que nunca quis
+    (bug do 1o teste real, 2026-08-30).
+    """
+    from . import model_manager
+
+    valor = str(load().get("asr_model_default") or "").strip()
+    return valor if valor in model_manager.ASR_VARIANTS else model_manager.DEFAULT_ASR_VARIANT
+
+
 def install_profile() -> str:
     """Perfil de instalacao escolhido no assistente (por maquina).
 

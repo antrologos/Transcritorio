@@ -116,13 +116,42 @@ assert hasattr(download_page, "cancel_download_button")
 assert download_page.cancel_download_button.isVisible() is False
 print("PASS: fluxo e avisos do assistente (maquina de CPU)")
 
-# --- persistencia do perfil ---
+# --- persistencia do perfil e do MODELO escolhido ---
 wizard._profile_radios["essencial"].setChecked(True)
 wizard.done(1)  # Accepted
 assert app_settings.install_profile() == "essencial"
 assert app_settings.alignment_default() is False
 assert app_settings.diarize_default() is False
+# o modelo escolhido vira default da maquina (projetos novos herdam)
+assert app_settings.asr_model_default() == "small", app_settings.asr_model_default()
 print("PASS: perfil persistido por maquina")
+
+# --- ModelSetupDialog: token so quando ha modelo restrito pendente ---
+from transcribe_pipeline.review_studio_qt import ModelSetupDialog, NewProjectDialog
+
+sem_gated = ModelSetupDialog(asr_variants=["tiny"], include_diarization=False,
+                             include_alignment=False)
+assert sem_gated._needs_token is False
+assert sem_gated.token_edit.isVisible() is False
+com_gated = ModelSetupDialog(asr_variants=["tiny"], include_diarization=True,
+                             include_alignment=False)
+assert com_gated._needs_token is True   # pyannote pendente no cache virgem
+print("PASS: ModelSetupDialog exige token so com modelo restrito")
+
+# --- NewProjectDialog: preview honesto e trava de colisao ---
+import tempfile as _tf
+with _tf.TemporaryDirectory() as _base:
+    dlg = NewProjectDialog(initial_dir=_base)
+    assert dlg._ok_button.isEnabled() is False           # sem nome, sem criar
+    dlg.name_edit.setText("Meu Estudo")
+    assert dlg._ok_button.isEnabled() is True
+    assert str(dlg.project_root()).endswith("Meu Estudo.transcricao")
+    assert ".transcricao" in dlg.preview_label.text()
+    (Path(_base) / "Meu Estudo.transcricao").mkdir()     # colisao
+    dlg._update_preview()                                # re-avalia o destino
+    assert dlg._ok_button.isEnabled() is False
+    assert "Já existe" in dlg.preview_label.text()
+print("PASS: NewProjectDialog preview e colisao")
 
 # --- maquina com GPU boa: recomenda Completo, sem avisos ---
 os.environ["TRANSCRITORIO_FAKE_HARDWARE"] = "gpu24"

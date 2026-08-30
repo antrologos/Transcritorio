@@ -3180,10 +3180,21 @@ if QT_IMPORT_ERROR is None:
                 # perfil da MAQUINA (decide alinhamento e gates de inicio).
                 try:
                     from . import app_settings
-                    app_settings.save({
+                    updates = {
                         "diarize_default": bool(self.wants_diarization),
                         "install_profile": str(self.selected_profile),
-                    })
+                    }
+                    # O modelo escolhido vira o default da MAQUINA: projetos
+                    # novos e gates passam a pedir ele, nao o turbo de
+                    # fabrica (bug do 1o teste real, 2026-08-30). Se mais de
+                    # um foi baixado, o recomendado ganha.
+                    escolhidos = list(self.selected_asr_variants or [])
+                    if escolhidos:
+                        select_page = self.page(self.PAGE_MODEL_SELECT)
+                        recomendado = getattr(select_page, "_recommended_key", None)
+                        updates["asr_model_default"] = (
+                            recomendado if recomendado in escolhidos else escolhidos[0])
+                    app_settings.save(updates)
                 except Exception as exc:
                     _logger.warning("nao foi possivel salvar app_settings: %s", exc)
             super().done(result)
@@ -3386,8 +3397,8 @@ if QT_IMPORT_ERROR is None:
                 "A partir de agora, toda a transcrição acontece no seu computador, "
                 "sem enviar nada para a internet.\n\n"
                 "Para começar:\n"
-                "  1. Crie ou abra um projeto (pasta com gravações)\n"
-                "  2. O programa vai listar as entrevistas encontradas\n"
+                "  1. Crie um projeto — uma pasta nova onde o Transcritório guarda todo o trabalho\n"
+                "  2. Adicione suas gravações — elas continuam onde estão, sem cópia nem alteração\n"
                 "  3. Selecione quais deseja transcrever"
             )
             done_label.setWordWrap(True)
@@ -3851,12 +3862,125 @@ if QT_IMPORT_ERROR is None:
             self.accept()
 
 
+    class NewProjectDialog(QDialog):
+        """Novo projeto com o modelo mental a vista (1o teste real,
+        2026-08-30): o usuario nao sabia se criaria uma pasta ou arquivos
+        soltos, nem o que aconteceria com os audios. O preview mostra
+        EXATAMENTE a pasta que sera criada, antes de criar."""
+
+        def __init__(self, parent: QWidget | None = None, initial_dir: str = "") -> None:
+            super().__init__(parent)
+            self.setWindowTitle("Novo projeto")
+            self.setMinimumWidth(560)
+            layout = QVBoxLayout(self)
+            intro = QLabel(
+                "Um projeto é uma pasta única com todo o trabalho do Transcritório:\n"
+                "  •  suas gravações NÃO são copiadas nem alteradas — o projeto "
+                "apenas as referencia onde estão;\n"
+                "  •  tudo o que o programa produz fica dentro dessa pasta;\n"
+                "  •  as versões finais para leitura ficam na subpasta Resultados.")
+            intro.setWordWrap(True)
+            intro.setStyleSheet(_style_muted())
+            layout.addWidget(intro)
+            grid = QGridLayout()
+            grid.addWidget(QLabel("Nome do projeto:"), 0, 0)
+            self.name_edit = QLineEdit()
+            self.name_edit.setPlaceholderText("ex.: Entrevistas Bairro Sul 2026")
+            self.name_edit.textChanged.connect(self._update_preview)
+            grid.addWidget(self.name_edit, 0, 1, 1, 2)
+            grid.addWidget(QLabel("Criar em:"), 1, 0)
+            self.dir_edit = QLineEdit(initial_dir or str(Path.home()))
+            self.dir_edit.textChanged.connect(self._update_preview)
+            grid.addWidget(self.dir_edit, 1, 1)
+            browse = QPushButton("Procurar…")
+            browse.clicked.connect(self._browse)
+            grid.addWidget(browse, 1, 2)
+            layout.addLayout(grid)
+            self.preview_label = QLabel("")
+            self.preview_label.setWordWrap(True)
+            layout.addWidget(self.preview_label)
+            buttons = QDialogButtonBox(
+                QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+            self._ok_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
+            self._ok_button.setText("Criar projeto")
+            buttons.accepted.connect(self.accept)
+            buttons.rejected.connect(self.reject)
+            layout.addWidget(buttons)
+            self._update_preview()
+
+        def _browse(self) -> None:
+            folder = QFileDialog.getExistingDirectory(
+                self, "Escolha onde criar o projeto", self.dir_edit.text())
+            if folder:
+                self.dir_edit.setText(folder)
+
+        def project_name(self) -> str:
+            return self.name_edit.text().strip()
+
+        def project_root(self) -> Path:
+            return Path(self.dir_edit.text().strip()) / safe_project_folder_name(
+                self.project_name())
+
+        def _update_preview(self) -> None:
+            name = self.project_name()
+            base = self.dir_edit.text().strip()
+            valido = bool(name) and bool(base) and Path(base).is_dir()
+            self._ok_button.setEnabled(valido)
+            if not name:
+                self.preview_label.setText("Digite um nome para ver o que será criado.")
+                self.preview_label.setStyleSheet(_style_muted())
+                return
+            destino = self.project_root()
+            if destino.exists():
+                self.preview_label.setText(f"⚠ Já existe uma pasta neste local:\n{destino}")
+                self.preview_label.setStyleSheet(_style_err())
+                self._ok_button.setEnabled(False)
+                return
+            self.preview_label.setText(
+                f"Será criada a pasta:\n{destino}\n"
+                "— e todo o trabalho deste projeto ficará dentro dela.")
+            self.preview_label.setStyleSheet(_style_ok() if valido else _style_err())
+
+        def accept(self) -> None:
+            if self.project_root().exists():
+                QMessageBox.warning(
+                    self, "Projeto já existe",
+                    f"Já existe uma pasta com este nome:\n{self.project_root()}")
+                return
+            super().accept()
+
+
     class ModelSetupDialog(QDialog):
-        def __init__(self, parent: QWidget | None = None) -> None:
+        def __init__(
+            self,
+            parent: QWidget | None = None,
+            asr_variants: list[str] | None = None,
+            include_diarization: bool = True,
+            include_alignment: bool = True,
+        ) -> None:
             super().__init__(parent)
             self.setWindowTitle("Preparar modelos locais")
             self.resize(720, 640)
             layout = QVBoxLayout(self)
+            # O dialogo mostra e baixa o que ESTA instalacao precisa (perfil
+            # + modelo configurado), nao o conjunto de fabrica. E o token so
+            # e exigido quando ha modelo RESTRITO pendente: a instalacao
+            # Essencial existe para dispensar conta/token, e o 1o teste real
+            # (2026-08-30) travou o usuario numa exigencia que nao valia.
+            from . import model_manager as _mm
+            self._scope = {
+                "asr_variants": asr_variants,
+                "include_diarization": include_diarization,
+                "include_alignment": include_alignment,
+            }
+            try:
+                pendentes = [item for item in _mm.status(
+                    asr_variants=asr_variants,
+                    include_diarization=include_diarization,
+                    include_alignment=include_alignment) if not item.cached]
+            except Exception:  # noqa: BLE001 - config invalida nao trava o dialogo
+                pendentes = []
+            self._needs_token = any(item.asset.gated for item in pendentes)
 
             title = QLabel("Preparar modelos locais")
             title.setStyleSheet("font-size: 18px; font-weight: 700;")
@@ -3864,19 +3988,28 @@ if QT_IMPORT_ERROR is None:
 
             intro = QTextEdit()
             intro.setReadOnly(True)
-            intro.setPlainText(
-                "O token Hugging Face e usado apenas para baixar modelos. "
-                "Audios, videos e transcricoes continuam neste computador.\n\n"
-                "Passo a passo:\n"
-                "1. Crie ou entre na sua conta do Hugging Face.\n"
-                "2. Abra o modelo pyannote/speaker-diarization-community-1 e aceite os termos.\n"
-                "3. Crie um token de leitura no Hugging Face.\n"
-                "4. Cole o token abaixo e baixe os modelos.\n"
-                "5. Depois do download, o Transcritorio verifica o carregamento local/offline.\n\n"
-                "Para preparar outro computador, repita estes mesmos passos com o token do usuario daquele computador. "
-                "Nunca use nem compartilhe o token de outra pessoa."
-            )
-            intro.setMinimumHeight(180)
+            if self._needs_token:
+                intro.setPlainText(
+                    "O token Hugging Face e usado apenas para baixar modelos. "
+                    "Audios, videos e transcricoes continuam neste computador.\n\n"
+                    "Passo a passo:\n"
+                    "1. Crie ou entre na sua conta do Hugging Face.\n"
+                    "2. Abra o modelo pyannote/speaker-diarization-community-1 e aceite os termos.\n"
+                    "3. Crie um token de leitura no Hugging Face.\n"
+                    "4. Cole o token abaixo e baixe os modelos.\n"
+                    "5. Depois do download, o Transcritorio verifica o carregamento local/offline.\n\n"
+                    "Para preparar outro computador, repita estes mesmos passos com o token do usuario daquele computador. "
+                    "Nunca use nem compartilhe o token de outra pessoa."
+                )
+                intro.setMinimumHeight(180)
+            else:
+                intro.setPlainText(
+                    "Os componentes da sua instalacao sao todos publicos: "
+                    "nenhuma conta e nenhum token sao necessarios.\n\n"
+                    "Clique em Baixar modelos para completar o que falta. "
+                    "Audios, videos e transcricoes continuam neste computador."
+                )
+                intro.setMinimumHeight(90)
             layout.addWidget(intro)
 
             links = QHBoxLayout()
@@ -3886,23 +4019,28 @@ if QT_IMPORT_ERROR is None:
                 ("Criar token", "https://huggingface.co/settings/tokens"),
             ]:
                 button = QPushButton(label)
+                button.setVisible(self._needs_token)
                 button.clicked.connect(lambda _checked=False, target=url: QDesktopServices.openUrl(QUrl(target)))
                 links.addWidget(button)
             links.addStretch()
             layout.addLayout(links)
 
-            layout.addWidget(QLabel("Token Hugging Face deste usuario:"))
+            self._token_label = QLabel("Token Hugging Face deste usuario:")
+            self._token_label.setVisible(self._needs_token)
+            layout.addWidget(self._token_label)
             self.token_edit = QLineEdit()
             self.token_edit.setEchoMode(QLineEdit.EchoMode.Password)
             self.token_edit.setPlaceholderText("hf_...")
+            self.token_edit.setVisible(self._needs_token)
             # Pre-fill from secure vault if available
             from . import token_vault
-            saved = token_vault.retrieve()
+            saved = token_vault.retrieve() if self._needs_token else ""
             if saved:
                 self.token_edit.setText(saved)
             layout.addWidget(self.token_edit)
 
             self.remember_checkbox = QCheckBox("Lembrar neste computador usando cofre seguro")
+            self.remember_checkbox.setVisible(self._needs_token)
             # Opt-out by default: the expected behavior for 95% of users is
             # to paste the token once and never see this dialog again. Users
             # who share a machine can explicitly uncheck.
@@ -3912,7 +4050,10 @@ if QT_IMPORT_ERROR is None:
 
             status = QTextEdit()
             status.setReadOnly(True)
-            status.setPlainText(app_service.models_status_text())
+            try:
+                status.setPlainText(app_service.models_status_text(**self._scope))
+            except Exception as exc:  # noqa: BLE001
+                status.setPlainText(f"Nao foi possivel listar os modelos: {exc}")
             status.setMinimumHeight(120)
             layout.addWidget(status)
 
@@ -3926,12 +4067,16 @@ if QT_IMPORT_ERROR is None:
             return self.token_edit.text().strip()
 
         def accept(self) -> None:
-            if not self.token():
+            if self._needs_token and not self.token():
                 QMessageBox.warning(
                     self,
                     "Token necessario",
                     "Cole o token de leitura do Hugging Face deste usuario para baixar o modelo de separacao de falantes.",
                 )
+                return
+            if not self._needs_token:
+                # Nada restrito pendente: nao ha token a validar/guardar.
+                QDialog.accept(self)
                 return
             # Persist token if "remember" is checked. Backend errors (keyring
             # unavailable, DPAPI access denied, etc.) must NEVER crash the app
@@ -4039,7 +4184,9 @@ if QT_IMPORT_ERROR is None:
 
             self.open_project_action = QAction("Abrir projeto...", self)
             self.open_project_action.setShortcut(QKeySequence("Ctrl+O"))
-            self.open_project_action.setToolTip("Abrir uma pasta de projeto de transcricoes existente. (Ctrl+O)")
+            self.open_project_action.setToolTip(
+                "Abrir um projeto existente: escolha o arquivo .transcritorio "
+                "dentro da pasta do projeto. (Ctrl+O)")
             self.open_project_action.triggered.connect(self.open_project)
 
             self.add_files_action = QAction("Adicionar arquivos...", self)
@@ -4763,9 +4910,11 @@ if QT_IMPORT_ERROR is None:
             # Tela B: Project chooser when everything is ready
             dialog = ProjectChooserDialog(self.context, self)
             if dialog.exec() != QDialog.DialogCode.Accepted:
+                # Fechar no X nao pode ser queda livre: o refresh liga o
+                # empty-state "Comece criando um projeto".
+                self.refresh_interviews()
                 if self.context is None:
                     return
-                self.refresh_interviews()
                 return
             if dialog.choice == "new":
                 self.new_project()
@@ -4787,7 +4936,13 @@ if QT_IMPORT_ERROR is None:
             if self.worker and self.worker.isRunning():
                 QMessageBox.information(self, "Tarefa em andamento", "Aguarde a tarefa atual terminar antes de preparar modelos.")
                 return
-            dialog = ModelSetupDialog(self)
+            from . import app_settings as _settings
+            scope_variants = self._configured_asr_variants()
+            scope_dia = self._configured_diarize()
+            scope_align = _settings.alignment_default()
+            dialog = ModelSetupDialog(
+                self, asr_variants=scope_variants,
+                include_diarization=scope_dia, include_alignment=scope_align)
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 return
             token = dialog.token()
@@ -4796,12 +4951,13 @@ if QT_IMPORT_ERROR is None:
                 [
                     (
                         "Baixando e verificando modelos locais...",
-                        lambda progress, should_cancel, hf_token=token, variants=self._configured_asr_variants(), include_dia=self._configured_diarize(): app_service.download_models(
+                        lambda progress, should_cancel, hf_token=token, variants=scope_variants, include_dia=scope_dia, include_align=scope_align: app_service.download_models(
                             token=hf_token,
                             progress_callback=progress,
                             should_cancel=should_cancel,
                             asr_variants=variants,
                             include_diarization=include_dia,
+                            include_alignment=include_align,
                         ),
                         True,
                     )
@@ -4811,13 +4967,14 @@ if QT_IMPORT_ERROR is None:
         def _configured_asr_variants(self) -> list[str] | None:
             """Variants ASR para os gates de modelos: o configurado no projeto.
 
-            None (sem projeto/config) mantem o comportamento default
-            (REQUIRED_MODELS). Sem isso, os gates verificavam sempre o variant
-            default e reprovavam projetos configurados com outro modelo."""
+            Sem projeto aberto, vale a escolha do assistente (por maquina) —
+            cair no default de fabrica fazia o gate exigir o turbo de quem
+            instalou o tiny."""
+            from . import app_settings as _settings
             if self.context is None:
-                return None
+                return [_settings.asr_model_default()]
             model = (self.context.config or {}).get("asr_model")
-            return [model] if model else None
+            return [model] if model else [_settings.asr_model_default()]
 
         def _configured_diarize(self) -> bool:
             """Se a diarizacao entra nos gates de modelos.
@@ -5054,18 +5211,19 @@ if QT_IMPORT_ERROR is None:
             _es_layout.setContentsMargins(24, 36, 24, 36)
             _es_layout.setSpacing(12)
             _es_layout.addStretch(1)
-            _icon = QLabel("📁")
-            _icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            _icon.setStyleSheet("font-size: 48px;")
-            _es_layout.addWidget(_icon)
-            _title = QLabel("Arraste áudios e vídeos aqui")
-            _title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            _title.setStyleSheet("font-size: 16px; font-weight: 600;")
-            _es_layout.addWidget(_title)
-            _sub = QLabel("ou clique no botão abaixo")
-            _sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            _sub.setStyleSheet(f"{_style_muted()} font-size: 13px;")
-            _es_layout.addWidget(_sub)
+            self._empty_icon = QLabel("📁")
+            self._empty_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._empty_icon.setStyleSheet("font-size: 48px;")
+            _es_layout.addWidget(self._empty_icon)
+            self._empty_title = QLabel("Arraste áudios e vídeos aqui")
+            self._empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._empty_title.setStyleSheet("font-size: 16px; font-weight: 600;")
+            _es_layout.addWidget(self._empty_title)
+            self._empty_sub = QLabel("ou clique no botão abaixo")
+            self._empty_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._empty_sub.setStyleSheet(f"{_style_muted()} font-size: 13px;")
+            self._empty_sub.setWordWrap(True)
+            _es_layout.addWidget(self._empty_sub)
             _cta_row = QHBoxLayout()
             _cta_row.addStretch(1)
             self._empty_cta_btn = QPushButton("+ Adicionar mídia...")
@@ -5075,13 +5233,22 @@ if QT_IMPORT_ERROR is None:
             _cta_menu.addAction(self.add_folder_action)
             self._empty_cta_btn.setMenu(_cta_menu)
             _cta_row.addWidget(self._empty_cta_btn)
+            # Modo "sem projeto" (1o teste real, 2026-08-30): fechar a tela
+            # de escolha derrubava o usuario numa tabela vazia sem caminho.
+            self._empty_new_project_btn = QPushButton("Criar projeto…")
+            self._empty_new_project_btn.setStyleSheet(self._MEDIA_BUTTON_PRIMARY_QSS)
+            self._empty_new_project_btn.clicked.connect(self.new_project)
+            _cta_row.addWidget(self._empty_new_project_btn)
+            self._empty_open_project_btn = QPushButton("Abrir projeto…")
+            self._empty_open_project_btn.clicked.connect(self.open_project)
+            _cta_row.addWidget(self._empty_open_project_btn)
             _cta_row.addStretch(1)
             _es_layout.addLayout(_cta_row)
-            _hint = QLabel("Formatos aceitos: MP3, WAV, M4A, MP4, FLAC, OGG, OPUS, WMA")
-            _hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            _hint.setStyleSheet(f"{_style_muted()} font-size: 11px;")
-            _hint.setWordWrap(True)
-            _es_layout.addWidget(_hint)
+            self._empty_hint = QLabel("Formatos aceitos: MP3, WAV, M4A, MP4, FLAC, OGG, OPUS, WMA")
+            self._empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._empty_hint.setStyleSheet(f"{_style_muted()} font-size: 11px;")
+            self._empty_hint.setWordWrap(True)
+            _es_layout.addWidget(self._empty_hint)
             _es_layout.addStretch(2)
             self._empty_state_widget.setVisible(False)
             layout.addWidget(self._empty_state_widget, stretch=1)
@@ -5094,16 +5261,47 @@ if QT_IMPORT_ERROR is None:
         def _has_project(self) -> bool:
             return self.context is not None
 
+        def _update_empty_state_mode(self) -> None:
+            """Alterna a drop zone entre 'sem projeto' e 'projeto sem mídia'.
+
+            Sem projeto, ela vira o convite com o modelo mental e os botões
+            que resolvem — em vez de uma tabela vazia sem caminho."""
+            if not hasattr(self, "_empty_state_widget"):
+                return
+            sem_projeto = self.context is None
+            self._empty_icon.setText("🗂️" if sem_projeto else "📁")
+            self._empty_title.setText(
+                "Comece criando um projeto" if sem_projeto
+                else "Arraste áudios e vídeos aqui")
+            self._empty_sub.setText(
+                "O projeto é uma pasta única onde o Transcritório guarda todo o "
+                "trabalho.\nSuas gravações não são copiadas nem alteradas — o "
+                "projeto apenas as referencia onde estão."
+                if sem_projeto else "ou clique no botão abaixo")
+            self._empty_cta_btn.setVisible(not sem_projeto)
+            self._empty_hint.setVisible(not sem_projeto)
+            self._empty_new_project_btn.setVisible(sem_projeto)
+            self._empty_open_project_btn.setVisible(sem_projeto)
+
         def _require_project(self, action_label: str = "Esta acao") -> bool:
-            """Show a message and return False if no project is loaded."""
+            """Sem projeto: explica E oferece os botões que resolvem.
+
+            (Antes mandava o usuário ao menu — beco sem saída clássico.)"""
             if self.context is not None:
                 return True
-            QMessageBox.information(
-                self,
-                "Nenhum projeto aberto",
-                f"{action_label} requer um projeto aberto.\n\n"
-                "Use Arquivo > Novo projeto ou Arquivo > Abrir projeto.",
-            )
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Information)
+            box.setWindowTitle("Nenhum projeto aberto")
+            box.setText(f"{action_label} requer um projeto aberto.")
+            criar = box.addButton("Criar projeto…", QMessageBox.ButtonRole.ActionRole)
+            abrir = box.addButton("Abrir projeto…", QMessageBox.ButtonRole.ActionRole)
+            box.addButton("Agora não", QMessageBox.ButtonRole.RejectRole)
+            box.setDefaultButton(criar)
+            box.exec()
+            if box.clickedButton() is criar:
+                self.new_project()
+            elif box.clickedButton() is abrir:
+                self.open_project()
             return False
 
         def _browse_dir(self) -> str:
@@ -5504,6 +5702,15 @@ if QT_IMPORT_ERROR is None:
 
         def refresh_interviews(self) -> None:
             if self.context is None:
+                # Sem projeto NAO e acidente: estado desenhado, com a drop
+                # zone em modo "criar/abrir projeto" e as acoes coerentes.
+                if hasattr(self, "_empty_state_widget"):
+                    self._update_empty_state_mode()
+                    self._empty_state_widget.setVisible(True)
+                    self.interview_table.setVisible(False)
+                if hasattr(self, "project_label"):
+                    self.project_label.setText(self.project_header_text())
+                self.update_action_states()
                 return
             self.context = app_service.load_project(config_path=self.context.config_path)
             self.statuses = app_service.list_interviews(self.context)
@@ -5565,7 +5772,9 @@ if QT_IMPORT_ERROR is None:
             has_rows = len(self.statuses) > 0
             self.interview_table.setVisible(has_rows)
             if hasattr(self, "_empty_state_widget"):
+                self._update_empty_state_mode()
                 self._empty_state_widget.setVisible(not has_rows)
+                self.interview_table.setVisible(True)
             self._update_add_media_emphasis(has_rows)
             self._apply_interview_filter()
             self.update_action_states()
@@ -5729,28 +5938,24 @@ if QT_IMPORT_ERROR is None:
                 "A pasta foi adicionada como fonte de mídia. Arquivos com o mesmo ID/nome aparecem uma vez como selecionados; cópias concorrentes ficam marcadas como duplicatas no registro interno.",
             )
 
-        def new_project(self) -> None:
+        def new_project(self, *_args: Any) -> None:
             if not self.save_current_turn():
                 return
-            base_folder = QFileDialog.getExistingDirectory(self, "Escolha onde criar o projeto", self._browse_dir())
-            if not base_folder:
+            dialog = NewProjectDialog(self, initial_dir=self._browse_dir())
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                self.refresh_interviews()  # cancelou: empty-state, nunca tela morta
                 return
-            name, ok = QInputDialog.getText(self, "Novo projeto", "Nome do projeto:")
-            name = str(name).strip()
-            if not ok or not name:
-                return
-            folder_name = safe_project_folder_name(name)
-            project_root = Path(base_folder) / folder_name
-            if project_root.exists():
-                QMessageBox.warning(self, "Projeto já existe", f"Já existe uma pasta com este nome:\n{project_root}")
-                return
+            project_root = dialog.project_root()
+            name = dialog.project_name()
             try:
                 context = app_service.create_project(project_root, project_name=name)
             except Exception as exc:
                 QMessageBox.critical(self, "Não foi possível criar o projeto", sanitize_message(str(exc)))
                 return
             self.switch_project_context(context)
-            self.progress_label.setText("Projeto criado. Use o botao + Adicionar midia para comecar.")
+            self.progress_label.setText(
+                "Projeto criado. Use o botão + Adicionar mídia para começar — "
+                "suas gravações continuam onde estão.")
 
         def open_project(self) -> None:
             if not self.save_current_turn():
