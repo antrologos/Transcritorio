@@ -6507,6 +6507,19 @@ if QT_IMPORT_ERROR is None:
             if item is not None:
                 self.turn_table.scrollToItem(item)
 
+        def _review_title_text(self, interview_id: str) -> str:
+            """Titulo do painel com o modelo que PRODUZIU esta transcricao
+            (review.transcript.asr_model, gravado pelo render). O cabecalho
+            da janela mostra o modelo CONFIGURADO para as proximas — com
+            "Transcrever novamente" e mais de um modelo instalado, os dois
+            podem divergir e o usuario precisa ver qual gerou o texto."""
+            modelo = str((((self.review or {}).get("transcript") or {}).get("asr_model")) or "")
+            if not modelo:
+                return f"Transcrição: {interview_id}"
+            from . import model_manager as _mm
+            rotulo = str((_mm.ASR_VARIANTS.get(modelo) or {}).get("label") or modelo)
+            return f"Transcrição: {interview_id}  ·  modelo {rotulo}"
+
         def open_review(self, interview_id: str) -> None:
             if not self.save_current_turn():
                 return
@@ -6538,7 +6551,10 @@ if QT_IMPORT_ERROR is None:
                 QMessageBox.critical(self, "Mídia não encontrada", "Não encontrei o áudio/vídeo desta entrevista.")
                 self.close_open_file()
                 return
-            self.review_title.setText(f"Transcrição: {interview_id}")
+            self.review_title.setText(self._review_title_text(interview_id))
+            self.review_title.setToolTip(
+                "Modelo que produziu ESTA transcrição. O cabeçalho da janela "
+                "mostra o modelo configurado para as próximas.")
             self.set_editor_enabled(True)
             self.set_media_source(preferred_media_index(self.media_candidates))
             self.load_waveform()
@@ -8556,7 +8572,8 @@ if QT_IMPORT_ERROR is None:
                 return
             self.start_worker("Atualizar biblioteca", [("Procurando gravações...", lambda: app_service.refresh_manifest(self.context))])
 
-        def run_full_transcription_job(self, ids: list[str] | None = None) -> None:
+        def run_full_transcription_job(self, ids: list[str] | None = None, *,
+                                       confirmed_recreate: bool = False) -> None:
             if not self.save_current_turn():
                 return
             if not self.ensure_models_ready():
@@ -8565,6 +8582,30 @@ if QT_IMPORT_ERROR is None:
             if not ids:
                 QMessageBox.information(self, "Selecione uma entrevista", "Selecione uma entrevista para transcrever.")
                 return
+            # Retranscrever e uma decisao EXPLICITA (pipeline-safety): o
+            # baseline sera sobrescrito e a transcricao editavel recriada.
+            # confirmed_recreate=True vem de fluxos que ja avisaram
+            # (Transcrever novamente...), para nao perguntar duas vezes.
+            ja_transcritas: list[str] = []
+            for iid in ids:
+                status = self.status_by_interview_id(iid)
+                if status is not None and (status.review_exists or status.canonical_exists):
+                    ja_transcritas.append(iid)
+            if ja_transcritas and not confirmed_recreate:
+                n = len(ja_transcritas)
+                answer = QMessageBox.question(
+                    self, "Transcrever novamente?",
+                    (f"{n} arquivo(s) selecionado(s) já {'tem' if n == 1 else 'têm'} "
+                     "transcrição.\n\n"
+                     "Transcrever de novo recria a transcrição editável DO ZERO — "
+                     "edições manuais serão descartadas. Uma cópia de segurança das "
+                     "versões com edições fica em:\n"
+                     "Transcricoes\\05_transcripts_review\\edits\\backups\n\nContinuar?"),
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
             if bool(self.context.config.get("diarize", True)):
                 if not self._ask_speaker_counts_if_needed(ids):
                     return
@@ -8580,16 +8621,16 @@ if QT_IMPORT_ERROR is None:
             do_diarize = bool(self.context.config.get("diarize", True))
             do_boundary = do_diarize and bool(self.context.config.get("boundary_check", True))
             w5 = _pipeline_weights(asr_model, asr_device)
-            # 6 fases: [prepare, asr, diarize, render, conferir trocas, qc].
-            # A conferencia de trocas de falante (pos-render) tem peso pequeno
-            # e fixo: custa segundos por arquivo.
+            # 7 fases: [prepare, asr, diarize, render, conferir trocas,
+            # recriar transcricao editavel, qc]. Conferencia e recriacao
+            # (pos-render) tem peso pequeno e fixo: custam segundos.
             w = [
                 w5[0], w5[1], w5[2] if do_diarize else 0, w5[3],
-                1 if do_boundary else 0, w5[4],
+                1 if do_boundary else 0, 1, w5[4],
             ]
             # Pesos POR STEP: a lista precisa ter exatamente um item por step
             # montado — desalinhar quebra o progresso a partir do 2o arquivo.
-            included = [True, True, do_diarize, True, do_boundary, True]
+            included = [True, True, do_diarize, True, do_boundary, True, True]
             step_w = [weight for used, weight in zip(included, w) if used]
             boundaries = [0]
             for v in w:
@@ -8669,7 +8710,24 @@ if QT_IMPORT_ERROR is None:
                         ),
                     )
                 file_steps.append(
-                    self.job_step(f"{prefix}: verificando arquivos gerados...", interview_id, "verificar arquivos", r[5], r[6], lambda item=interview_id: app_service.qc_interviews(self.context, ids=[item])),
+                    # Recriar a transcricao editavel do canonical NOVO: sem
+                    # isto, retranscrever nao mudava nada visivel (a review
+                    # antiga ficava valendo no editor e nos exports). Vem
+                    # DEPOIS da conferencia de trocas (que escreve so no
+                    # canonical) e ANTES da verificacao. rebuild_review faz
+                    # backup quando ha edicoes humanas — consentidas na
+                    # confirmacao "Transcrever novamente?" do inicio do job.
+                    self.job_step(
+                        f"{prefix}: recriando transcricao editavel...",
+                        interview_id,
+                        "recriar transcricao",
+                        r[5],
+                        r[6],
+                        lambda item=interview_id: app_service.rebuild_review(self.context, item),
+                    ),
+                )
+                file_steps.append(
+                    self.job_step(f"{prefix}: verificando arquivos gerados...", interview_id, "verificar arquivos", r[6], r[7], lambda item=interview_id: app_service.qc_interviews(self.context, ids=[item])),
                 )
                 steps.extend(file_steps)
                 weights.extend(step_w)
@@ -9477,7 +9535,20 @@ if QT_IMPORT_ERROR is None:
                         self.review = app_service.load_review(self.context, current_id, create=True)
                         self.turns = review_store.review_turns(self.review)
                         self.set_editor_enabled(True)
-                        self.review_title.setText(f"Transcricao: {current_id}")
+                        self.review_title.setText(self._review_title_text(current_id))
+                        # Retranscrever muda tambem as palavras: recarregar o
+                        # word_index (e as marcas na onda) junto com a review.
+                        from . import words as words_mod
+                        try:
+                            self.word_index = words_mod.load_word_index(self.context.paths, current_id)
+                        except Exception:  # noqa: BLE001 - palavras sao opcionais
+                            self.word_index = []
+                        self._word_uncertain_cutoff = words_mod.uncertain_threshold(self.word_index)
+                        cutoff = self._word_uncertain_cutoff
+                        self.waveform_widget.set_words([
+                            (word["start"],
+                             cutoff is not None and word["score"] is not None and word["score"] <= cutoff)
+                            for word in self.word_index])
                         self.load_turn_table()
                         if self.turns:
                             self.select_turn_by_index(0, seek=False)
