@@ -119,4 +119,41 @@ langs, avisos = app_service.alignment_languages_for(contexto, ["A"])
 assert langs == () and avisos == ("automático",)
 print("PASS: alignment_languages_for")
 
+# --- MMS: pacote multilingue coringa (E4-3, decisao do usuario) ---
+mms = model_manager.asset_by_key("alignment_mms")
+assert mms.repo_id == "MahmoudAshraf/mms-300m-1130-forced-aligner"
+assert mms.revision == "49402e9577b1158620820667c218cd494cc44486"
+assert "pytorch_model.bin" in mms.download_exclude  # pesos duplicados do safetensors
+assert "NC" in mms.license_notice or "COMERCIAL" in mms.license_notice.upper(), \
+    "aviso de licenca obrigatorio no MMS"
+assert mms.repo_id in model_manager._known_repos()
+
+with tempfile.TemporaryDirectory() as tmp:
+    cache = Path(tmp)
+    resolve = whisperx_runner.resolve_align_action
+
+    # suaili sem NADA: no_align, e o motivo aponta o pacote multilingue
+    acao, _, motivo = resolve({"asr_language": "sw"}, cache)
+    assert acao == "no_align" and "multil" in motivo.lower(), motivo
+
+    # suaili COM o MMS instalado: alinha pelo coringa
+    repo_dir = cache / ("models--" + mms.repo_id.replace("/", "--"))
+    (repo_dir / "snapshots" / mms.revision).mkdir(parents=True)
+    (repo_dir / "refs").mkdir()
+    (repo_dir / "refs" / "main").write_text(mms.revision, encoding="utf-8")
+    (repo_dir / "snapshots" / mms.revision / "m.safetensors").write_bytes(b"x")
+    (repo_dir / "blobs").mkdir()
+    (repo_dir / "blobs" / "h1").write_bytes(b"x" * (5 * 1024 * 1024))
+    acao, valor, _ = resolve({"asr_language": "sw"}, cache)
+    assert (acao, valor) == ("model", mms.repo_id), (acao, valor)
+
+    # idioma SUPORTADO sem o pacote dedicado tambem cai no MMS instalado
+    acao, valor, _ = resolve({"asr_language": "nl"}, cache)
+    assert (acao, valor) == ("model", mms.repo_id), (acao, valor)
+
+    # Automatico continua SEM alinhador mesmo com MMS (deteccao nao e confiavel)
+    acao, _, _motivo = resolve({"asr_language": None}, cache)
+    assert acao == "no_align"
+print("PASS: fallback MMS")
+
 print("PASS: toy_align_registry")

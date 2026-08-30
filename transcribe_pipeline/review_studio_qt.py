@@ -1871,6 +1871,22 @@ if QT_IMPORT_ERROR is None:
                     rows.append((rotulo_lang, lang_asset.repo_id, 0, "Disponivel",
                                  "-", False, f"opt:{lang_asset.key}",
                                  f"~{lang_asset.estimated_gb:.1f} GB", ""))
+            # Pacote coringa MMS (E4-3): 1.130 idiomas, CC-BY-NC (o aviso
+            # de licenca aparece na oferta de download).
+            mms = model_manager.MMS_ALIGN_ASSET
+            entry = scan_by_repo.get(mms.repo_id)
+            if entry is not None and model_manager.mms_align_cached(cache_root):
+                size = int(entry.get("size_on_disk", 0))
+                dt = model_manager.model_install_date(mms.repo_id, cache_root)
+                date_str = datetime.fromtimestamp(dt).strftime("%d/%m/%Y") if dt else "-"
+                rows.append((mms.label, mms.repo_id, size, "Instalado",
+                             date_str, True, None, "", ""))
+            else:
+                rows.append((mms.label, mms.repo_id, 0, "Disponivel", "-",
+                             False, f"opt:{mms.key}",
+                             f"~{mms.estimated_gb:.1f} GB",
+                             "Cobre 1.130 idiomas (inclusive os sem pacote "
+                             "dedicado). Licença CC-BY-NC: uso não-comercial."))
             # Opcionais de IA (antes invisiveis: 8,7 GB de Qwen baixados
             # ficavam irremoviveis, e nao havia escolha por item).
             from . import capabilities as _caps
@@ -10105,6 +10121,8 @@ if QT_IMPORT_ERROR is None:
                 partes.append("Na primeira utilização, o aplicativo também prepara "
                               f"um ambiente de análise local (~{extra_gb:.1f} GB "
                               "adicionais, baixados uma vez).")
+            if getattr(asset, "license_notice", ""):
+                partes.append(str(asset.license_notice))
             partes.append(f"Baixar agora (uma vez, ~{asset.estimated_gb:.1f} GB)?\n"
                           f"Espaço livre em disco: {disk.get('free_gb', 0):.1f} GB.")
             answer = QMessageBox.question(

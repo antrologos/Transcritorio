@@ -38,17 +38,26 @@ def resolve_align_action(config: dict, cache_dir=None) -> tuple[str, str, str]:
     if not lang:
         return ("no_align", "",
                 "idioma Automático: a detecção não permite alinhador confiável")
-    if not model_manager.align_language_supported(lang):
-        return ("no_align", "", f"sem pacote de alinhamento para o idioma '{lang}'")
-    asset = model_manager.align_asset_for(lang)
-    try:
-        path = model_manager.cached_snapshot_path(
-            asset.repo_id, cache_dir, revision=asset.revision)
-        if path and model_manager._snapshot_has_weights(path):
-            return ("model", asset.repo_id, "")
-    except Exception:  # noqa: BLE001 - cache ilegivel = tratar como ausente
-        pass
-    return ("no_align", "", f"pacote de alinhamento de '{lang}' não instalado")
+    if model_manager.align_language_supported(lang):
+        asset = model_manager.align_asset_for(lang)
+        try:
+            path = model_manager.cached_snapshot_path(
+                asset.repo_id, cache_dir, revision=asset.revision)
+            if path and model_manager._snapshot_has_weights(path):
+                return ("model", asset.repo_id, "")
+        except Exception:  # noqa: BLE001 - cache ilegivel = tratar como ausente
+            pass
+        # Pacote dedicado ausente: o coringa MMS (se instalado) cobre.
+        if model_manager.mms_align_cached(cache_dir):
+            return ("model", model_manager.MMS_ALIGN_ASSET.repo_id, "")
+        return ("no_align", "", f"pacote de alinhamento de '{lang}' não instalado")
+    # Idioma sem pacote dedicado (ex.: suaili): coringa MMS quando
+    # instalado; senao transcreve sem tempos, apontando a opcao.
+    if model_manager.mms_align_cached(cache_dir):
+        return ("model", model_manager.MMS_ALIGN_ASSET.repo_id, "")
+    return ("no_align", "",
+            f"sem pacote de alinhamento para o idioma '{lang}' — o pacote "
+            "multilíngue (MMS) cobre este e outros 1.100 idiomas")
 
 
 def run_whisperx(

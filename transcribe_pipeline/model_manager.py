@@ -199,6 +199,10 @@ class ModelAsset:
     # (PyTorch + Flax + TF) e extras que o nosso carregador nunca le;
     # baixar tudo custa GBs por instalacao sem beneficio nenhum.
     download_exclude: tuple[str, ...] = ()
+    # Aviso de licenca exibido NA OFERTA de download (etapa 4): modelos
+    # com restricao (ex.: MMS CC-BY-NC, nao-comercial) informam o usuario
+    # ANTES do aceite — o app e gratuito, mas a restricao vincula o USO.
+    license_notice: str = ""
 
 
 @dataclass(frozen=True)
@@ -387,6 +391,8 @@ def asset_by_key(key: str) -> ModelAsset:
     for asset in _OPTIONAL_MODELS + _FIXED_MODELS:
         if asset.key == key:
             return asset
+    if key == "alignment_mms":
+        return MMS_ALIGN_ASSET
     if key.startswith("alignment_"):
         lang = key[len("alignment_"):]
         if align_language_supported(lang):
@@ -488,8 +494,37 @@ ALIGN_LANGUAGES: dict[str, dict[str, Any]] = {
 }
 
 
+# Pacote CORINGA de alinhamento (E4-3, decisao do usuario 2026-08-30):
+# MMS 300M cobre 1.130 idiomas (incl. suaili, ausente da familia Apache).
+# CC-BY-NC: o aviso de licenca aparece NA OFERTA de download.
+MMS_ALIGN_ASSET = ModelAsset(
+    "alignment_mms",
+    "Pacote multilíngue de alinhamento (MMS)",
+    "MahmoudAshraf/mms-300m-1130-forced-aligner",
+    "tempos por palavra para idiomas sem pacote dedicado (1.130 idiomas)",
+    estimated_gb=1.2,
+    revision="49402e9577b1158620820667c218cd494cc44486",
+    # o repo publica os mesmos pesos em .bin e .safetensors
+    download_exclude=("pytorch_model.bin",),
+    license_notice=(
+        "Licença CC-BY-NC 4.0 (Meta MMS): uso NÃO-COMERCIAL — adequado a "
+        "pesquisa acadêmica. Os pacotes de idioma dedicados são Apache-2.0, "
+        "sem restrição."),
+)
+
+
 def normalize_language(language: Any) -> str:
     return str(language or "").strip().lower()
+
+
+def mms_align_cached(cache_dir: Path | None = None) -> bool:
+    """O pacote coringa MMS esta instalado (pesos completos)?"""
+    try:
+        snap = cached_snapshot_path(MMS_ALIGN_ASSET.repo_id, cache_dir,
+                                    revision=MMS_ALIGN_ASSET.revision)
+        return bool(snap and _snapshot_has_weights(snap))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _ensure_nltk_punkt() -> None:
@@ -991,6 +1026,8 @@ def friendly_name(key: str) -> str:
     fixed = _FRIENDLY_FIXED_MODELS.get(key)
     if fixed:
         return fixed
+    if key == "alignment_mms":
+        return MMS_ALIGN_ASSET.label
     if key.startswith("alignment_"):
         spec = ALIGN_LANGUAGES.get(key[len("alignment_"):])
         if spec:
@@ -1010,6 +1047,7 @@ def _known_repos() -> set[str]:
     # idiomas virariam "orfaos" e a limpeza os apagaria.
     for spec in ALIGN_LANGUAGES.values():
         known.add(str(spec["repo"]))
+    known.add(str(MMS_ALIGN_ASSET.repo_id))
     for asset in _FIXED_MODELS + _OPTIONAL_MODELS:
         if asset.repo_id:
             known.add(str(asset.repo_id))
