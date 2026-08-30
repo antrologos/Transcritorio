@@ -153,11 +153,52 @@ with _tf.TemporaryDirectory() as _base:
     assert "Já existe" in dlg.preview_label.text()
 print("PASS: NewProjectDialog preview e colisao")
 
+# --- Completo pergunta: baixar os modelos de IA agora ou depois (SL-B2) ---
+from transcribe_pipeline.review_studio_qt import _wizard_optional_keys
+
+CPU_HW = caps.parse_fake_hardware("cpu")
+GPU8_HW = caps.parse_fake_hardware("gpu8")
+# pura: perfil != completo nao baixa opcional nenhum
+assert _wizard_optional_keys("padrao", GPU8_HW, set()) == ()
+assert _wizard_optional_keys("essencial", CPU_HW, set()) == ()
+# gpu8: os tres modelos de IA entram
+assert _wizard_optional_keys("completo", GPU8_HW, set()) == (
+    "search_encoder", "ner_gliner", "llm_qwen")
+# cpu: o Qwen (precisa de GPU) fica de fora; os outros dois entram
+assert _wizard_optional_keys("completo", CPU_HW, set()) == ("search_encoder", "ner_gliner")
+# cache filtra o que ja existe
+assert _wizard_optional_keys("completo", GPU8_HW, {"ner_gliner"}) == (
+    "search_encoder", "llm_qwen")
+print("PASS: _wizard_optional_keys")
+
+# maquina de CPU: escolher Completo mostra a pergunta com "depois" recomendado
+wizard_ia = FirstRunWizard()
+assert wizard_ia._ai_download_group.isHidden() is True  # padrao recomendado
+wizard_ia._profile_radios["completo"].setChecked(True)
+assert wizard_ia._ai_download_group.isHidden() is False
+assert wizard_ia._ai_later_radio.isChecked()
+assert "recomendado" in wizard_ia._ai_later_radio.text()
+assert wizard_ia.wants_ai_models_now is False
+# nota honesta: o Qwen nao entra sem GPU
+assert "NVIDIA" in wizard_ia._ai_blocked_note.text()
+wizard_ia._profile_radios["padrao"].setChecked(True)
+assert wizard_ia._ai_download_group.isHidden() is True
+print("PASS: Completo pergunta (maquina de CPU: depois recomendado)")
+
 # --- maquina com GPU boa: recomenda Completo, sem avisos ---
 os.environ["TRANSCRITORIO_FAKE_HARDWARE"] = "gpu24"
 wizard2 = FirstRunWizard()
 assert wizard2.selected_profile == "completo"
 assert wizard2._profile_warning.text() == ""
+# GPU boa + Completo default: pergunta visivel com "agora" recomendado
+assert wizard2._ai_download_group.isHidden() is False
+assert wizard2._ai_now_radio.isChecked()
+assert "recomendado" in wizard2._ai_now_radio.text()
+assert wizard2.wants_ai_models_now is True
+# escolher "depois" desliga o download imediato
+wizard2._ai_later_radio.setChecked(True)
+assert wizard2.wants_ai_models_now is False
+print("PASS: Completo pergunta (GPU boa: agora recomendado)")
 # GPU pequena: nao recomenda completo, e completo avisa sobre a VRAM
 os.environ["TRANSCRITORIO_FAKE_HARDWARE"] = "gpu2"
 wizard3 = FirstRunWizard()

@@ -3260,6 +3260,41 @@ if QT_IMPORT_ERROR is None:
             self._profile_warning.setWordWrap(True)
             self._profile_warning.setStyleSheet(_style_err())
             layout.addWidget(self._profile_warning)
+            # Decisao do usuario (2026-08-30): o Completo PERGUNTA — baixar
+            # os modelos de IA agora ou deixar para a primeira utilizacao.
+            # Recomendado marcado, escolha sempre do usuario.
+            chaves_ia = _wizard_optional_keys("completo", hardware, em_cache)
+            self._ai_gb = round(sum(tamanhos.get(k, 0.0) for k in chaves_ia), 1)
+            self._ai_download_group = QGroupBox("Modelos de IA do perfil Completo")
+            ai_layout = QVBoxLayout(self._ai_download_group)
+            self._ai_now_radio = QRadioButton(
+                f"Baixar agora, junto com os demais (~{self._ai_gb:.1f} GB "
+                "incluídos no total acima)")
+            self._ai_later_radio = QRadioButton(
+                "Deixar para a primeira utilização de cada recurso "
+                f"(o download inicial fica ~{self._ai_gb:.1f} GB menor)")
+            ai_layout.addWidget(self._ai_now_radio)
+            ai_layout.addWidget(self._ai_later_radio)
+            bloqueio_qwen = caps.hardware_blocker(
+                caps.capability("resumo_perguntar"), hardware)
+            self._ai_blocked_note = QLabel(
+                "O modelo de análise (8,7 GB) não entra no download: precisa de "
+                "placa NVIDIA. As demais funções de IA valem."
+                if bloqueio_qwen else "")
+            self._ai_blocked_note.setWordWrap(True)
+            self._ai_blocked_note.setStyleSheet(_style_muted())
+            if bloqueio_qwen:
+                ai_layout.addWidget(self._ai_blocked_note)
+            if bloqueio_qwen:
+                self._ai_later_radio.setText(
+                    self._ai_later_radio.text() + "   ← recomendado")
+                self._ai_later_radio.setChecked(True)
+            else:
+                self._ai_now_radio.setText(
+                    self._ai_now_radio.text() + "   ← recomendado")
+                self._ai_now_radio.setChecked(True)
+            self._ai_download_group.setVisible(False)  # so com Completo marcado
+            layout.addWidget(self._ai_download_group)
             from . import model_manager as _mm
             variante_label = str(_mm.ASR_VARIANTS.get(variante, {}).get("label", variante))
             rodape = QLabel(
@@ -3293,6 +3328,17 @@ if QT_IMPORT_ERROR is None:
                 avisos.append(aviso_cpu)
             if hasattr(self, "_profile_warning"):
                 self._profile_warning.setText("\n".join(avisos))
+            if hasattr(self, "_ai_download_group"):
+                self._ai_download_group.setVisible(
+                    chave == "completo" and getattr(self, "_ai_gb", 0) > 0)
+
+        @property
+        def wants_ai_models_now(self) -> bool:
+            """Completo + escolha "baixar agora" na pagina de perfis."""
+            return (getattr(self, "selected_profile", "") == "completo"
+                    and getattr(self, "_ai_gb", 0) > 0
+                    and hasattr(self, "_ai_now_radio")
+                    and self._ai_now_radio.isChecked())
 
         # -- Page factories --
 
@@ -3648,6 +3694,26 @@ if QT_IMPORT_ERROR is None:
         def token(self) -> str:
             return self.token_edit.text().strip()
 
+    def _wizard_optional_keys(profile: str, hw, cached: set[str]) -> tuple[str, ...]:
+        """Modelos de IA que o assistente baixa no perfil Completo quando o
+        usuario escolhe "baixar agora" (pura, testavel).
+
+        Exclui o que ja esta em cache e o Qwen quando o hardware nao da
+        conta — nao baixar 8,7 GB inuteis; o aviso da pagina de perfil
+        ja explicou o porque."""
+        if profile != "completo":
+            return ()
+        from . import capabilities as _caps
+        chaves: list[str] = []
+        for key in ("search_encoder", "ner_gliner", "llm_qwen"):
+            if key in cached:
+                continue
+            cap = _caps.capability_for_model(key)
+            if cap is not None and _caps.hardware_blocker(cap, hw):
+                continue
+            chaves.append(key)
+        return tuple(chaves)
+
     class _DownloadWizardPage(QWizardPage):
         """Page 4: model download with progress."""
 
@@ -3694,6 +3760,22 @@ if QT_IMPORT_ERROR is None:
             # vez de deixar o limiar generico decidir.
             select_page = self._wizard.page(FirstRunWizard.PAGE_MODEL_SELECT)
             required_gb = getattr(select_page, "total_gb", lambda: None)()
+            # Completo com "baixar IA agora": os opcionais entram no download
+            # do assistente (e na conta de disco).
+            optional_keys: tuple[str, ...] = ()
+            self._qwen_excluido_por_hardware = False
+            if getattr(self._wizard, "wants_ai_models_now", False):
+                from . import capabilities as _caps_dl
+                hw = _caps_dl.hardware_snapshot()
+                cached = _caps_dl.cached_model_keys()
+                optional_keys = _wizard_optional_keys(
+                    getattr(self._wizard, "selected_profile", ""), hw, cached)
+                self._qwen_excluido_por_hardware = (
+                    "llm_qwen" not in optional_keys and "llm_qwen" not in cached)
+                if optional_keys:
+                    required_gb = (required_gb or 0.0) + sum(
+                        float(model_manager.optional_model(k).estimated_gb)
+                        for k in optional_keys)
             disk = model_manager.check_disk_space(required_gb)
             if not disk["ok"]:
                 self.progress_label.setText(disk["message"])
@@ -3710,6 +3792,7 @@ if QT_IMPORT_ERROR is None:
                 asr_variants=asr_variants,
                 include_diarization=bool(getattr(self._wizard, "wants_diarization", True)),
                 include_alignment=getattr(self._wizard, "selected_profile", "padrao") != "essencial",
+                optional_keys=optional_keys,
             )
             self._worker.progress.connect(self._on_progress)
             self._worker.finished_ok.connect(self._on_done)
@@ -3743,7 +3826,12 @@ if QT_IMPORT_ERROR is None:
             self.cancel_download_button.setVisible(False)
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(100)
-            self.progress_label.setText("Componentes baixados e verificados com sucesso!")
+            mensagem = "Componentes baixados e verificados com sucesso!"
+            if getattr(self, "_qwen_excluido_por_hardware", False):
+                mensagem += ("\nO modelo de análise (8,7 GB) não foi baixado: "
+                             "precisa de placa NVIDIA. As demais funções do "
+                             "perfil Completo estão prontas.")
+            self.progress_label.setText(mensagem)
             self.progress_label.setStyleSheet(_style_ok())
             self.completeChanged.emit()
 
@@ -3770,12 +3858,14 @@ if QT_IMPORT_ERROR is None:
         failed = Signal(str)
 
         def __init__(self, token: str, asr_variants: list[str] | None = None,
-                     include_diarization: bool = True, include_alignment: bool = True) -> None:
+                     include_diarization: bool = True, include_alignment: bool = True,
+                     optional_keys: tuple[str, ...] = ()) -> None:
             super().__init__()
             self.token = token
             self.asr_variants = asr_variants
             self.include_diarization = include_diarization
             self.include_alignment = include_alignment
+            self.optional_keys = tuple(optional_keys)
             self._cancel_requested = False
 
         def request_cancel(self) -> None:
@@ -3805,9 +3895,26 @@ if QT_IMPORT_ERROR is None:
                 if result_failures:
                     _download_diag_log("[wizard] emitting failed signal")
                     self.failed.emit(str(result_message or "Falha ao baixar um ou mais componentes."))
-                else:
-                    _download_diag_log("[wizard] emitting finished_ok signal")
-                    self.finished_ok.emit()
+                    return
+                # Completo com "baixar IA agora": os opcionais em sequencia,
+                # no mesmo canal de progresso (cada um nomeia a si mesmo).
+                from .model_manager import download_optional_model, optional_model
+                for key in self.optional_keys:
+                    if self._cancel_requested:
+                        self.failed.emit("Download cancelado.")
+                        return
+                    falhas = download_optional_model(
+                        key, progress_callback=on_progress,
+                        should_cancel=lambda: self._cancel_requested)
+                    _download_diag_log(f"[wizard] optional {key}: failures={falhas}")
+                    if falhas:
+                        rotulo = str(optional_model(key).label)
+                        self.failed.emit(
+                            f"Falha ao baixar {rotulo} — você pode tentar de "
+                            "novo depois em Transcrever > Gerenciar modelos...")
+                        return
+                _download_diag_log("[wizard] emitting finished_ok signal")
+                self.finished_ok.emit()
             except Exception as exc:
                 from .utils import sanitize_message
                 import traceback
