@@ -5091,11 +5091,10 @@ if QT_IMPORT_ERROR is None:
             self.generate_files_action = QAction("Exportar…", self)
             self.generate_files_action.setShortcut(QKeySequence("Ctrl+E"))
             self.generate_files_action.setToolTip("Exportar a transcrição aberta, os arquivos selecionados ou todas as transcrições. (Ctrl+E)")
-            self.generate_files_action.triggered.connect(self.export_current_review)
-
-            self.export_selected_action = QAction("Exportar selecionados...", self)
-            self.export_selected_action.setToolTip("Exportar as transcricoes dos arquivos selecionados.")
-            self.export_selected_action.triggered.connect(self.export_selected_reviews)
+            self.generate_files_action.triggered.connect(self.export_reviews)
+            # R3: as variantes "Exportar este arquivo..."/"Exportar
+            # selecionados..." morreram — eram tres rotulos para a MESMA
+            # funcao (o escopo sempre foi escolhido dentro do dialogo).
 
             self.delete_transcription_action = QAction("Limpar transcricao gerada...", self)
             self.delete_transcription_action.setToolTip("Apagar apenas os arquivos de transcricao gerados. O audio original e mantido no projeto.")
@@ -5145,9 +5144,6 @@ if QT_IMPORT_ERROR is None:
             for _trash_action in (self.trash_selected_action, self.trash_undo_action, self.trash_redo_action):
                 _trash_action.setShortcutVisibleInContextMenu(True)
 
-            self.export_current_action = QAction("Exportar este arquivo...", self)
-            self.export_current_action.setToolTip("Exportar apenas a transcricao aberta.")
-            self.export_current_action.triggered.connect(self.export_current_review)
 
             self.close_open_file_action = QAction("Fechar arquivo aberto", self)
             self.close_open_file_action.setToolTip("Fechar o arquivo aberto e voltar à lista de entrevistas.")
@@ -5380,9 +5376,6 @@ if QT_IMPORT_ERROR is None:
             projeto_menu.addAction(self.reload_list_action)
             projeto_menu.addSeparator()
             projeto_menu.addAction(self.generate_files_action)
-            # As duas variantes somem na R3 (Exportar unico com escopo).
-            projeto_menu.addAction(self.export_current_action)
-            projeto_menu.addAction(self.export_selected_action)
             projeto_menu.addSeparator()
             projeto_menu.addAction(self.open_project_folder_action)
             projeto_menu.addAction(self.open_export_folder_action)
@@ -8452,7 +8445,6 @@ if QT_IMPORT_ERROR is None:
             self._set_action(self.retranscribe_current_action, not busy and has_review, reason_busy if busy else reason_open)
             self._set_action(self.save_action, not busy and has_turn, reason_busy if busy else reason_turn)
             self._set_action(self.generate_files_action, not busy and (has_review or has_table_selection or any(status.review_exists or status.canonical_exists for status in self.statuses)), reason_busy if busy else "Nenhuma transcrição disponível.")
-            self._set_action(self.export_selected_action, not busy and has_selected, reason_busy if busy else reason_checked)
             self._set_action(self.delete_transcription_action, not busy and has_destructive, reason_busy if busy else reason_destructive)
             # Rename e reorder exigem UM unico alvo
             single_target = bool(has_project and len(self.effective_target_ids()) == 1)
@@ -8485,7 +8477,6 @@ if QT_IMPORT_ERROR is None:
                 not any_busy and can_redo,
                 reason_busy if any_busy else "Nada a refazer nesta sessão.",
             )
-            self._set_action(self.export_current_action, not busy and has_review, reason_busy if busy else reason_open)
             self._set_action(self.close_open_file_action, not busy and has_open_file, reason_busy if busy else "Nenhum arquivo aberto.")
             self._set_action(self.open_export_folder_action, not busy, reason_busy)
             # Acoes que dependem do modelo de falantes: instalavel mantem
@@ -8753,12 +8744,6 @@ if QT_IMPORT_ERROR is None:
                 self.progress_label.setText("Tempo ajustado pela posição do player.")
             except Exception as exc:
                 QMessageBox.warning(self, "Não foi possível ajustar o tempo", sanitize_message(str(exc)))
-
-        def export_current_review(self, *_args: Any) -> None:
-            self.export_reviews()
-
-        def export_selected_reviews(self, *_args: Any) -> None:
-            self.export_reviews()
 
         def delete_selected_transcriptions(self, *_args: Any) -> None:
             _logger.info("delete_selected_transcriptions triggered: context=%s", self.context is not None)
