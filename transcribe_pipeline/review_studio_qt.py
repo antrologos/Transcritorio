@@ -6567,12 +6567,18 @@ if QT_IMPORT_ERROR is None:
             turn_panel = QWidget()
             turn_layout = QVBoxLayout(turn_panel)
             turn_layout.setContentsMargins(0, 0, 0, 0)
+            # Slot UNICO de banner (R2): os tres avisos declaram interesse
+            # e a area mostra so o de maior prioridade — fim da pilha de
+            # faixas simultaneas. Fachadas _update_*_banner continuam donas
+            # da decisao de QUANDO cada um quer aparecer.
+            from .ui_banners import BannerArea
+            self.banner_area = BannerArea()
             # Banner contextual (plano D2.6): a acao importante mora onde e
             # necessaria — o menu e acesso secundario.
             self.voice_banner = QFrame()
             self.voice_banner.setVisible(False)
             self.voice_banner.setStyleSheet(
-                "QFrame { background: rgba(77,171,247,0.14); border: 1px solid rgba(77,171,247,0.45); border-radius: 6px; }"
+                f"QFrame {{ {ui_tokens.banner_style(ui_tokens.INFO)} }}"
             )
             banner_layout = QHBoxLayout(self.voice_banner)
             banner_layout.setContentsMargins(10, 6, 10, 6)
@@ -6587,13 +6593,12 @@ if QT_IMPORT_ERROR is None:
             banner_dismiss.setToolTip("Desliga a pergunta neste projeto. Reative no menu Transcrever.")
             banner_dismiss.clicked.connect(self._on_banner_dismiss_clicked)
             banner_layout.addWidget(banner_dismiss)
-            turn_layout.addWidget(self.voice_banner)
             # Banner de diarizacao falhada (plano U1.7): o lote continua, mas
             # o aviso ficava enterrado na coluna Erro da fila.
             self.diar_failed_banner = QFrame()
             self.diar_failed_banner.setVisible(False)
             self.diar_failed_banner.setStyleSheet(
-                "QFrame { background: rgba(255,169,77,0.14); border: 1px solid rgba(255,169,77,0.45); border-radius: 6px; }"
+                f"QFrame {{ {ui_tokens.banner_style(ui_tokens.WARN)} }}"
             )
             diar_failed_layout = QHBoxLayout(self.diar_failed_banner)
             diar_failed_layout.setContentsMargins(10, 6, 10, 6)
@@ -6604,14 +6609,13 @@ if QT_IMPORT_ERROR is None:
             diar_failed_button.setToolTip("Refaz a identificação de falantes deste arquivo e remonta a transcrição.")
             diar_failed_button.clicked.connect(self.improve_speakers_current_file)
             diar_failed_layout.addWidget(diar_failed_button)
-            turn_layout.addWidget(self.diar_failed_banner)
             # Banner de trocas de falante suspeitas (plano 2026-08-25): a
             # verificacao acustica marca blocos cuja voz e igual a do bloco
             # seguinte; o banner aponta para as marcacoes, sem depender de menu.
             self.boundary_banner = QFrame()
             self.boundary_banner.setVisible(False)
             self.boundary_banner.setStyleSheet(
-                "QFrame { background: rgba(252,196,25,0.14); border: 1px solid rgba(252,196,25,0.45); border-radius: 6px; }"
+                f"QFrame {{ {ui_tokens.banner_style(ui_tokens.WARN)} }}"
             )
             boundary_layout = QHBoxLayout(self.boundary_banner)
             boundary_layout.setContentsMargins(10, 6, 10, 6)
@@ -6628,7 +6632,11 @@ if QT_IMPORT_ERROR is None:
             boundary_next.setToolTip("Proximo bloco marcado")
             boundary_next.clicked.connect(lambda: self._on_boundary_nav(1))
             boundary_layout.addWidget(boundary_next)
-            turn_layout.addWidget(self.boundary_banner)
+            # Prioridades: separacao falhada > trocas suspeitas > vozes.
+            self.banner_area.add_banner("diar_failed", self.diar_failed_banner, 0)
+            self.banner_area.add_banner("boundary", self.boundary_banner, 1)
+            self.banner_area.add_banner("voice", self.voice_banner, 2)
+            turn_layout.addWidget(self.banner_area)
             # Barra de busca no arquivo (Ctrl+F) — so existe enquanto usada.
             self.find_bar = QFrame()
             self.find_bar.setVisible(False)
@@ -7565,7 +7573,7 @@ if QT_IMPORT_ERROR is None:
                         self._persist_confirmed_from_edits(self.current_interview_id)
                     else:
                         visible = True
-            self.voice_banner.setVisible(visible)
+            self.banner_area.set_wanted("voice", visible)
             self._update_diar_failed_banner()
 
         def _update_diar_failed_banner(self) -> None:
@@ -7575,7 +7583,7 @@ if QT_IMPORT_ERROR is None:
             if self.review and self.current_interview_id and self.context is not None:
                 job = self.context.jobs.get(self.current_interview_id) or {}
                 visible = "Identificação de falantes não concluída" in str(job.get("last_error") or "")
-            self.diar_failed_banner.setVisible(visible)
+            self.banner_area.set_wanted("diar_failed", visible)
             self._update_boundary_banner()
             # Abrir/trocar de entrevista muda o alvo da aba Documentos.
             self._on_review_tab_changed(-1)
@@ -7593,7 +7601,7 @@ if QT_IMPORT_ERROR is None:
                 self.boundary_banner_label.setText(
                     f"🔍 {len(rows)} troca{plural} de falante com vozes parecidas — confira as marcações."
                 )
-            self.boundary_banner.setVisible(bool(rows))
+            self.banner_area.set_wanted("boundary", bool(rows))
 
         def show_find_bar(self) -> None:
             if not self.review:
