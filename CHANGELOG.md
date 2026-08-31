@@ -1,6 +1,9 @@
 # Changelog
 
-## Não lançado (v0.2 em preparação)
+## v0.2.0 — 2026-08-31
+
+Primeira versão publicada no PyPI — `uv tool install transcritorio` é o
+canal oficial daqui em diante.
 
 **Mudança de canal de distribuição**: o standalone (Setup.exe/.dmg/AppImage)
 foi descontinuado — antivírus/SmartScreen bloqueavam a instalação sem
@@ -8,6 +11,30 @@ assinatura digital, e o SignPath recusou a assinatura gratuita. O canal
 oficial passa a ser **PyPI + uv** (`uv tool install transcritorio`); ver
 `docs/INSTALL_WINDOWS.md` e `docs/LEGACY_STANDALONE.md`.
 
+- **Instalação em um clique (Windows)**: `Instalar-Transcritorio.bat`
+  e `Atualizar-Transcritorio.bat` — baixar, clicar duas vezes e
+  esperar. Fazem exatamente os comandos do guia (winget → uv → FFmpeg
+  → PyPI), só de fontes oficiais assinadas, sem senha de administrador
+  e com mensagens em português para quem nunca abriu um terminal. E o
+  aplicativo instalado agora tem ícone: a janela e o atalho da área de
+  trabalho mostram o símbolo do Transcritório (antes herdavam o ícone
+  genérico do Python).
+- **Revisão de grafias mais honesta e mais útil**: o botão "Revisar
+  grafias…" agora distingue três situações — nunca analisado (oferece
+  rodar a análise ali mesmo), análise desatualizada (entrevistas
+  transcritas depois do último glossário; oferece re-analisar) e em
+  dia. Antes, ele dizia "nada a corrigir" mesmo sem a análise nunca
+  ter rodado. E a correção sugerida pela AI virou um campo editável:
+  se ela sugerir "UEG" onde o certo é "UERJ", você digita a grafia
+  certa e aplica a todas as ocorrências marcadas.
+- **Painéis da transcrição do seu jeito**: as seções da aba
+  Transcrição (vídeo, áudio, blocos e editor) viraram quatro painéis
+  independentes — cada divisor arrasta de verdade, qualquer seção
+  pode ser recolhida a zero e a que importa pode ocupar a janela
+  inteira. Em entrevistas de vídeo, o painel de imagem abre compacto
+  e um botão "Ocultar vídeo" o esconde sem parar o áudio (antes o
+  vídeo tomava um terço da janela e os blocos ficavam com duas
+  linhas). O aviso de trocas de falante ganhou um × para dispensar.
 - **Reforma de interface — primeiro contato e polimento (R4)**: a
   etapa final da reforma. Arrastar gravações sem projeto aberto deixou
   de ser ignorado — o aplicativo oferece criar o projeto ali mesmo e

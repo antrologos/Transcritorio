@@ -115,7 +115,8 @@ Seguem os limites:
 - Comparação de performance MLX × CPU no mesmo áudio.
 - Consumo de memória GPU / crashes em áudios longos.
 - PyInstaller em `macos-14` realmente produzindo um `.app` com mlx-whisper
-  embarcado (possível de validar só com `git push` + observar CI).
+  embarcado (possível de validar só com `git push` + observar CI)
+  (canal standalone LEGADO — ver docs/LEGACY_STANDALONE.md).
 
 **Limitações conhecidas da integração:**
 - **Cancelamento durante transcrição**: `mlx_whisper.transcribe()` é uma
@@ -124,11 +125,13 @@ Seguem os limites:
   transcrição de um áudio, ela vai até o fim (tipicamente 1-5 min por hora
   de áudio em MLX). O runner emite `asr_progress` no início e `asr_done` no
   fim, mas não durante.
-- **Sem smoke test macOS no CI**: o workflow `.github/workflows/release.yml`
+- **Sem smoke test macOS no CI** (canal standalone LEGADO — ver
+  docs/LEGACY_STANDALONE.md): o workflow `.github/workflows/release.yml`
   tem `smoke-linux-appimage` mas não o equivalente `smoke-macos-dmg`. A
   primeira validação real do bundle macOS com mlx-whisper vai acontecer
   só com um usuário abrindo o `.dmg` — manter expectativas ajustadas.
-- **Hook PyInstaller**: o spec usa `collect_submodules("mlx_whisper")` +
+- **Hook PyInstaller** (canal standalone LEGADO — ver
+  docs/LEGACY_STANDALONE.md): o spec usa `collect_submodules("mlx_whisper")` +
   `collect_submodules("mlx")` inline (try/except). Se a estrutura interna
   do MLX mudar, hoje não temos um `packaging/hooks/hook-mlx.py` dedicado.
 

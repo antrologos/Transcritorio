@@ -110,8 +110,9 @@ comandos.
   pastas sincronizadas.
 - **Venv fora do Dropbox**: o Dropbox pode corromper arquivos de venv.
 - **FFmpeg no `PATH`**: o pipeline chama `ffmpeg` e `ffprobe` via
-  subprocess. No bundle distribuído, eles ficam em
-  `vendor/ffmpeg/bin/`; no source, precisam estar no `PATH` do SO.
+  subprocess. No canal atual (uv/PyPI), eles vêm do sistema
+  (winget/brew/apt) e precisam estar no `PATH` do SO; o
+  `vendor/ffmpeg/bin/` era do bundle standalone legado.
 
 ## Build do instalador (empacotamento — CANAL LEGADO)
 
@@ -125,8 +126,9 @@ detalhes completos de build. Em resumo:
 - Windows: `packaging/build.ps1` monta venv isolado, roda PyInstaller,
   gera Setup.exe via Inno Setup.
 - macOS/Linux: via CI — `.github/workflows/release.yml` cobre os 3 SOs.
-- **Antes de taguear** uma release pública: percorra
-  [`docs/PACKAGING_CHECKLIST.md`](PACKAGING_CHECKLIST.md).
+- **Taguear** (`v*`) hoje publica no PyPI via `publish.yml`; a
+  [`docs/PACKAGING_CHECKLIST.md`](PACKAGING_CHECKLIST.md) vale apenas
+  para builds MANUAIS do canal legado (workflow_dispatch).
 
 ## Testes
 

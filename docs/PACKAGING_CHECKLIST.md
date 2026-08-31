@@ -13,7 +13,9 @@ v0.1.1 shippou sem ffmpeg em Mac e Linux (usuarios tinham que rodar
 `brew install ffmpeg` / `apt install ffmpeg`).
 
 **Aplique antes de:**
-- Push de tag `v*.*.*` que dispara `release.yml` (ver regra 10 em `CLAUDE.md`)
+- Execucao manual do `release.yml` (workflow_dispatch) — um push de tag
+  `v*.*.*` hoje dispara o `publish.yml` (PyPI), nao o `release.yml`
+  (ver regra 10 em `CLAUDE.md`)
 - Re-tag destrutivo (usar apenas se release anterior nunca foi baixada
   publicamente — ver `memory/feedback_version_bumps.md`)
 

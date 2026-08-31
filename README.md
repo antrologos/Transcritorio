@@ -1,6 +1,6 @@
 # Transcritório
 
-[![Release](https://img.shields.io/github/v/release/antrologos/Transcritorio)](https://github.com/antrologos/Transcritorio/releases/latest)
+[![PyPI](https://img.shields.io/pypi/v/transcritorio)](https://pypi.org/project/transcritorio/)
 [![License](https://img.shields.io/github/license/antrologos/Transcritorio)](LICENSE)
 ![Platforms](https://img.shields.io/badge/plataformas-Windows%20%7C%20macOS%20%7C%20Linux-informational)
 [![Site](https://img.shields.io/badge/site-antrologos.github.io%2FTranscritorio-44d7b6)](https://antrologos.github.io/Transcritorio/pt/)
@@ -18,7 +18,13 @@ Site do projeto: **[antrologos.github.io/Transcritorio](https://antrologos.githu
 
 O Transcritório é instalado pelo [uv](https://docs.astral.sh/uv/), que baixa o Python e todas as dependências **das fontes oficiais** (Microsoft, PyPI, PyTorch). É uma vez só; no dia a dia você abre pelo atalho da área de trabalho.
 
-**Windows 10/11** — abra o *Prompt de Comando* (menu Iniciar → digite `cmd` → Enter) e cole os três comandos, um por vez:
+**Windows 10/11, sem terminal (recomendado)** — baixe o instalador de um clique e clique duas vezes nele:
+
+**[⬇ Instalar-Transcritorio.bat](https://github.com/antrologos/Transcritorio/releases/latest/download/Instalar-Transcritorio.bat)**
+
+Ele faz sozinho os três comandos abaixo, mostra o progresso e abre o programa no final (se o Windows perguntar "Deseja executar este arquivo?", confirme — o script é [auditável](scripts/Instalar-Transcritorio.bat) e só instala de fontes oficiais assinadas). Para atualizar depois: [Atualizar-Transcritorio.bat](https://github.com/antrologos/Transcritorio/releases/latest/download/Atualizar-Transcritorio.bat).
+
+**Windows 10/11, pelo terminal** — abra o *Prompt de Comando* (menu Iniciar → digite `cmd` → Enter) e cole os três comandos, um por vez:
 
 ```bat
 winget install astral-sh.uv
@@ -29,8 +35,6 @@ uv tool install transcritorio
 Feche e reabra o Prompt, digite `transcritorio` e pressione Enter. O programa abre e cria o atalho **Transcritório** na área de trabalho — a partir daí, é só clicar nele.
 
 Guia detalhado com solução de problemas: [`docs/INSTALL_WINDOWS.md`](docs/INSTALL_WINDOWS.md)
-
-> **⏳ Período beta (até a v0.2.0 sair no PyPI):** o comando `uv tool install transcritorio` ainda não está ativo. Por enquanto, instale a versão beta trocando `transcritorio` por `"transcritorio @ <URL do wheel>"` — o comando pronto para copiar, por sistema, está no [release beta-0.2.0b2](https://github.com/antrologos/Transcritorio/releases/tag/beta-0.2.0b2).
 
 **macOS (beta)** — no Terminal, com [Homebrew](https://brew.sh):
 
@@ -63,22 +67,34 @@ Guia: [`docs/LINUX_INSTALL.md`](docs/LINUX_INSTALL.md)
 
 ### O que você consegue fazer
 
-- **Importar** áudios e vídeos (MP3, WAV, M4A, MP4 e outros) — um arquivo, uma pasta, ou uma lista.
-- **Transcrever** em português brasileiro com alta acurácia (90–96% em áudios limpos). Ao transcrever, o app pergunta quantas pessoas falam — entrevista a dois ou **grupo focal** (até ~8 participantes).
-- **Separar falantes** automaticamente — e nomeá-los ouvindo amostras: o diálogo **"De quem é esta voz?"** toca trechos de cada voz para você dizer quem é. Vozes recorrentes do projeto (ex.: a sua) passam a ser **reconhecidas automaticamente** e vêm sugeridas.
-- **Revisar no Estúdio** com player sincronizado, forma de onda interativa, cores por falante e edição por bloco.
-- **Exportar** em DOCX, MD, SRT, VTT, CSV, TSV e formato NVivo.
-- **Tudo offline** depois do download inicial dos modelos (4–7 GB conforme as opções, uma única vez).
+- **Importar** áudios e vídeos (MP3, WAV, M4A, MP4 e outros) — arraste para a janela, um arquivo ou uma pasta inteira.
+- **Transcrever** em português brasileiro com alta acurácia (90–96% em áudios limpos), com **dois motores locais**: Whisper (o padrão, nas variantes small a large-v3-turbo, escolhidas conforme a sua máquina) e o **Parakeet pt-BR "TAGARELA"** (experimental, muito rápido em CPU). Ao transcrever, o app pergunta quantas pessoas falam — entrevista a dois ou **grupo focal** (até ~8 participantes). Gravações em **16 outros idiomas** também transcrevem, com tempos por palavra.
+- **Separar falantes** automaticamente — e nomeá-los ouvindo amostras: o diálogo **"De quem é esta voz?"** toca trechos de cada voz para você dizer quem é. Vozes recorrentes do projeto (ex.: a sua) passam a ser **reconhecidas automaticamente**. Uma **verificação acústica** confere cada troca de falante e marca com 🔍 as trocas duvidosas, no ponto exato do áudio.
+- **Revisar no Estúdio** com player sincronizado, forma de onda interativa, cores por falante e edição por bloco — o duplo clique numa palavra leva o áudio até ela. Painéis ajustáveis: recolha o vídeo, amplie os blocos, trabalhe do seu jeito.
+- **Analisar com AI local** (✨ nada sai do seu computador): **resumo com índice temático** de cada entrevista, **glossário de nomes** do projeto com **revisão de grafias** (a AI encontra "Joao/João/Jono" e você decide, ocorrência por ocorrência, com a grafia certa editável), e **"Perguntar às entrevistas"** — uma pergunta em português, respondida com citações dos trechos.
+- **Exportar** em DOCX, MD, SRT, VTT, CSV, TSV e formato NVivo (importa direto no NVivo, Atlas.ti, MAXQDA ou num script R/Python). A aba **Documentos** reúne tudo que o app produz, com data e botão de abrir.
+- **Tudo offline** depois do download inicial dos modelos (uma única vez; o tamanho depende do perfil de instalação — ver abaixo).
 
-### Requisitos mínimos
+### Requisitos por tipo de instalação
 
-| | Mínimo | Recomendado | Ideal |
-|---|---|---|---|
-| CPU | 4 núcleos | 8 núcleos | 8+ núcleos |
-| RAM | 8 GB | 16 GB | 16 GB+ |
-| Disco | 5 GB livres | 10 GB | 10 GB |
-| GPU | — | — | NVIDIA com 6 GB+ VRAM ou Apple Silicon |
-| 1 h de áudio | ~40–60 min | ~20–30 min | ~5–10 min |
+O assistente de primeiro uso examina a sua máquina e sugere o perfil
+adequado — nada é imposto, e dá para mudar depois em **Ferramentas →
+Gerenciar modelos…**. Números medidos (disco = aplicativo + modelos;
+tempos em CPU de 8 núcleos — em 4 núcleos, conte aproximadamente o dobro):
+
+| Perfil | O que faz | Máquina | Disco | 1 h de áudio |
+|---|---|---|---|---|
+| **Essencial** | Só transcrever (modelo `small`) | 2+ núcleos, 4 GB RAM | ~3,5 GB | ~1 h (CPU) |
+| **Padrão** | + separar falantes + tempos por palavra | 4+ núcleos, 8 GB RAM | ~5 GB | ~1–1,5 h (CPU) |
+| **Padrão + GPU** | idem, com aceleração NVIDIA (`large-v3-turbo`) | GPU NVIDIA 4 GB+ VRAM | ~10 GB | ~5–10 min |
+| **Completo** | + análise com AI local (resumo, glossário, perguntar) | GPU NVIDIA 6 GB+ VRAM, 16 GB RAM | ~19 GB | ~5–10 min |
+
+> **Máquina modesta, pressa grande?** O motor experimental **Parakeet
+> pt-BR (TAGARELA)** transcreve ~25× mais rápido que o tempo real **em
+> CPU** (1 h de áudio em poucos minutos, sem placa de vídeo) — escolha-o
+> clicando no selo **Modelo** da barra inferior (ou em **Ferramentas →
+> Configurar transcrição…**). Por ser experimental, revise com um pouco
+> mais de atenção.
 
 ### Primeiros passos
 
@@ -105,14 +121,14 @@ Guia: [`docs/LINUX_INSTALL.md`](docs/LINUX_INSTALL.md)
 
 ### Como citar
 
-Barbosa, R. J. (2026). *Transcritório: transcrição local de entrevistas em português brasileiro* (v0.1.8) [Software]. IESP-UERJ/CERES. https://github.com/antrologos/Transcritorio
+Barbosa, R. J. (2026). *Transcritório: transcrição local de entrevistas em português brasileiro* (v0.2.0) [Software]. IESP-UERJ/CERES. https://github.com/antrologos/Transcritorio
 
 ```bibtex
 @software{barbosa2026transcritorio,
   author    = {Barbosa, Rog{\'e}rio Jer{\^o}nimo},
   title     = {Transcrit{\'o}rio: transcri{\c{c}}{\~a}o local de entrevistas em portugu{\^e}s brasileiro},
   year      = {2026},
-  version   = {0.1.8},
+  version   = {0.2.0},
   publisher = {IESP-UERJ/CERES},
   license   = {MIT},
   url       = {https://github.com/antrologos/Transcritorio}
@@ -146,11 +162,12 @@ Se você quer rodar do código-fonte, contribuir com pull requests ou auditar o 
 
 ```
 transcribe_pipeline/    pacote Python principal (GUI, CLI, runners, render)
-scripts/                wrappers CMD/PS1 para Windows
-packaging/              spec do PyInstaller, Inno Setup, hooks, bundle filters
+scripts/                instaladores .bat de duplo clique + wrappers CMD/PS1 (dev)
+packaging/              (LEGADO) spec do PyInstaller, Inno Setup, hooks
 tests/                  toy tests (isolados) e smoke tests
 docs/                   documentação completa
-.github/workflows/      CI e release multi-plataforma
+.github/workflows/      ci.yml (testes) e publish.yml (tag v* → PyPI);
+                        release.yml é o build standalone LEGADO (manual)
 ```
 
 ---
@@ -178,6 +195,6 @@ Histórico do desenvolvimento (era do app standalone): [`docs/STANDALONE_APP_ROA
 Software distribuído sob **licença MIT** (veja [`LICENSE`](LICENSE)).
 Autor: **Rogério Jerônimo Barbosa** — IESP-UERJ / CERES — [antrologos.github.io](https://antrologos.github.io/) — [ORCID 0000-0002-6796-4547](https://orcid.org/0000-0002-6796-4547).
 
-Agradecimentos às bibliotecas sobre as quais este projeto se apoia: [WhisperX](https://github.com/m-bain/whisperX), [faster-whisper](https://github.com/SYSTRAN/faster-whisper), [mlx-whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper), [pyannote.audio](https://github.com/pyannote/pyannote-audio), [PySide6](https://pypi.org/project/PySide6/), [FFmpeg](https://ffmpeg.org/).
+Agradecimentos às bibliotecas e modelos sobre os quais este projeto se apoia: [Whisper](https://github.com/openai/whisper) (OpenAI), [WhisperX](https://github.com/m-bain/whisperX), [faster-whisper](https://github.com/SYSTRAN/faster-whisper)/CTranslate2, [mlx-whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper), [pyannote.audio](https://github.com/pyannote/pyannote-audio), [Parakeet pt-BR](https://huggingface.co/nvidia) (NVIDIA) via [onnx-asr](https://github.com/istupakov/onnx-asr), [Qwen](https://github.com/QwenLM) (análise local), [GLiNER](https://github.com/urchade/GLiNER) (nomes), [PyTorch](https://pytorch.org/), [PySide6/Qt](https://pypi.org/project/PySide6/), [FFmpeg](https://ffmpeg.org/) e [uv](https://docs.astral.sh/uv/) (Astral).
 
 No canal atual, o ffmpeg/ffprobe vêm do gerenciador de pacotes do sistema (winget/brew/apt) — nada é embutido. Nas releases legadas em instalador, o ffmpeg/ffprobe embutidos eram builds GPL de terceiros (BtbN para Windows, evermeet.cx para macOS, johnvansickle.com para Linux); veja [`NOTICE`](NOTICE) para a lista de componentes dessas versões e seus termos.

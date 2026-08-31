@@ -37,10 +37,18 @@ uv = shutil.which("uv") or r"C:\Users\antro\AppData\Local\Microsoft\WinGet\Links
 if not Path(uv).exists():
     print("SKIP build: uv indisponivel")
 else:
+    # Buildar de uma COPIA fora do Dropbox: o setuptools usa ./build no
+    # cwd e o sync do Dropbox segura arquivos recem-criados (WinError 32
+    # visto em 2026-08-31). So o necessario para o wheel viaja.
+    stage = Path(tempfile.mkdtemp())
+    shutil.copy2(REPO / "pyproject.toml", stage / "pyproject.toml")
+    shutil.copy2(REPO / "README.md", stage / "README.md")
+    shutil.copytree(REPO / "transcribe_pipeline", stage / "transcribe_pipeline",
+                    ignore=shutil.ignore_patterns("__pycache__"))
     outdir = Path(tempfile.mkdtemp())
     completed = subprocess.run(
         [uv, "build", "--wheel", "--out-dir", str(outdir)],
-        cwd=str(REPO), capture_output=True, text=True, timeout=300)
+        cwd=str(stage), capture_output=True, text=True, timeout=300)
     assert completed.returncode == 0, completed.stderr[-800:]
     wheel = next(outdir.glob("*.whl"))
     with zipfile.ZipFile(wheel) as zf:

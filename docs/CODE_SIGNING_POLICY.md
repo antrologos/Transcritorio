@@ -14,8 +14,11 @@ through [SignPath.io](https://signpath.io/) with a certificate issued by
 the [SignPath Foundation](https://signpath.org/); the application was not
 approved and no signed release was ever published.
 
-Releases are published exclusively at:
-- GitHub Releases: https://github.com/antrologos/Transcritorio/releases
+Releases are published on PyPI as the official channel
+(`uv tool install transcritorio`); tag pushes run the `publish.yml`
+workflow, which publishes to PyPI via Trusted Publishing. GitHub
+Releases (https://github.com/antrologos/Transcritorio/releases) hosts
+only the legacy standalone artifacts and the `.bat` installers.
 
 ## Authorization & responsibilities
 
@@ -28,9 +31,11 @@ is the sole person authorized to:
 - Add or remove team members and modify signing policies.
 
 External contributions are reviewed by the maintainer before being
-merged into the `main` branch on GitHub. Build artifacts are produced
-by the public CI workflow `.github/workflows/release.yml`, which runs
-on tag pushes and is auditable in the repository's Actions tab.
+merged into the `main` branch on GitHub. Release artifacts are produced
+by the public CI workflow `.github/workflows/publish.yml`, which runs
+on tag pushes and publishes to PyPI via Trusted Publishing; the legacy
+`.github/workflows/release.yml` only runs via manual workflow_dispatch.
+Both are auditable in the repository's Actions tab.
 
 ### Roles
 

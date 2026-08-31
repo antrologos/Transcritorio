@@ -23,10 +23,11 @@
    uv tool install transcritorio
    ```
 
-   > **Período beta (até a v0.2.0 sair no PyPI):** o comando acima ainda não
-   > está ativo. Use o comando do release
-   > [beta-0.2.0b2](https://github.com/antrologos/Transcritorio/releases/tag/beta-0.2.0b2),
-   > que é idêntico trocando `transcritorio` pela URL do wheel.
+   > **Aviso honesto:** este canal ainda não teve teste de campo no Linux —
+   > funcionou no CI e o desenho não depende de nada específico do Windows,
+   > mas se algo falhar na sua distribuição, [abra uma
+   > issue](https://github.com/antrologos/Transcritorio/issues) com a saída
+   > de `transcritorio-cli self-test`.
 
 3. Abra com:
 

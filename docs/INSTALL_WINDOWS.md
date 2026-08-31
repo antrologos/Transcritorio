@@ -16,7 +16,23 @@ usa apenas componentes assinados pelos distribuidores oficiais:
 - o Transcritório e as dependências vêm do **PyPI**, o repositório
   público de pacotes Python — com versões travadas e auditáveis.
 
-## Passo a passo
+## Instalação em um clique (recomendada)
+
+1. Baixe o instalador:
+   **[Instalar-Transcritorio.bat](https://github.com/antrologos/Transcritorio/releases/latest/download/Instalar-Transcritorio.bat)**
+2. Clique duas vezes no arquivo baixado. Se o Windows perguntar
+   *"Deseja executar este arquivo?"*, confirme — o script é público e
+   [auditável](../scripts/Instalar-Transcritorio.bat): ele só instala
+   componentes assinados das fontes oficiais (Microsoft, Astral, PyPI),
+   não pede senha de administrador e não grava nada fora do seu perfil
+   de usuário.
+3. Espere a janela terminar (alguns minutos). O Transcritório abre
+   sozinho no final e cria o atalho na área de trabalho.
+
+Para atualizar depois, o mesmo gesto:
+[Atualizar-Transcritorio.bat](https://github.com/antrologos/Transcritorio/releases/latest/download/Atualizar-Transcritorio.bat).
+
+## Passo a passo pelo terminal (equivalente)
 
 **1. Abra o Prompt de Comando.** Menu Iniciar → digite `cmd` → Enter.
 Vai abrir uma janela preta de texto — é normal, você só vai colar três
@@ -51,8 +67,8 @@ O programa abre pela primeira vez e cria o atalho **Transcritório** na
 ## Aceleração NVIDIA (opcional)
 
 Se o computador tem placa NVIDIA, a transcrição pode ficar 3–9× mais
-rápida. Dentro do programa: **Transcrever → Instalar aceleração NVIDIA
-(CUDA)...** — ele confere a placa e mostra o comando a executar (com o
+rápida. Dentro do programa: **Ferramentas → Instalar aceleração NVIDIA
+(CUDA)…** — ele confere a placa e mostra o comando a executar (com o
 programa fechado). O download é grande (~2,5 GB) e é opcional: sem ele,
 tudo funciona normalmente no processador.
 
@@ -99,7 +115,7 @@ Em máquina gerenciada pela instituição, pode ser preciso pedir uma exceção
 à TI (cite a licença MIT e o repositório público).
 
 **"No solution found... torchcodec... cp314"** — versão antiga do pacote
-sem teto de Python (corrigido a partir do beta 0.2.0b2); se aparecer,
+sem teto de Python (corrigido desde a v0.2.0); se aparecer,
 acrescente `--python 3.12` logo após `uv tool install`.
 
 **Diagnóstico para pedir ajuda** — Prompt de Comando:

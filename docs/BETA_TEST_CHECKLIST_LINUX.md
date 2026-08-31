@@ -25,10 +25,14 @@ Backlog 0.3+ Item 4 (era do canal standalone).
 
 ## Obtencao do AppImage
 
-Opcao A (preferida): baixar do GitHub Release
+Opcao A (preferida): baixar do GitHub Release. O canal standalone e
+LEGADO — os artefatos disponiveis (AppImage incluido) estao listados em
+`docs/LEGACY_STANDALONE.md`; use a URL do asset da release legada mais
+recente.
 ```bash
-# Dentro da VM
-wget https://github.com/antrologos/Transcritorio/releases/download/v0.3.0-rc1/Transcritorio-x86_64.AppImage
+# Dentro da VM (substituir <URL-do-asset> pela URL real do AppImage
+# na release legada — ver docs/LEGACY_STANDALONE.md)
+wget <URL-do-asset>
 chmod +x Transcritorio-x86_64.AppImage
 ```
 
