@@ -150,6 +150,17 @@ assert "Configurar modelos..." not in menu_items["Ferramentas"]
 assert "Status dos modelos" not in menu_items["Ferramentas"]
 check("1.6 Ferramentas: Gerenciar modelos… (F4 fundiu)")
 
+# R3-c4: "Reprocessar falantes" e "Atualizar transcricao editavel"
+# sairam da UI — a remontagem e automatica e a separacao pendente e
+# oferecida pelo banner contextual da lista ("Separar falantes agora").
+todos_itens = [t for itens in menu_items.values() for t in itens]
+assert "Reprocessar falantes" not in todos_itens
+assert "Atualizar transcricao editavel" not in todos_itens
+assert not hasattr(win, "diarize_action") and not hasattr(win, "render_action")
+assert hasattr(win, "diar_offer_banner")
+assert not win.diar_offer_banner.isVisible()  # nada transcrito sem separacao
+check("1.7 R3-c4: menus sem o par morto; banner de oferta na lista")
+
 
 # ==== PASSO 2: Projeto carregado + actions desabilitadas sem selecao (F1+F4) ====
 header("PASSO 2 - Projeto sem selecao: actions destrutivas desabilitadas")

@@ -377,6 +377,34 @@ def media_format_label(status: object) -> str:
     return label
 
 
+def diar_offer_candidates(
+    statuses: list[Any],
+    *,
+    edited_ids: set[str],
+    channel_ids: set[str],
+) -> list[str]:
+    """Alvo do banner de oferta da lista (R3: instalado => aplicado).
+
+    Entrevistas transcritas SEM separacao de vozes por nenhuma fonte
+    (exclusive, regular ou canais) e SEM edicoes humanas — separar em
+    lote so faz sentido quando o resultado aparece na transcricao, e
+    edicoes nunca sao descartadas por acao de lote.
+    """
+    out: list[str] = []
+    for status in statuses:
+        if not (getattr(status, "canonical_exists", False)
+                or getattr(status, "review_exists", False)):
+            continue
+        if (getattr(status, "diarization_exclusive_exists", False)
+                or getattr(status, "diarization_regular_exists", False)):
+            continue
+        iid = getattr(status, "interview_id", "")
+        if iid in channel_ids or iid in edited_ids:
+            continue
+        out.append(iid)
+    return out
+
+
 def parse_timecode(value: str) -> float:
     cleaned = value.strip().replace(",", ".")
     if not cleaned:
@@ -2707,8 +2735,8 @@ if QT_IMPORT_ERROR is None:
             layout.addWidget(scroll, 1)
             mixed_note = QLabel(
                 "⚠ Ouviu vozes DIFERENTES nos trechos de uma mesma linha? O número de falantes pode estar "
-                "errado — cancele, ajuste em Editar propriedades → \"Aplicar falantes\" e use "
-                "Transcrever → Reprocessar falantes."
+                "errado — cancele, ajuste o número de falantes na aba Propriedades e use "
+                "Entrevista → Refazer separação de falantes…"
             )
             mixed_note.setWordWrap(True)
             mixed_note.setStyleSheet(_style_muted())
@@ -5153,9 +5181,11 @@ if QT_IMPORT_ERROR is None:
             self.open_export_folder_action.setToolTip("Abrir a pasta Resultados do projeto (DOCX, Markdown, legendas) no Explorador.")
             self.open_export_folder_action.triggered.connect(self.open_export_folder)
 
-            self.diarize_action = QAction("Reprocessar falantes", self)
-            self.diarize_action.setToolTip("Reprocessar a identificação de falantes.\nMarque ☑ ao menos um arquivo na lista (ou abra um).")
-            self.diarize_action.triggered.connect(self.run_diarization_job)
+            # R3: "Reprocessar falantes" saiu do menu — virou a oferta
+            # contextual na lista ("N entrevistas sem separação de vozes —
+            # Separar agora"), que aparece exatamente quando ha o que
+            # preencher (instalado => aplicado). O fluxo run_diarization_job
+            # continua sendo o executor.
 
             self.improve_speakers_action = QAction("Refazer separação de falantes…", self)
             self.improve_speakers_action.setToolTip(
@@ -5224,9 +5254,10 @@ if QT_IMPORT_ERROR is None:
                 "não são alterados, e Ctrl+Z desfaz na entrevista aberta.")
             self.spelling_action.triggered.connect(self.open_spelling_review)
 
-            self.render_action = QAction("Atualizar transcricao editavel", self)
-            self.render_action.setToolTip("Remontar a transcrição editável a partir dos dados brutos (ASR + diarização).\nSelecione ao menos um arquivo.")
-            self.render_action.triggered.connect(self.run_render_job)
+            # R3: "Atualizar transcricao editavel" (nome que nao ajudava)
+            # saiu da UI — a remontagem ja roda automaticamente ao fim de
+            # todos os fluxos que mexem nos dados brutos; o reparo
+            # excepcional ganhara casa em Documentos > Versões anteriores.
 
             self.qc_action = QAction("Verificar exportações", self)
             self.qc_action.setToolTip("Verificar a qualidade das transcrições geradas (integridade e consistência).")
@@ -5403,9 +5434,7 @@ if QT_IMPORT_ERROR is None:
             entrevista_menu.addAction(self.transcribe_pending_action)
             entrevista_menu.addSeparator()
             entrevista_menu.addAction(self.name_voices_action)
-            entrevista_menu.addAction(self.diarize_action)
             entrevista_menu.addAction(self.improve_speakers_action)
-            entrevista_menu.addAction(self.render_action)
             entrevista_menu.addSeparator()
             entrevista_menu.addAction(self.apply_metadata_action)
             entrevista_menu.addAction(self.rename_interview_action)
@@ -6194,6 +6223,28 @@ if QT_IMPORT_ERROR is None:
             project_search_button.clicked.connect(lambda: self.open_word_search())
             filter_row.addWidget(project_search_button)
             layout.addLayout(filter_row)
+            # R3: oferta contextual que substitui o item de menu
+            # "Reprocessar falantes" — aparece quando ha entrevistas
+            # transcritas sem separacao de vozes e o recurso esta ativo
+            # (instalado => aplicado); some quando nao ha o que completar.
+            self.diar_offer_banner = QFrame()
+            self.diar_offer_banner.setVisible(False)
+            self.diar_offer_banner.setStyleSheet(
+                f"QFrame {{ {ui_tokens.banner_style(ui_tokens.INFO)} }}"
+            )
+            diar_offer_layout = QHBoxLayout(self.diar_offer_banner)
+            diar_offer_layout.setContentsMargins(10, 6, 10, 6)
+            self.diar_offer_label = QLabel("")
+            self.diar_offer_label.setWordWrap(True)
+            diar_offer_layout.addWidget(self.diar_offer_label, 1)
+            diar_offer_button = QPushButton("Separar falantes agora")
+            diar_offer_button.setToolTip(
+                "Separa quem fala nas entrevistas listadas, sem transcrever "
+                "de novo.\nSó toca quem ainda não tem separação — suas "
+                "edições ficam como estão.")
+            diar_offer_button.clicked.connect(self._on_diar_offer_clicked)
+            diar_offer_layout.addWidget(diar_offer_button)
+            layout.addWidget(self.diar_offer_banner)
             # Interview table (10 columns: checkbox + 9 data columns)
             self.interview_table = QTableWidget(0, 10)
             self.interview_table.setAccessibleName("Arquivos do projeto")
@@ -6795,6 +6846,8 @@ if QT_IMPORT_ERROR is None:
                     self._update_empty_state_mode()
                     self._empty_state_widget.setVisible(True)
                     self.interview_table.setVisible(False)
+                if hasattr(self, "diar_offer_banner"):
+                    self.diar_offer_banner.setVisible(False)
                 if hasattr(self, "project_label"):
                     self._update_project_label()
                 self.update_action_states()
@@ -6883,8 +6936,54 @@ if QT_IMPORT_ERROR is None:
                 self._empty_state_widget.setVisible(not has_rows)
                 self.interview_table.setVisible(True)
             self._update_add_media_emphasis(has_rows)
+            self._update_diar_offer_banner()
             self._apply_interview_filter()
             self.update_action_states()
+
+        def _review_has_user_edits(self, interview_id: str) -> bool:
+            """Mesmo criterio de app_service.refresh_unedited_reviews:
+            a chave "edits" no JSON da transcricao editavel."""
+            if self.context is None:
+                return False
+            caminho = self.context.paths.review_dir / "edits" / f"{interview_id}.review.json"
+            if not caminho.exists():
+                return False
+            try:
+                dados = json.loads(caminho.read_text(encoding="utf-8"))
+            except Exception:
+                return True  # ilegivel: nao arriscar sobrescrever
+            return bool(dados.get("edits"))
+
+        def _update_diar_offer_banner(self) -> None:
+            """Oferta da lista (R3): entrevistas transcritas sem separacao
+            de vozes, com o recurso ativo nesta maquina e sem edicoes
+            humanas — um clique completa em lote, sem transcrever de novo."""
+            if not hasattr(self, "diar_offer_banner"):
+                return
+            ids: list[str] = []
+            busy = bool(self.worker and self.worker.isRunning())
+            if (self.context is not None and not busy
+                    and app_service.diarize_effective(self.context.config or {})[0]):
+                brutos = diar_offer_candidates(
+                    self.statuses, edited_ids=set(), channel_ids=set())
+                # As duas exclusoes caras (canais e edicoes) so rodam para
+                # os candidatos brutos — refresh e chamado de ~15 lugares.
+                ids = [iid for iid in brutos
+                       if not self._channels_diarization_exists(iid)
+                       and not self._review_has_user_edits(iid)]
+            self._diar_offer_ids = ids
+            if ids:
+                plural = "s" if len(ids) > 1 else ""
+                self.diar_offer_label.setText(
+                    f"🗣 {len(ids)} entrevista{plural} transcrita{plural} ainda "
+                    "sem separação de vozes — dá para separar sem transcrever "
+                    "de novo.")
+            self.diar_offer_banner.setVisible(bool(ids))
+
+        def _on_diar_offer_clicked(self) -> None:
+            ids = list(getattr(self, "_diar_offer_ids", []) or [])
+            if ids:
+                self.run_diarization_job(ids=ids)
 
         def _apply_interview_filter(self) -> None:
             """Hide/show table rows based on status combo and text search."""
@@ -8487,15 +8586,11 @@ if QT_IMPORT_ERROR is None:
                 f"Modelo de separação de falantes não instalado (~{falantes_gb:.1f} GB) — "
                 "o download exigirá conta gratuita no Hugging Face."
                 if falantes_estado == "instalavel" else "")
-            self._set_action(self.diarize_action, not busy and has_selected,
-                             reason_busy if busy else reason_checked,
-                             enabled_note=falantes_nota)
             self._set_action(self.improve_speakers_action, not busy and has_review,
                              reason_busy if busy else reason_open,
                              enabled_note=falantes_nota)
             self._set_action(self.name_voices_action, not busy and has_review, reason_busy if busy else reason_open)
             self._set_action(self.voice_prompt_action, not busy and has_project, reason_busy if busy else "Abra ou crie um projeto primeiro.")
-            self._set_action(self.render_action, not busy and has_selected, reason_busy if busy else reason_checked)
             # QC sem projeto quebrava (context None no run_qc_job).
             self._set_action(self.qc_action, not busy and has_project,
                              reason_busy if busy else reason_project)
@@ -9658,8 +9753,8 @@ if QT_IMPORT_ERROR is None:
                     "Este lote será transcrito SEM separar quem fala: "
                     f"{motivo_diarize}.\n\n"
                     "O texto sai normalmente. Depois de instalar o recurso, "
-                    "use Transcrever → Reprocessar falantes para separar sem "
-                    "transcrever de novo.")
+                    "a própria lista oferece um botão para separar as vozes "
+                    "sem transcrever de novo.")
             # Retranscrever e uma decisao EXPLICITA (pipeline-safety): o
             # baseline sera sobrescrito e a transcricao editavel recriada.
             # confirmed_recreate=True vem de fluxos que ja avisaram
@@ -10163,21 +10258,22 @@ if QT_IMPORT_ERROR is None:
                 "" if failures == 0 else f"{failures} arquivo(s) com falha na verificacao de fronteiras.",
             )
 
-        def run_diarization_job(self) -> None:
+        def run_diarization_job(self, ids: list[str] | None = None) -> None:
+            # R3: sem entrada de menu — chega aqui pelo banner de oferta da
+            # lista (que passa os ids sem separacao) ou por fluxos internos.
             if not self.save_current_turn():
                 return
             if not self.ensure_models_ready(require_diarization=True,
-                                            retry=self.run_diarization_job):
+                                            retry=lambda: self.run_diarization_job(ids)):
                 return
-            ids = self.selected_ids_for_job()
+            if ids is None:
+                ids = self.selected_ids_for_job()
             if not ids:
                 QMessageBox.information(self, "Selecione uma entrevista", "Selecione uma entrevista para identificar falantes.")
                 return
             self._reset_speakers_confirmed(ids)
-            # Diarizar SEM remontar nao mudava nada visivel: o par
-            # "Reprocessar falantes" + "Atualizar transcricao editavel"
-            # nunca alterava o que o usuario ve. Agora o fluxo completo:
-            # diarizacao -> render por arquivo -> reviews pristinas.
+            # Diarizar SEM remontar nao mudava nada visivel; o fluxo
+            # completo: diarizacao -> render por arquivo -> reviews pristinas.
             steps: list[tuple] = [(
                 "Identificando falantes...",
                 lambda progress, should_cancel: self._diarize_via_subprocess(ids, progress, should_cancel),

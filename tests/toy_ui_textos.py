@@ -30,9 +30,8 @@ ENFORCING = True  # ligado no fim da R0 (2026-08-31)
 # Acoes que a R3 mata ou renomeia (consolidacao de comandos): as
 # violacoes DELAS sao toleradas ate la. Esta lista SO ENCOLHE — cada
 # familia consolidada na R3 remove suas entradas no mesmo commit.
-EXCECOES_R3 = {
-    "render_action",
-}
+# R3-c4 (2026-08-31): VAZIA — a guarda vale para 100% dos textos.
+EXCECOES_R3: set[str] = set()
 
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QApplication, QAbstractButton, QLabel
