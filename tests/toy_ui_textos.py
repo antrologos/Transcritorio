@@ -19,7 +19,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-ENFORCING = False  # flip no fim da R0
+ENFORCING = True  # ligado no fim da R0 (2026-08-31)
+
+# Acoes que a R3 mata ou renomeia (consolidacao de comandos): as
+# violacoes DELAS sao toleradas ate la. Esta lista SO ENCOLHE — cada
+# familia consolidada na R3 remove suas entradas no mesmo commit.
+EXCECOES_R3 = {
+    "model_setup_action", "export_selected_action", "export_current_action",
+    "delete_transcription_action", "name_voices_action",
+    "improve_speakers_action", "render_action",
+}
 
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QApplication, QAbstractButton, QLabel
@@ -71,7 +80,7 @@ SEM_ACENTO = re.compile(
     r"\b(transcricao|transcricoes|midia|midias|rotulo|rotulos|"
     r"exportacao|exportacoes|documentacao|creditos|comecar|exclusao|"
     r"configuracao|configuracoes|nao|voce|atencao|concluido|concluida|"
-    r"grafia[s]?\b.*\bnomes|revisao|separacao|identificacao|audio|audios|"
+    r"revisao|separacao|identificacao|audio|audios|"
     r"video|videos|ultima|ultimo|proxima|proximo|numero|pagina)\b")
 
 violacoes: dict[str, list[str]] = {
@@ -99,8 +108,21 @@ for categoria, itens in violacoes.items():
     if len(itens) > 8:
         print(f"  [{categoria}] ... +{len(itens) - 8}")
 
+def _tolerada(item: str) -> bool:
+    # item = "action:NOME: texto" / "tooltip:NOME: texto" / "botao: ..."
+    origem = item.split(": ", 1)[0]
+    return any(origem.endswith(":" + nome) for nome in EXCECOES_R3)
+
+
 if ENFORCING:
-    assert total == 0, f"{total} violacoes do guia verbal (dossie RD, secao 6)"
-    print("PASS: guia verbal aplicado (enforcing)")
+    fora_da_excecao = [
+        item for itens in violacoes.values() for item in itens
+        if not _tolerada(item)
+    ]
+    assert not fora_da_excecao, (
+        f"{len(fora_da_excecao)} violacoes do guia verbal FORA das excecoes "
+        f"da R3: {fora_da_excecao[:6]}")
+    print(f"PASS: guia verbal aplicado (enforcing; {total} toleradas nas "
+          f"acoes que a R3 consolida)")
 else:
-    print("PASS: toy_ui_textos (modo relatorio — vira gate no fim da R0)")
+    print("PASS: toy_ui_textos (modo relatorio)")

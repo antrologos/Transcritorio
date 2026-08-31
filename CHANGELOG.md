@@ -8,6 +8,16 @@ assinatura digital, e o SignPath recusou a assinatura gratuita. O canal
 oficial passa a ser **PyPI + uv** (`uv tool install transcritorio`); ver
 `docs/INSTALL_WINDOWS.md` e `docs/LEGACY_STANDALONE.md`.
 
+- **Reforma de interface — fundação (R0)**: primeira etapa do
+  redesenho aprovado. A janela adota a paleta nova (fundo mais
+  profundo, cores semânticas centralizadas — nenhuma cor solta no
+  código, verificado por teste); ~140 textos ganharam acentuação
+  correta e reticências tipográficas ("Abrir transcrição", "Exportar…",
+  "Verificar exportações"); o splash segue a identidade nova. Três
+  guardas automáticas passam a proteger a interface: nenhuma ação pode
+  ficar sem lugar (menu/botão/atalho), atalhos não podem colidir, e
+  textos novos precisam seguir o guia de escrita. Nada de comportamento
+  muda nesta etapa — as barras e menus novos vêm na próxima (R1).
 - **Separação de falantes automática quando instalada**: a opção
   "Separar falantes" ganhou o modo automático (novo padrão) — separa
   quem fala sempre que o recurso estiver instalado no computador, no
