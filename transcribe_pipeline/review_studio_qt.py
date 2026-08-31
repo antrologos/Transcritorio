@@ -384,7 +384,7 @@ def media_splitter_sizes(
     min_media: int = 180,
     min_media_video: int = 300,
     min_table: int = 180,
-    min_editor: int = 150,
+    min_editor: int = 210,
 ) -> list[int]:
     """Distribuicao [midia, blocos, editor] do review_splitter (2026-08-31).
 
@@ -395,11 +395,11 @@ def media_splitter_sizes(
     permite (o deficit sai primeiro da midia, depois do editor); janela
     menor que a soma dos pisos escala proporcionalmente.
 
-    min_media_video PRECISA cobrir o minimumSizeHint real do painel de
-    midia com video ligado (video 120 + onda 96 + duas fileiras de
-    botoes) — abaixo disso o QSplitter clampa em silencio e a garantia
-    da funcao vira ficcao. Se mudar o setMinimumHeight do video ou da
-    onda, ajustar aqui junto.
+    min_media_video e min_editor PRECISAM cobrir os minimumSizeHint
+    reais dos paineis (midia com video: 120 + onda 96 + fileiras ≈ 278;
+    editor: text_edit 60 + fileiras ≈ 208) — abaixo disso o QSplitter
+    clampa em silencio e a garantia da funcao vira ficcao. Se mudar o
+    setMinimumHeight do video, da onda ou do text_edit, ajustar junto.
     """
     if total <= 0:
         return [0, 0, 0]
@@ -6369,6 +6369,11 @@ if QT_IMPORT_ERROR is None:
 
         def _build_interview_panel(self) -> QWidget:
             panel = QWidget()
+            # Minimo EXPLICITO destrava o splitter horizontal: sem ele o Qt
+            # honra o minimumSizeHint da fileira de filtros (~600px) e o
+            # divisor fica sem curso (teste real 2026-08-31). A tabela tem
+            # scrollbar propria; estreitar e escolha do usuario.
+            panel.setMinimumWidth(220)
             layout = QVBoxLayout(panel)
             layout.addWidget(QLabel("Arquivos do projeto"))
             # Filter toolbar
@@ -6608,6 +6613,10 @@ if QT_IMPORT_ERROR is None:
 
         def _build_review_panel(self) -> QWidget:
             panel = QWidget()
+            # Sem minimo explicito, o minimumSizeHint deste painel chega a
+            # ~1850px (titulo longo sem quebra + fileira de controles do
+            # player) e o splitter horizontal fica sem curso NENHUM.
+            panel.setMinimumWidth(480)
             layout = QVBoxLayout(panel)
             self.review_title = QLabel("Abra uma entrevista para editar a transcrição.")
             self.review_title.setStyleSheet("font-size: 16px; font-weight: 700;")
@@ -6985,7 +6994,10 @@ if QT_IMPORT_ERROR is None:
             grid.addLayout(time_layout, 1, 0, 1, 4)
 
             self.text_edit = TurnTextEdit()
-            self.text_edit.setMinimumHeight(120)
+            # 60 (era 120): o QTextEdit tem scrollbar propria e este minimo
+            # dita o piso do painel do editor no review_splitter — 120
+            # deixava o divisor vertical quase sem curso com video aberto.
+            self.text_edit.setMinimumHeight(60)
             self.text_edit.setAccessibleName("Texto do bloco selecionado")
             self.text_edit.textChanged.connect(self.editor_changed)
             self.text_edit.word_seek_requested.connect(self._seek_word_at_char)

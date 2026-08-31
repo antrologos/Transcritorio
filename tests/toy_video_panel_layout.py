@@ -39,16 +39,15 @@ for total, video in [(920, True), (920, False), (700, True), (640, True),
     assert all(p >= 0 for p in partes), (total, video, partes)
 
 m, t, e = media_splitter_sizes(920, True)
-assert m >= 300 and t >= 180 and e >= 150, (m, t, e)
+assert m >= 300 and t >= 180 and e >= 210, (m, t, e)
 m, t, e = media_splitter_sizes(920, False)
 assert t >= 420, (m, t, e)  # audio: blocos dominam, como o layout atual
 m, t, e = media_splitter_sizes(700, True)
 assert m == 300 and t >= 180, (m, t, e)  # midia clampa no piso
-m, t, e = media_splitter_sizes(640, True)
-assert t >= 180 and e >= 150, (m, t, e)
-# Janela menor que a soma dos pisos: escala proporcional, soma exata
-partes = media_splitter_sizes(500, True)
-assert sum(partes) == 500 and all(p > 0 for p in partes), partes
+# Janela menor que a soma dos pisos (690 c/ video): proporcional exato
+for total in (640, 500):
+    partes = media_splitter_sizes(total, True)
+    assert sum(partes) == total and all(p > 0 for p in partes), partes
 assert media_splitter_sizes(0, True) == [0, 0, 0]
 assert media_splitter_sizes(-10, False) == [0, 0, 0]
 # Monotonicidade: mais janela nunca da MENOS tabela
@@ -156,5 +155,65 @@ assert stub3.video_toggle_button.visivel is True
 assert stub3.video_toggle_button.texto == "Mostrar vídeo"
 assert stub3.review_splitter.chamadas == [], stub3.review_splitter.chamadas
 print("PASS: preferencia da sessao vence (video fica oculto, botao oferece)")
+
+# ------------------------------------------------ Secao C: folga REAL
+# Teste real 2026-08-31 (b46): os minimumSizeHint dos paineis (fileira
+# de filtros ~600px; titulo longo + controles do player ~1850px; editor
+# 268px) consumiam a janela inteira e os divisores nao tinham curso
+# NENHUM. Minimos explicitos nos panes horizontais + text_edit 60
+# devolvem o curso; este teste mede a folga na janela real.
+import csv
+import tempfile
+
+import os as _os_iso
+import tempfile as _tf_iso
+_os_iso.environ["TRANSCRITORIO_HOME"] = _tf_iso.mkdtemp()
+
+tmp = Path(tempfile.mkdtemp())
+from transcribe_pipeline.config import (
+    DEFAULT_CONFIG, ensure_directories, make_paths, write_config)
+
+config = dict(DEFAULT_CONFIG)
+config["project_root"] = str(tmp)
+paths = make_paths(config, base_dir=tmp)
+ensure_directories(paths)
+(paths.output_root / "00_project").mkdir(parents=True, exist_ok=True)
+with (paths.manifest_dir / "manifest.csv").open("w", newline="", encoding="utf-8-sig") as h:
+    csv.DictWriter(h, fieldnames=["interview_id", "source_path", "selected"]).writeheader()
+(paths.manifest_dir / "speakers_map.csv").write_text(
+    "interview_id,speaker_id,role\n", encoding="utf-8-sig")
+write_config(paths.config_dir / "run_config.yaml", config, header=["# toy"])
+
+win = rs.ReviewStudioWindow(project_root=tmp)
+win.resize(1440, 900)
+win.show()
+app.processEvents()
+
+from PySide6.QtWidgets import QSplitter
+h_split = win.interview_table.parent()
+while h_split is not None and not isinstance(h_split, QSplitter):
+    h_split = h_split.parent()
+assert h_split.widget(0).minimumWidth() <= 240, h_split.widget(0).minimumWidth()
+assert h_split.widget(1).minimumWidth() <= 500, h_split.widget(1).minimumWidth()
+largura = sum(h_split.sizes())
+h_split.setSizes([240, largura - 240])
+app.processEvents()
+assert h_split.sizes()[0] <= 260, (
+    f"splitter horizontal sem curso: {h_split.sizes()} (largura {largura})")
+
+# Vertical: minimos reais dos 3 paineis precisam deixar folga na janela
+# E ficar cobertos pelos pisos da funcao (senao o QSplitter clampa em
+# silencio e a redistribuicao mente).
+alturas = [win.review_splitter.widget(i).minimumSizeHint().height()
+           for i in range(3)]
+total_v = sum(win.review_splitter.sizes())
+assert sum(alturas) <= total_v - 100, (alturas, total_v)
+win.video_widget.setVisible(True)
+app.processEvents()
+media_min = win.review_splitter.widget(0).minimumSizeHint().height()
+editor_min = win.review_splitter.widget(2).minimumSizeHint().height()
+assert media_min <= 300, media_min   # piso min_media_video cobre o real
+assert editor_min <= 210, editor_min  # piso min_editor cobre o real
+print("PASS: divisores com curso real (h<=240/500; v com folga; pisos cobrem)")
 
 print("PASS: toy_video_panel_layout")
