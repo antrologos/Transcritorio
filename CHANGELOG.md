@@ -8,6 +8,15 @@ assinatura digital, e o SignPath recusou a assinatura gratuita. O canal
 oficial passa a ser **PyPI + uv** (`uv tool install transcritorio`); ver
 `docs/INSTALL_WINDOWS.md` e `docs/LEGACY_STANDALONE.md`.
 
+- **Reforma de interface — janela nova (R1)**: a janela ganhou a
+  estrutura definitiva: barra de ferramentas fixa no topo (Adicionar
+  mídia · Transcrever | Salvar · Exportar | ✨ Perguntar), barra de
+  status embaixo (atividade e progresso à esquerda; salvamento e o selo
+  clicável Modelo/Motor à direita), e **6 menus reorganizados** —
+  Projeto, Editar, Entrevista, Analisar, Ferramentas e Ajuda — com cada
+  função em um lugar previsível. O cabeçalho antigo saiu (o nome do
+  projeto agora está na barra de título) e a janela ganhou uma linha a
+  mais de espaço útil.
 - **Reforma de interface — fundação (R0)**: primeira etapa do
   redesenho aprovado. A janela adota a paleta nova (fundo mais
   profundo, cores semânticas centralizadas — nenhuma cor solta no
