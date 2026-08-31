@@ -875,7 +875,7 @@ if QT_IMPORT_ERROR is None:
             self.setMinimumHeight(96)
             self.setAccessibleName("Onda sonora")
             self.setAccessibleDescription(
-                "Linha do tempo do audio. Clique para mover o audio, arraste para navegar e use a roda do mouse para aproximar."
+                "Linha do tempo do áudio. Clique para mover o áudio, arraste para navegar e use a roda do mouse para aproximar."
             )
             self.setCursor(Qt.CursorShape.OpenHandCursor)
             self.setToolTip(
@@ -1258,7 +1258,7 @@ if QT_IMPORT_ERROR is None:
                         completed_weight += weight
                         self.progress.emit(
                             f"Etapa {index} de {len(self.steps)}: {message} — falhou; "
-                            "continuando com o proximo arquivo.",
+                            "continuando com o próximo arquivo.",
                             end_percent,
                         )
                         _logger.warning("Arquivo %s falhou no lote: %s", group, exc)
@@ -1481,7 +1481,7 @@ if QT_IMPORT_ERROR is None:
                 title = f"Exportar {n_selected} transcricoes selecionadas"
             elif has_open:
                 default_scope = "current"
-                title = f"Exportar: {open_title}" if open_title else "Exportar transcricao aberta"
+                title = f"Exportar: {open_title}" if open_title else "Exportar transcrição aberta"
             else:
                 default_scope = "all"
                 title = f"Exportar todas ({n_total}) transcricoes"
@@ -1516,20 +1516,20 @@ if QT_IMPORT_ERROR is None:
             layout.addWidget(QLabel("Formatos:"))
             self.checkboxes: dict[str, QCheckBox] = {}
             for fmt, label, checked, help_text in [
-                ("docx", "DOCX", True, "Documento para leitura e revisao fora do app."),
+                ("docx", "DOCX", True, "Documento para leitura e revisão fora do app."),
                 ("md", "Markdown", True, "Texto simples com marcacao leve."),
                 ("srt", "SRT", False, "Legenda com tempos por bloco."),
                 ("vtt", "VTT", False, "Legenda web com tempos por bloco."),
                 ("csv", "CSV", False, "Planilha com turnos e metadados."),
                 ("tsv", "TSV", False, "Planilha tabulada com turnos e metadados."),
-                ("nvivo", "NVivo TSV", False, "Tabela tabulada para importacao no NVivo."),
+                ("nvivo", "NVivo TSV", False, "Tabela tabulada para importação no NVivo."),
             ]:
                 checkbox = QCheckBox(label)
                 checkbox.setChecked(checked)
                 checkbox.setToolTip(help_text)
                 self.checkboxes[fmt] = checkbox
                 layout.addWidget(checkbox)
-            hint = QLabel("DOCX e Markdown sao os padroes de leitura. Legendas e planilhas ficam desmarcadas para evitar arquivos que voce nao pediu.")
+            hint = QLabel("DOCX e Markdown são os padrões de leitura. Legendas e planilhas ficam desmarcadas para evitar arquivos que você não pediu.")
             hint.setWordWrap(True)
             hint.setStyleSheet(_style_muted())
             layout.addWidget(hint)
@@ -1569,7 +1569,7 @@ if QT_IMPORT_ERROR is None:
             if scope == "all" and self._n_total >= self.LARGE_EXPORT_THRESHOLD and self.large_confirm is None:
                 reply = QMessageBox.question(
                     self,
-                    "Exportar todas as transcricoes",
+                    "Exportar todas as transcrições",
                     f"Voce esta prestes a gerar arquivos para {self._n_total} transcricoes.\nContinuar?",
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                     QMessageBox.StandardButton.No,
@@ -1618,7 +1618,7 @@ if QT_IMPORT_ERROR is None:
             self.skipped_ids = list(skipped_ids)
             self.results_folder = Path(results_folder)
             n = len(self.exported_paths)
-            self.setWindowTitle("Exportacao concluida")
+            self.setWindowTitle("Exportação concluída")
             self.resize(640, 440)
 
             layout = QVBoxLayout(self)
@@ -1733,7 +1733,7 @@ if QT_IMPORT_ERROR is None:
 
             subtitle = QLabel(
                 "Os modelos ficam em cache local e sao reutilizados entre projetos. "
-                "Remocao libera espaco em disco; voce podera baixar novamente a qualquer momento."
+                "Remoção libera espaço em disco; você poderá baixar novamente a qualquer momento."
             )
             subtitle.setStyleSheet(_style_muted())
             subtitle.setWordWrap(True)
@@ -1758,7 +1758,7 @@ if QT_IMPORT_ERROR is None:
             self.open_folder_btn.clicked.connect(self._open_models_folder)
             btn_row.addWidget(self.open_folder_btn)
             self.remove_orphans_btn = QPushButton("Remover orfaos")
-            self.remove_orphans_btn.setToolTip("Apagar modelos em cache que nao estao mais catalogados pelo Transcritorio.")
+            self.remove_orphans_btn.setToolTip("Apagar modelos em cache que não estão mais catalogados pelo Transcritorio.")
             self.remove_orphans_btn.clicked.connect(self._remove_orphans)
             btn_row.addWidget(self.remove_orphans_btn)
             self.download_btn = QPushButton("Baixar outros modelos...")
@@ -1997,7 +1997,7 @@ if QT_IMPORT_ERROR is None:
                 self.table.setItem(r_idx, self.COL_SIZE, QTableWidgetItem(size_str))
                 status_item = QTableWidgetItem(status)
                 if status == "Em uso":
-                    status_item.setToolTip("Modelo atualmente selecionado na configuracao de transcricao.")
+                    status_item.setToolTip("Modelo atualmente selecionado na configuração de transcrição.")
                 elif status_tip:
                     status_item.setToolTip(status_tip)
                 self.table.setItem(r_idx, self.COL_STATUS, status_item)
@@ -2109,7 +2109,7 @@ if QT_IMPORT_ERROR is None:
                 )
             except Exception as exc:  # noqa: BLE001 - excecao subia sem mensagem
                 QMessageBox.warning(
-                    self, "Download nao concluido",
+                    self, "Download não concluído",
                     f"Nao foi possivel baixar {nome}: {sanitize_message(str(exc))}")
                 return
             finally:
@@ -2118,7 +2118,7 @@ if QT_IMPORT_ERROR is None:
                 dialog.close()
             if getattr(result, "failures", 0):
                 QMessageBox.warning(
-                    self, "Download nao concluido",
+                    self, "Download não concluído",
                     f"Nao foi possivel baixar {nome}. Verifique a conexao e tente de novo.")
                 return
             parent = self.parent()
@@ -2248,7 +2248,7 @@ if QT_IMPORT_ERROR is None:
                                             "A aceleração GPU foi removida.")
                 else:
                     QMessageBox.warning(
-                        self, "Nao foi possivel remover",
+                        self, "Não foi possível remover",
                         "Feche o app e tente de novo, ou apague a pasta "
                         f"manualmente: {_onnx_env.onnx_env_dir()}")
                 self._populate()
@@ -2264,7 +2264,7 @@ if QT_IMPORT_ERROR is None:
             # Aviso especial se e o modelo configurado
             warn = ""
             if status == "Em uso":
-                warn = "\n\nEste modelo esta selecionado em Configurar transcricao. Apos remover, voce precisara baixa-lo de novo ou trocar o modelo antes da proxima transcricao."
+                warn = "\n\nEste modelo está selecionado em Configurar transcrição. Após remover, você precisará baixá-lo de novo ou trocar o modelo antes da proxima transcricao."
             reply = QMessageBox.question(
                 self,
                 "Remover modelo",
@@ -2279,7 +2279,7 @@ if QT_IMPORT_ERROR is None:
                 freed = model_manager._format_size(int(result["bytes_freed"]))
                 QMessageBox.information(self, "Modelo removido", f"{freed} liberados.")
             else:
-                QMessageBox.warning(self, "Nao foi possivel remover", str(result["error"]))
+                QMessageBox.warning(self, "Não foi possível remover", str(result["error"]))
             # Remover muda o estado das capacidades: sem isto os tooltips
             # da janela seguiam dizendo "pronta" para um modelo apagado.
             parent = self.parent()
@@ -3103,7 +3103,7 @@ if QT_IMPORT_ERROR is None:
             self.ask_button.clicked.connect(self.run_question)
             row.addWidget(self.ask_button)
             explore_button = QPushButton("Encontrar trechos")
-            explore_button.setToolTip("So encontra os trechos pelo significado, sem compor resposta (rapido).")
+            explore_button.setToolTip("Só encontra os trechos pelo significado, sem compor resposta (rápido).")
             explore_button.clicked.connect(self.run_explore)
             row.addWidget(explore_button)
             layout.addLayout(row)
@@ -3369,9 +3369,9 @@ if QT_IMPORT_ERROR is None:
     class EngineSettingsDialog(QDialog):
         def __init__(self, config: dict[str, Any], parent: QWidget | None = None) -> None:
             super().__init__(parent)
-            self.setWindowTitle("Configuracoes de transcricao local")
+            self.setWindowTitle("Configurações de transcrição local")
             layout = QVBoxLayout(self)
-            description = QLabel("Motor local de transcricao. Use GPU NVIDIA quando disponivel; CPU funciona, mas tende a ser bem mais lenta.")
+            description = QLabel("Motor local de transcrição. Use GPU NVIDIA quando disponível; CPU funciona, mas tende a ser bem mais lenta.")
             description.setWordWrap(True)
             layout.addWidget(description)
 
@@ -3478,7 +3478,7 @@ if QT_IMPORT_ERROR is None:
                     f"{spec['label']}{_sufixo_idioma(code)}", code)
             language = str(config.get("asr_language") or "auto")
             self.language_combo.setCurrentIndex(max(0, self.language_combo.findData(language)))
-            grid.addWidget(QLabel("Idioma padrao:"), 3, 0)
+            grid.addWidget(QLabel("Idioma padrão:"), 3, 0)
             grid.addWidget(self.language_combo, 3, 1)
 
             self.min_speakers_spin = QSpinBox()
@@ -3529,7 +3529,7 @@ if QT_IMPORT_ERROR is None:
             val = config.get("diarization_min_segment")
             self.min_segment_spin.setValue(float(val) if val is not None else 0.3)
             self.min_segment_spin.setToolTip("Segmentos de fala menores que este valor sao removidos. Reduz micro-segmentos espurios.")
-            advanced_layout.addWidget(QLabel("Segmento minimo:"), 2, 0)
+            advanced_layout.addWidget(QLabel("Segmento mínimo:"), 2, 0)
             advanced_layout.addWidget(self.min_segment_spin, 2, 1)
 
             layout.addWidget(advanced_group)
@@ -4878,8 +4878,8 @@ if QT_IMPORT_ERROR is None:
             if self._needs_token and not self.token():
                 QMessageBox.warning(
                     self,
-                    "Token necessario",
-                    "Cole o token de leitura do Hugging Face deste usuario para baixar o modelo de separacao de falantes.",
+                    "Token necessário",
+                    "Cole o token de leitura do Hugging Face deste usuário para baixar o modelo de separação de falantes.",
                 )
                 return
             if not self._needs_token:
@@ -4907,8 +4907,8 @@ if QT_IMPORT_ERROR is None:
                     "Cofre de token indisponivel",
                     f"Nao foi possivel salvar o token no cofre seguro.\n\n"
                     f"{type(exc).__name__}: {exc}\n\n"
-                    "O download vai prosseguir usando o token desta sessao. "
-                    "Voce precisara colar o token de novo da proxima vez.",
+                    "O download vai prosseguir usando o token desta sessão. "
+                    "Você precisará colar o token de novo da próxima vez.",
                 )
             super().accept()
 
@@ -5058,7 +5058,7 @@ if QT_IMPORT_ERROR is None:
             self.model_manager_action.triggered.connect(self.show_model_manager)
 
             self.refresh_library_action = QAction("Atualizar biblioteca", self)
-            self.refresh_library_action.setToolTip("Procurar gravacoes nas pastas cadastradas.")
+            self.refresh_library_action.setToolTip("Procurar gravações nas pastas cadastradas.")
             self.refresh_library_action.triggered.connect(self.run_manifest_job)
 
             self.reload_list_action = QAction("Recarregar lista", self)
@@ -5591,7 +5591,7 @@ if QT_IMPORT_ERROR is None:
                 return
             self.refresh_interviews()
             self._sync_diarize_checkbox()
-            self.progress_label.setText("Configuracao de transcricao atualizada.")
+            self.progress_label.setText("Configuração de transcrição atualizada.")
 
         def _on_diarize_toggled(self, checked: bool) -> None:
             if self.context is None:
@@ -5732,12 +5732,12 @@ if QT_IMPORT_ERROR is None:
                 + aviso_vram
             )
             box = QMessageBox(self)
-            box.setWindowTitle("Aceleracao disponivel (NVIDIA detectada)")
+            box.setWindowTitle("Aceleração disponível (NVIDIA detectada)")
             box.setIcon(QMessageBox.Icon.Information)
             box.setText(msg)
             box.setTextFormat(Qt.TextFormat.PlainText)
             btn_install = box.addButton("Baixar e instalar agora", QMessageBox.ButtonRole.AcceptRole)
-            box.addButton("Agora nao", QMessageBox.ButtonRole.RejectRole)
+            box.addButton("Agora não", QMessageBox.ButtonRole.RejectRole)
             btn_never = box.addButton("Nunca perguntar", QMessageBox.ButtonRole.DestructiveRole)
             box.exec()
             clicked = box.clickedButton()
@@ -5750,7 +5750,7 @@ if QT_IMPORT_ERROR is None:
                     flag.write_text("dismissed\n", encoding="utf-8")
                 except Exception as exc:
                     _logger.warning("nao foi possivel persistir flag CUDA dismiss: %s", exc)
-            # Caso "Agora nao": nao seta flag; pergunta de novo no proximo start
+            # Caso "Agora não": nao seta flag; pergunta de novo no proximo start
 
         def _perform_cuda_install(self, version: str) -> None:
             from . import cuda_installer
@@ -5758,9 +5758,9 @@ if QT_IMPORT_ERROR is None:
                 QMessageBox.warning(
                     self,
                     "Permissao insuficiente",
-                    "A pasta de instalacao do Transcritorio nao permite escrita "
+                    "A pasta de instalação do Transcritório não permite escrita "
                     "sem privilegios de administrador.\n\n"
-                    "Feche o Transcritorio, clique com o botao direito no "
+                    "Feche o Transcritorio, clique com o botão direito no "
                     "atalho, escolha 'Executar como administrador' e tente "
                     "de novo; OU reinstale o Transcritorio escolhendo "
                     "'Instalar so pra mim (recomendado)'."
@@ -5803,7 +5803,7 @@ if QT_IMPORT_ERROR is None:
                         "Falha ao instalar aceleracao",
                         f"Nao foi possivel instalar a aceleracao NVIDIA:\n\n{exc}\n\n"
                         "Voce pode tentar de novo mais tarde (a pergunta vai "
-                        "aparecer de novo no proximo inicio do Transcritorio).",
+                        "aparecer de novo no próximo início do Transcritório).",
                     )
 
         def show_startup_dialog(self) -> None:
@@ -5825,8 +5825,8 @@ if QT_IMPORT_ERROR is None:
                 except Exception as exc:  # noqa: BLE001
                     _logger.warning("Verificacao de modelos falhou: %s", exc)
                     self.progress_label.setText(
-                        "Nao foi possivel verificar os modelos instalados "
-                        "(confira o modelo de transcricao em Configuracoes).")
+                        "Não foi possível verificar os modelos instalados "
+                        "(confira o modelo de transcrição em Configurações).")
                     return True  # nao bloquear a abertura do app
             if not _models_ready():
                 wizard = FirstRunWizard(self)
@@ -6117,7 +6117,7 @@ if QT_IMPORT_ERROR is None:
             self.diarize_checkbox.setToolTip(
                 "Identifica automaticamente quem esta falando (Entrevistador/Entrevistado).\n"
                 "Ligado sozinho sempre que o recurso esta instalado neste computador.\n"
-                "Desative para audios com um unico falante ou para transcrever mais rapido."
+                "Desative para áudios com um único falante ou para transcrever mais rápido."
             )
             # Sem projeto aberto, o estado default e o EFETIVO da maquina:
             # tri-state "auto" resolvido pela instalacao (2026-08-31) — um
@@ -6711,7 +6711,7 @@ if QT_IMPORT_ERROR is None:
 
             button_row = QHBoxLayout()
             self.save_block_button = QPushButton("Salvar bloco")
-            self.save_block_button.setToolTip("Salva as alteracoes do bloco atual. Trocar de bloco tambem salva automaticamente.")
+            self.save_block_button.setToolTip("Salva as alterações do bloco atual. Trocar de bloco também salva automaticamente.")
             self.save_block_button.clicked.connect(lambda _checked=False: self.save_current_turn(force=True))
             button_row.addWidget(self.save_block_button)
             self.merge_button = QPushButton("Juntar com próximo")
@@ -7246,7 +7246,7 @@ if QT_IMPORT_ERROR is None:
                         for item in transcribed
                     ],
                     (
-                        "Atualizando transcricoes editaveis...",
+                        "Atualizando transcrições editáveis...",
                         lambda: app_service.refresh_unedited_reviews(self.context, transcribed),
                     ),
                 ],
@@ -7523,7 +7523,7 @@ if QT_IMPORT_ERROR is None:
             visible = False
             if self.review and self.current_interview_id and self.context is not None:
                 job = self.context.jobs.get(self.current_interview_id) or {}
-                visible = "Identificacao de falantes nao concluida" in str(job.get("last_error") or "")
+                visible = "Identificação de falantes não concluída" in str(job.get("last_error") or "")
             self.diar_failed_banner.setVisible(visible)
             self._update_boundary_banner()
 
@@ -7771,7 +7771,7 @@ if QT_IMPORT_ERROR is None:
                 self.start_worker(
                     "Aplicar nomes aos documentos",
                     [(
-                        "Remontando transcricao...",
+                        "Remontando transcrição...",
                         lambda item=interview_id: app_service.render_interviews(
                             self.context, ids=[item],
                             overrides=self._render_source_overrides(item)
@@ -7853,8 +7853,8 @@ if QT_IMPORT_ERROR is None:
             self.set_editor_enabled(False)
             self.set_media_source(preferred_media_index(self.media_candidates))
             self.load_waveform()
-            self.set_save_state("Arquivo sem transcricao. Use Transcrever este arquivo para gerar a transcricao editavel.")
-            self.progress_label.setText("Arquivo aberto como midia. Use Transcrever este arquivo para criar a transcricao.")
+            self.set_save_state("Arquivo sem transcrição. Use Transcrever este arquivo para gerar a transcrição editável.")
+            self.progress_label.setText("Arquivo aberto como mídia. Use Transcrever este arquivo para criar a transcrição.")
             self.update_action_states()
 
         def close_open_file(self, *_args: Any) -> None:
@@ -7877,7 +7877,7 @@ if QT_IMPORT_ERROR is None:
             self.text_edit.clear()
             self.set_editor_enabled(False)
             self.undo_stack.clear()
-            self.set_save_state("Sem transcricao aberta.")
+            self.set_save_state("Sem transcrição aberta.")
             self._update_voice_banner()
             self.progress_label.setText("Arquivo fechado.")
             self.update_action_states()
@@ -7946,7 +7946,7 @@ if QT_IMPORT_ERROR is None:
                 return
             previous_status = self.progress_label.text() if hasattr(self, "progress_label") else ""
             if hasattr(self, "progress_label"):
-                self.progress_label.setText("Gerando onda sonora da midia original...")
+                self.progress_label.setText("Gerando onda sonora da mídia original...")
             peaks: list[float] = []
             duration: float = 0.0
             QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
@@ -8412,8 +8412,8 @@ if QT_IMPORT_ERROR is None:
             if single_target and self.context:
                 only = self.effective_target_ids()[0]
                 single_target_busy = (self.context.jobs.get(only) or {}).get("status") in ("Rodando", "Na fila")
-            rename_reason = "Selecione um único arquivo para renomear." if not single_target else "Aguarde a transcricao terminar."
-            reorder_reason = "Selecione um unico arquivo para reordenar." if not single_target else "Aguarde a transcricao terminar."
+            rename_reason = "Selecione um único arquivo para renomear." if not single_target else "Aguarde a transcrição terminar."
+            reorder_reason = "Selecione um único arquivo para reordenar." if not single_target else "Aguarde a transcrição terminar."
             self._set_action(self.rename_interview_action, not busy and single_target and not single_target_busy, reason_busy if busy else rename_reason)
             self._set_action(self.move_up_action, not busy and single_target and not single_target_busy, reason_busy if busy else reorder_reason)
             self._set_action(self.move_down_action, not busy and single_target and not single_target_busy, reason_busy if busy else reorder_reason)
@@ -8774,14 +8774,14 @@ if QT_IMPORT_ERROR is None:
             interview_id = ids[0]
             busy = [iid for iid in ids if (self.context.jobs.get(iid) or {}).get("status") in ("Rodando", "Na fila")]
             if busy:
-                QMessageBox.information(self, "Acao bloqueada", "Aguarde a transcricao terminar ou cancele o job na fila de processamento.")
+                QMessageBox.information(self, "Acao bloqueada", "Aguarde a transcrição terminar ou cancele o job na fila de processamento.")
                 return
             metadata = self.context.metadata.get(interview_id, {})
             current_title = str(metadata.get("title") or "").strip() or interview_id
             raw, ok = QInputDialog.getText(
                 self,
                 "Renomear rótulo",
-                "Novo rotulo para exibicao (deixe vazio para usar o nome do arquivo):",
+                "Novo rótulo para exibição (deixe vazio para usar o nome do arquivo):",
                 text=current_title,
             )
             if not ok:
@@ -8791,7 +8791,7 @@ if QT_IMPORT_ERROR is None:
             try:
                 self.context = app_service.rename_interview(self.context, interview_id, title_to_store)
             except app_service.InterviewBusyError:
-                QMessageBox.information(self, "Acao bloqueada", "Aguarde a transcricao terminar ou cancele o job na fila de processamento.")
+                QMessageBox.information(self, "Acao bloqueada", "Aguarde a transcrição terminar ou cancele o job na fila de processamento.")
                 return
             except Exception as exc:
                 QMessageBox.critical(self, "Erro ao renomear", str(exc)[:2000])
@@ -8817,11 +8817,11 @@ if QT_IMPORT_ERROR is None:
                 return
             ids = self.effective_target_ids(cursor_row)
             if len(ids) != 1:
-                QMessageBox.information(self, "Selecione um arquivo", "Selecione um unico arquivo para reordenar.")
+                QMessageBox.information(self, "Selecione um arquivo", "Selecione um único arquivo para reordenar.")
                 return
             moving_id = ids[0]
             if (self.context.jobs.get(moving_id) or {}).get("status") in ("Rodando", "Na fila"):
-                QMessageBox.information(self, "Acao bloqueada", "Aguarde a transcricao terminar ou cancele o job na fila de processamento.")
+                QMessageBox.information(self, "Acao bloqueada", "Aguarde a transcrição terminar ou cancele o job na fila de processamento.")
                 return
             # Primeira ativacao de ordem manual: captura ordem VISUAL atual
             was_manual = bool(self.context.project.get("manual_order_active"))
@@ -8862,7 +8862,7 @@ if QT_IMPORT_ERROR is None:
                     self.context, [moving_id], direction, hidden_ids=list(hidden_set)
                 )
             except app_service.InterviewBusyError:
-                QMessageBox.information(self, "Acao bloqueada", "Aguarde a transcricao terminar ou cancele o job na fila de processamento.")
+                QMessageBox.information(self, "Acao bloqueada", "Aguarde a transcrição terminar ou cancele o job na fila de processamento.")
                 return
             except ValueError as exc:
                 QMessageBox.critical(self, "Erro ao reordenar", str(exc)[:2000])
@@ -8907,7 +8907,7 @@ if QT_IMPORT_ERROR is None:
                 return
             busy_ids = [iid for iid in ids if (self.context.jobs.get(iid) or {}).get("status") in ("Rodando", "Na fila")]
             if busy_ids:
-                QMessageBox.information(self, "Acao bloqueada", "Nao e possivel enviar arquivos com transcricao em andamento. Aguarde ou cancele o job na fila de processamento.")
+                QMessageBox.information(self, "Acao bloqueada", "Não é possível enviar arquivos com transcrição em andamento. Aguarde ou cancele o job na fila de processamento.")
                 return
             n = len(ids)
             listing = "\n".join(f"  • {iid}" for iid in ids[:10])
@@ -8921,7 +8921,7 @@ if QT_IMPORT_ERROR is None:
             box.setIcon(QMessageBox.Icon.Warning)
             box.setWindowTitle("Enviar para Lixeira")
             box.setText(text)
-            box.setInformativeText("O audio original, a transcricao e os metadados serao movidos para a Lixeira do projeto (00_project/.trash/). Voce pode desfazer com Ctrl+Z enquanto esta sessao estiver aberta.")
+            box.setInformativeText("O áudio original, a transcrição e os metadados serão movidos para a Lixeira do projeto (00_project/.trash/). Voce pode desfazer com Ctrl+Z enquanto esta sessao estiver aberta.")
             box.setDetailedText("Arquivos afetados:\n\n" + "\n".join(ids))
             yes_btn = box.addButton("Enviar para Lixeira", QMessageBox.ButtonRole.DestructiveRole)
             box.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)
@@ -8942,10 +8942,10 @@ if QT_IMPORT_ERROR is None:
             try:
                 trash_entry = app_service.prepare_trash_move(self.context, ids)
             except app_service.InterviewBusyError:
-                QMessageBox.information(self, "Acao bloqueada", "Nao e possivel mover arquivos com transcricao em andamento. Aguarde ou cancele o job na fila de processamento.")
+                QMessageBox.information(self, "Acao bloqueada", "Não é possível mover arquivos com transcrição em andamento. Aguarde ou cancele o job na fila de processamento.")
                 return
             except Exception as exc:
-                QMessageBox.critical(self, "Erro ao preparar exclusao", str(exc)[:2000])
+                QMessageBox.critical(self, "Erro ao preparar exclusão", str(exc)[:2000])
                 return
             total_bytes = trash_entry.get("total_bytes", 0)
             self._trash_busy = True
@@ -9081,7 +9081,7 @@ if QT_IMPORT_ERROR is None:
                 _logger.exception("finalize_trash_move FALHOU: %s", exc)
                 self._trash_busy = False
                 self.update_action_states()
-                QMessageBox.critical(self, "Erro ao finalizar exclusao", str(exc)[:2000])
+                QMessageBox.critical(self, "Erro ao finalizar exclusão", str(exc)[:2000])
                 return
             self._trash_undo.append(trash_id)
             self._trash_redo.clear()
@@ -9121,7 +9121,7 @@ if QT_IMPORT_ERROR is None:
                 box.setIcon(QMessageBox.Icon.Warning)
                 box.setWindowTitle("Conflito ao restaurar")
                 box.setText(f"{len(exc.conflicts)} arquivo(s) ja existem no destino original.")
-                box.setInformativeText("Restaurar vai sobrescrever os arquivos atuais. Essa acao nao pode ser desfeita.")
+                box.setInformativeText("Restaurar vai sobrescrever os arquivos atuais. Essa ação não pode ser desfeita.")
                 box.setDetailedText(conflict_paths)
                 box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
                 box.button(QMessageBox.StandardButton.Yes).setText("Sobrescrever")
@@ -9162,7 +9162,7 @@ if QT_IMPORT_ERROR is None:
                 self.update_action_states()
                 QMessageBox.warning(
                     self,
-                    "Nao e possivel refazer",
+                    "Não é possível refazer",
                     f"O projeto foi alterado desde a ultima acao. Refazer foi cancelado para preservar suas mudancas.\n\nDetalhe: {exc}",
                 )
                 return
@@ -9380,7 +9380,7 @@ if QT_IMPORT_ERROR is None:
             return True
 
         def open_export_folder(self) -> None:
-            if not self._require_project("Abrir pasta de exportacao"):
+            if not self._require_project("Abrir pasta de exportação"):
                 return
             folder = self._results_folder_for_user()
             folder.mkdir(parents=True, exist_ok=True)
@@ -9514,14 +9514,14 @@ if QT_IMPORT_ERROR is None:
 
         def run_current_file_transcription_job(self, *_args: Any) -> None:
             if not self.current_interview_id:
-                QMessageBox.information(self, "Abra um arquivo", "Abra uma midia antes de transcrever este arquivo.")
+                QMessageBox.information(self, "Abra um arquivo", "Abra uma mídia antes de transcrever este arquivo.")
                 return
             self.run_full_transcription_job(ids=[self.current_interview_id])
 
         def run_pending_transcription_job(self, *_args: Any) -> None:
             ids = self.pending_transcription_ids()
             if not ids:
-                QMessageBox.information(self, "Nada pendente", "Todos os arquivos do projeto ja tem transcricao editavel.")
+                QMessageBox.information(self, "Nada pendente", "Todos os arquivos do projeto já têm transcrição editável.")
                 return
             self.run_full_transcription_job(ids=ids)
 
@@ -9693,7 +9693,7 @@ if QT_IMPORT_ERROR is None:
             for index, interview_id in enumerate(ids, start=1):
                 prefix = f"{index}/{len(ids)} {interview_id}"
                 file_steps = [
-                    self.job_step(f"{prefix}: convertendo o audio para WAV 16 kHz...", interview_id, "preparar audio", r[0], r[1], lambda item=interview_id: app_service.prepare_interviews(self.context, ids=[item])),
+                    self.job_step(f"{prefix}: convertendo o áudio para WAV 16 kHz...", interview_id, "preparar audio", r[0], r[1], lambda item=interview_id: app_service.prepare_interviews(self.context, ids=[item])),
                     self.job_step(
                         f"{prefix}: transcrevendo com o Whisper ({asr_model})...",
                         interview_id,
@@ -9857,7 +9857,7 @@ if QT_IMPORT_ERROR is None:
                         forwarded["progress"] = inner
                         progress_callback(forwarded)
 
-                PENDING_SPEAKERS_NOTE = "Identificacao de falantes nao concluida (transcricao segue sem separar falantes)."
+                PENDING_SPEAKERS_NOTE = "Identificação de falantes não concluída (transcrição segue sem separar falantes)."
 
                 def _mark_optional_failure() -> object:
                     app_service.update_job(
@@ -9922,7 +9922,7 @@ if QT_IMPORT_ERROR is None:
                         # Preservar o aviso "falantes pendentes" de um step
                         # opcional anterior — sem isto o render/QC o apagariam.
                         prev_err = str(((self.context.jobs.get(interview_id) or {}).get("last_error")) or "")
-                        if prev_err.startswith("Identificacao de falantes nao concluida"):
+                        if prev_err.startswith("Identificação de falantes não concluída"):
                             updates["last_error"] = prev_err
                         if end_progress >= 100:
                             updates["status"] = "Concluido"
@@ -10408,7 +10408,7 @@ if QT_IMPORT_ERROR is None:
                 dialog.close()
             if failures:
                 QMessageBox.warning(
-                    self, "Download nao concluido",
+                    self, "Download não concluído",
                     f"Nao foi possivel baixar {titulo}. Verifique a conexao e tente de novo.")
                 return False
             self._invalidate_capability_cache()  # o que estava indisponivel virou disponivel
@@ -10452,8 +10452,8 @@ if QT_IMPORT_ERROR is None:
             ]
             if not transcritas:
                 QMessageBox.information(
-                    self, "Nenhuma transcricao",
-                    "O glossario le as transcricoes, nao o audio — e nenhum arquivo "
+                    self, "Nenhuma transcrição",
+                    "O glossário lê as transcrições, não o áudio — e nenhum arquivo "
                     "deste projeto foi transcrito ainda.")
                 return
             if not self._ensure_ner_model():
@@ -10498,7 +10498,7 @@ if QT_IMPORT_ERROR is None:
             )
             box.setText(
                 f"{resumo}\n\nGlossario: {report.name}\nPasta: {report.parent}\n\n"
-                "Nada foi alterado nas transcricoes.\n"
+                "Nada foi alterado nas transcrições.\n"
                 "Dica: declare os nomes corretos na secao \"## Nomes conhecidos\" de\n"
                 f"{_context_path(self.context.paths).name} — a AI passa a reconhecer\n"
                 "as variacoes de grafia com muito mais precisao."
@@ -10598,7 +10598,7 @@ if QT_IMPORT_ERROR is None:
                 )
                 if answer != QMessageBox.StandardButton.Yes:
                     return
-            self.start_worker("Verificar exportações", [("Verificando exportacoes...", lambda: app_service.qc_interviews(self.context, ids=ids))])
+            self.start_worker("Verificar exportações", [("Verificando exportações...", lambda: app_service.qc_interviews(self.context, ids=ids))])
 
         def start_worker(self, label: str, steps: list[tuple], weights: list[int] | None = None) -> None:
             if self.worker and self.worker.isRunning():
@@ -10830,8 +10830,8 @@ if QT_IMPORT_ERROR is None:
                 msg.setIcon(QMessageBox.Icon.Warning)
                 msg.setWindowTitle("Erro ao salvar")
                 msg.setText(
-                    "Nao foi possivel salvar as alteracoes pendentes da transcricao.\n"
-                    "Se fechar agora, as edicoes nao salvas serao perdidas."
+                    "Não foi possível salvar as alterações pendentes da transcrição.\n"
+                    "Se fechar agora, as edições não salvas serão perdidas."
                 )
                 keep_btn = msg.addButton("Cancelar fechamento", QMessageBox.ButtonRole.RejectRole)
                 msg.addButton("Fechar mesmo assim", QMessageBox.ButtonRole.AcceptRole)
@@ -10902,8 +10902,8 @@ def main(splash: Any = None, single_instance_server: Any = None) -> int:
         pass
     if QT_IMPORT_ERROR is not None:
         print(
-            "PySide6 nao esta instalado no ambiente Python atual. "
-            "Instale PySide6 no venv de transcricao para abrir o Estudio de Revisao.",
+            "PySide6 não está instalado no ambiente Python atual. "
+            "Instale PySide6 no ambiente do app para abrir o Transcritório.",
             file=sys.stderr,
         )
         print(f"Erro original: {QT_IMPORT_ERROR}", file=sys.stderr)
