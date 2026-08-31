@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="Transcritorio">
+  <rect width="256" height="256" rx="32" fill="#101820"/>
+  <path d="M35 137c12 0 12-38 24-38s12 78 24 78 12-112 24-112 12 126 24 126 12-92 24-92 12 54 24 54 12-28 24-28 12 12 18 12" fill="none" stroke="#44d7b6" stroke-width="12" stroke-linecap="round"/>
+  <rect x="52" y="51" width="152" height="12" rx="6" fill="#f7f7f2"/>
+  <rect x="52" y="204" width="152" height="12" rx="6" fill="#f7f7f2"/>
+  <rect x="132" y="82" width="72" height="10" rx="5" fill="#f7f7f2"/>
+  <rect x="154" y="104" width="50" height="10" rx="5" fill="#f7f7f2"/>
+  <rect x="46" y="158" width="62" height="10" rx="5" fill="#f7f7f2"/>
+  <rect x="46" y="180" width="84" height="10" rx="5" fill="#f7f7f2"/>
+</svg>

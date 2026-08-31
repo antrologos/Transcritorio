@@ -77,19 +77,40 @@ def _gui_launcher_path() -> str | None:
     return shutil.which(PACKAGE_NAME)
 
 
-def create_windows_shortcut(target: str, name: str = "Transcritório", arguments: str = "") -> bool:
+def _icon_path() -> str:
+    """Caminho do .ico para o atalho; "" se ausente (nunca levanta).
+
+    O wheel (v0.2) embarca os icones em transcribe_pipeline/assets
+    (package-data); rodando da fonte, ficam em assets/ na raiz do repo.
+    """
+    for base in (Path(__file__).parent / "assets",
+                 Path(__file__).parent.parent / "assets"):
+        candidato = base / "transcritorio_icon.ico"
+        if candidato.exists():
+            return str(candidato)
+    return ""
+
+
+def _shortcut_script(target: str, name: str, arguments: str, icon: str) -> str:
+    """Comando PowerShell do atalho (pura, para o toy)."""
+    return (
+        "$ws = New-Object -ComObject WScript.Shell; "
+        "$desktop = [Environment]::GetFolderPath('Desktop'); "
+        f"$s = $ws.CreateShortcut((Join-Path $desktop '{name}.lnk')); "
+        f"$s.TargetPath = '{target}'; "
+        + (f"$s.Arguments = '{arguments}'; " if arguments else "")
+        + (f"$s.IconLocation = '{icon}'; " if icon else "")
+        + "$s.Save()"
+    )
+
+
+def create_windows_shortcut(target: str, name: str = "Transcritório",
+                            arguments: str = "", icon: str = "") -> bool:
     """Cria atalho na area de trabalho via WScript.Shell. Nunca levanta."""
     if sys.platform != "win32":
         return False
     try:
-        script = (
-            "$ws = New-Object -ComObject WScript.Shell; "
-            "$desktop = [Environment]::GetFolderPath('Desktop'); "
-            f"$s = $ws.CreateShortcut((Join-Path $desktop '{name}.lnk')); "
-            f"$s.TargetPath = '{target}'; "
-            + (f"$s.Arguments = '{arguments}'; " if arguments else "")
-            + "$s.Save()"
-        )
+        script = _shortcut_script(target, name, arguments, icon)
         completed = subprocess.run(
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
             capture_output=True, text=True, timeout=30,
@@ -118,10 +139,13 @@ def ensure_first_run_setup() -> None:
         # em beta 2026-08) bloqueiam executaveis nao assinados, e o pythonw
         # de um CPython oficial e assinado. Um trampolim a menos para todos.
         pythonw = Path(sys.executable).with_name("pythonw.exe")
+        icone = _icon_path()
         if pythonw.exists():
-            created = create_windows_shortcut(str(pythonw), arguments="-m transcribe_pipeline.gui_launcher")
+            created = create_windows_shortcut(
+                str(pythonw), arguments="-m transcribe_pipeline.gui_launcher",
+                icon=icone)
         else:
-            created = create_windows_shortcut(str(Path(target)))
+            created = create_windows_shortcut(str(Path(target)), icon=icone)
         if created:
             app_settings.save({"shortcut_created": True})
     except Exception:

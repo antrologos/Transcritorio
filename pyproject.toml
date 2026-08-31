@@ -92,4 +92,6 @@ explicit = true
 include = ["transcribe_pipeline*"]
 
 [tool.setuptools.package-data]
-transcribe_pipeline = ["py.typed"]
+# assets/* (icones): sem eles o app instalado por uv rodava sem icone de
+# janela e o atalho da area de trabalho herdava o icone do pythonw.
+transcribe_pipeline = ["py.typed", "assets/*"]

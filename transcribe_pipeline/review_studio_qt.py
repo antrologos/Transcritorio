@@ -343,9 +343,14 @@ def open_folder_in_explorer(path: Path) -> None:
 def app_asset_path(filename: str) -> Path:
     if getattr(sys, "frozen", False):
         base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
-    else:
-        base = Path(__file__).resolve().parent.parent
-    return base / "assets" / filename
+        return base / "assets" / filename
+    repo = Path(__file__).resolve().parent.parent / "assets" / filename
+    if repo.exists():
+        return repo
+    # Wheel instalado (v0.2): os assets viajam DENTRO do pacote
+    # (transcribe_pipeline/assets, package-data) — parent.parent seria
+    # site-packages, onde nao ha assets/.
+    return Path(__file__).resolve().parent / "assets" / filename
 
 
 def format_clock(seconds: float | int | None) -> str:
