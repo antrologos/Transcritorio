@@ -20,10 +20,14 @@ def _splash_pixmap():
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QColor, QFont, QPainter, QPixmap
 
+    # Identidade do Programa R: paleta unica em ui_tokens (modulo puro,
+    # importa em ~0 ms — nao atrasa o splash).
+    from . import ui_tokens
+
     pixmap = QPixmap(440, 170)
-    pixmap.fill(QColor("#1f2430"))
+    pixmap.fill(QColor(ui_tokens.BG_BASE))
     painter = QPainter(pixmap)
-    painter.setPen(QColor("#4dabf7"))
+    painter.setPen(QColor(ui_tokens.ACCENT))
     title_font = QFont()
     title_font.setPointSize(21)
     title_font.setBold(True)
@@ -32,11 +36,11 @@ def _splash_pixmap():
     subtitle_font = QFont()
     subtitle_font.setPointSize(10)
     painter.setFont(subtitle_font)
-    painter.setPen(QColor("#9aa3b2"))
+    painter.setPen(QColor(ui_tokens.TEXT_MUTED))
     painter.drawText(
         pixmap.rect().adjusted(28, 96, -28, -28),
         Qt.AlignmentFlag.AlignLeft,
-        "Abrindo o Estúdio de Revisão…\nIsso pode levar alguns segundos.",
+        "Abrindo…\nIsso pode levar alguns segundos.",
     )
     painter.end()
     return pixmap

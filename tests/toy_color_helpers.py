@@ -49,7 +49,11 @@ def _extract_color(style: str) -> str:
     raise ValueError(f"Nao encontrou color em: {style!r}")
 
 
-DARK_BG = "#2d2d2d"
+# Fundo real da janela desde a R0 (paleta ui_tokens do Programa R):
+# Window = BG_RAISED. O antigo Fusion #2d2d2d saiu com a reforma.
+from transcribe_pipeline import ui_tokens
+
+DARK_BG = ui_tokens.BG_RAISED
 
 
 def test_helpers_retornam_string() -> None:
@@ -60,7 +64,7 @@ def test_helpers_retornam_string() -> None:
 
 
 def test_contrast_vs_dark_bg() -> None:
-    """Fusion dark Window=#2d2d2d. Cores devem ter contrast >=4.5:1."""
+    """Cores de texto devem ter contraste >=4.5:1 sobre o fundo real."""
     for name, fn in [("ok", _style_ok), ("warn", _style_warn),
                      ("err", _style_err), ("muted", _style_muted)]:
         color = _extract_color(fn())

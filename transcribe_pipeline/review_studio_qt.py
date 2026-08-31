@@ -269,24 +269,25 @@ def _sanitize_rename_title(raw: str) -> tuple[str, bool]:
 
 from .project_store import _reorder_move, _merge_interview_order  # re-export for tests
 from .boundary_check import BOUNDARY_NOTE_MARKER
+from . import ui_tokens
 
 
-# Helpers de cor para tema escuro (Fusion dark bg #2d2d2d).
-# Cores escolhidas com contrast ratio WCAG AA (>=4.5:1) contra #2d2d2d.
+# Helpers de cor para tema escuro — cores vindas de ui_tokens.
+# Contraste validado em toy_ui_tokens (WCAG) contra os fundos da paleta.
 def _style_ok() -> str:
-    return "color: #81c784; font-weight: 700;"
+    return f"color: {ui_tokens.SUCCESS_TEXT}; font-weight: 700;"
 
 
 def _style_warn() -> str:
-    return "color: #ffb74d;"
+    return f"color: {ui_tokens.WARN};"
 
 
 def _style_err() -> str:
-    return "color: #ff6b6b; font-weight: 700;"
+    return f"color: {ui_tokens.DANGER_TEXT}; font-weight: 700;"
 
 
 def _style_muted() -> str:
-    return "color: #9e9e9e;"
+    return f"color: {ui_tokens.TEXT_MUTED};"
 
 
 def _compute_effective_target_ids(
@@ -487,7 +488,7 @@ def raw_speaker_key(turn: dict[str, Any]) -> str:
 
 # Identidade visual por voz (dialogo "De quem e esta voz?" e coluna Falante
 # da tabela de blocos, D3.2). Paleta legivel em tema escuro e claro.
-VOICE_CHIP_COLORS = ["#4dabf7", "#69db7c", "#ffa94d", "#e599f7", "#ffd43b", "#63e6be", "#ff8787", "#a5d8ff"]
+VOICE_CHIP_COLORS = list(ui_tokens.VOICE_COLORS)
 
 
 def voice_color_map(turns: list[dict[str, Any]]) -> dict[str, str]:
@@ -1008,9 +1009,9 @@ if QT_IMPORT_ERROR is None:
             painter = QPainter(self)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             rect = self.rect()
-            painter.fillRect(rect, QColor("#0f1720"))
+            painter.fillRect(rect, QColor(ui_tokens.WAVEFORM["bg"]))
             if not self.peaks:
-                painter.setPen(QColor("#9aa4ad"))
+                painter.setPen(QColor(ui_tokens.WAVEFORM["ruler_text"]))
                 painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "Onda sonora indisponível; prepare o WAV para esta entrevista.")
                 return
             width = max(1, rect.width())
@@ -1039,7 +1040,7 @@ if QT_IMPORT_ERROR is None:
             draw_range(self.selected_range, QColor(255, 255, 255, 28))
             draw_range(self.active_range, QColor(26, 115, 232, 48))
 
-            painter.setPen(QPen(QColor("#56616d"), 1))
+            painter.setPen(QPen(QColor(ui_tokens.WAVEFORM["grid"]), 1))
             painter.drawLine(0, ruler_height - 1, width, ruler_height - 1)
             tick_count = 6 if width >= 420 else 4
             for index in range(tick_count + 1):
@@ -1047,9 +1048,9 @@ if QT_IMPORT_ERROR is None:
                 x = int(fraction * width)
                 seconds = visible_start + (fraction * visible_duration)
                 painter.drawLine(x, ruler_height - 7, x, ruler_height - 1)
-                painter.setPen(QColor("#c7d0d9"))
+                painter.setPen(QColor(ui_tokens.WAVEFORM["label"]))
                 painter.drawText(x + 3, 14, format_clock(seconds))
-                painter.setPen(QPen(QColor("#56616d"), 1))
+                painter.setPen(QPen(QColor(ui_tokens.WAVEFORM["grid"]), 1))
 
             waveform_path = QPainterPath()
             bottom_points: list[QPointF] = []
@@ -1068,8 +1069,8 @@ if QT_IMPORT_ERROR is None:
             for point in reversed(bottom_points):
                 waveform_path.lineTo(point)
             waveform_path.closeSubpath()
-            painter.setPen(QPen(QColor("#5cb7ee"), 1))
-            painter.setBrush(QBrush(QColor("#2f9bd3")))
+            painter.setPen(QPen(QColor(ui_tokens.WAVEFORM["cursor_line"]), 1))
+            painter.setBrush(QBrush(QColor(ui_tokens.WAVEFORM["cursor_fill"])))
             painter.drawPath(waveform_path)
             if self._word_starts and self.duration > 0:
                 low = bisect_left(self._word_starts, visible_start)
@@ -1083,17 +1084,17 @@ if QT_IMPORT_ERROR is None:
                     for tick_start, uncertain in self.word_ticks[low:high]:
                         x = seconds_to_x(tick_start)
                         painter.setPen(QPen(
-                            QColor("#e0a83c") if uncertain else QColor("#4d5d6c"), 1))
+                            QColor(ui_tokens.WAVEFORM["tick_uncertain"]) if uncertain else QColor(ui_tokens.WAVEFORM["tick"]), 1))
                         painter.drawLine(x, ruler_height + 1, x, ruler_height + 9)
             if self.duration > 0:
                 if self.edit_cursor is not None and visible_start <= self.edit_cursor <= visible_end:
                     cursor_x = seconds_to_x(self.edit_cursor)
-                    painter.setPen(QPen(QColor("#ffffff"), 1, Qt.PenStyle.DashLine))
+                    painter.setPen(QPen(QColor(ui_tokens.WAVEFORM["block_dash"]), 1, Qt.PenStyle.DashLine))
                     painter.drawLine(cursor_x, ruler_height, cursor_x, height)
                 play_x = seconds_to_x(self.position)
-                painter.setPen(QPen(QColor("#ffcc33"), 2))
+                painter.setPen(QPen(QColor(ui_tokens.WAVEFORM["range"]), 2))
                 painter.drawLine(play_x, ruler_height, play_x, height)
-                painter.setPen(QColor("#d8dee9"))
+                painter.setPen(QColor(ui_tokens.WAVEFORM["time_text"]))
                 painter.drawText(8, height - 8, f"{format_timecode(visible_start)} - {format_timecode(visible_end)}   zoom {self.zoom:.0f}x")
 
         def peak_between(self, start_seconds: float, end_seconds: float) -> float:
@@ -5310,10 +5311,11 @@ if QT_IMPORT_ERROR is None:
             return button
 
         _MEDIA_BUTTON_PRIMARY_QSS = (
-            "QPushButton { background: #44d7b6; color: #0f1419; "
+            f"QPushButton {{ background: {ui_tokens.ACCENT}; color: {ui_tokens.ON_ACCENT}; "
             "font-weight: 700; font-size: 14px; padding: 9px 18px; "
-            "border-radius: 6px; border: 1px solid #44d7b6; } "
-            "QPushButton:hover { background: #5ae0c4; border-color: #5ae0c4; } "
+            f"border-radius: 6px; border: 1px solid {ui_tokens.ACCENT}; }} "
+            f"QPushButton:hover {{ background: {ui_tokens.ACCENT_HOVER}; "
+            f"border-color: {ui_tokens.ACCENT_HOVER}; }} "
             "QPushButton::menu-indicator { subcontrol-position: right center; "
             "subcontrol-origin: padding; right: 6px; }"
         )
@@ -6221,7 +6223,7 @@ if QT_IMPORT_ERROR is None:
             # users (explicit feedback from Lucas: UI should be more evident).
             self._empty_state_widget = QWidget()
             self._empty_state_widget.setStyleSheet(
-                "QWidget#emptyDropZone { border: 2px dashed #44d7b6; "
+                f"QWidget#emptyDropZone {{ border: 2px dashed {ui_tokens.ACCENT}; "
                 "border-radius: 10px; background: transparent; }"
             )
             self._empty_state_widget.setObjectName("emptyDropZone")
@@ -6357,7 +6359,7 @@ if QT_IMPORT_ERROR is None:
             # sempre existiu no dialogo do Motor, mas o selo nao-clicavel
             # o tornava indescobrivel (teste real 2026-08-30).
             is_accel = "CUDA" in backend or "MLX" in backend
-            badge_color = "#2e7d32" if is_accel else "#b8860b"
+            badge_color = ui_tokens.SUCCESS if is_accel else ui_tokens.WARN
             badge = (
                 f'<a href="engine-settings" style="color:{badge_color};'
                 f'font-weight:600;text-decoration:underline;">'
@@ -6365,7 +6367,7 @@ if QT_IMPORT_ERROR is None:
                 f'</a>'
             )
             return (f"Projeto: {name}  |  "
-                    f'<a href="engine-settings" style="color:#888;text-decoration:underline;">Modelo: {model}</a>'
+                    f'<a href="engine-settings" style="color:{ui_tokens.TEXT_MUTED};text-decoration:underline;">Modelo: {model}</a>'
                     f"  |  {badge}"
                     f"  |  {self.context.paths.project_root}")
 
@@ -6419,7 +6421,7 @@ if QT_IMPORT_ERROR is None:
 
             self.video_widget = QVideoWidget()
             self.video_widget.setMinimumHeight(170)
-            self.video_widget.setStyleSheet("background: #111;")
+            self.video_widget.setStyleSheet(f"background: {ui_tokens.VIDEO_BG};")
             self.video_widget.setVisible(False)
             self.player.setVideoOutput(self.video_widget)
             media_layout.addWidget(self.video_widget)
@@ -9484,8 +9486,8 @@ if QT_IMPORT_ERROR is None:
             for column in range(self.turn_table.columnCount()):
                 item = self.turn_table.item(row, column)
                 if item:
-                    item.setBackground(QColor("#fff3bf"))
-                    item.setForeground(QColor("#1f2933"))
+                    item.setBackground(QColor(ui_tokens.HIGHLIGHT_BG))
+                    item.setForeground(QColor(ui_tokens.HIGHLIGHT_TEXT))
             if self.follow_playback_checkbox.isChecked() and not self.text_edit.hasFocus():
                 self.turn_table.scrollToItem(self.turn_table.item(row, 0))
             if row is not None:
@@ -10859,21 +10861,26 @@ def _apply_dark_theme(app) -> None:
     fusion = QStyleFactory.create("Fusion")
     if fusion is not None:
         app.setStyle(fusion)
+    # Paleta do Programa R (ui_tokens; dossie RD aprovado 2026-08-31):
+    # Window/Button = BG_RAISED, Base = BG_BASE, selecao = INFO.
+    def tok(color: str) -> QColor:
+        return QColor(*ui_tokens.hex_to_rgb(color))
+
     pal = QPalette()
-    pal.setColor(QPalette.ColorRole.Window, QColor(45, 45, 45))
-    pal.setColor(QPalette.ColorRole.WindowText, QColor(220, 220, 220))
-    pal.setColor(QPalette.ColorRole.Base, QColor(30, 30, 30))
-    pal.setColor(QPalette.ColorRole.AlternateBase, QColor(45, 45, 45))
-    pal.setColor(QPalette.ColorRole.ToolTipBase, QColor(45, 45, 45))
-    pal.setColor(QPalette.ColorRole.ToolTipText, QColor(220, 220, 220))
-    pal.setColor(QPalette.ColorRole.Text, QColor(220, 220, 220))
-    pal.setColor(QPalette.ColorRole.PlaceholderText, QColor(140, 140, 140))
-    pal.setColor(QPalette.ColorRole.Button, QColor(45, 45, 45))
-    pal.setColor(QPalette.ColorRole.ButtonText, QColor(220, 220, 220))
-    pal.setColor(QPalette.ColorRole.BrightText, QColor(255, 80, 80))
-    pal.setColor(QPalette.ColorRole.Link, QColor(64, 160, 232))
-    pal.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
-    pal.setColor(QPalette.ColorRole.HighlightedText, QColor(0, 0, 0))
+    pal.setColor(QPalette.ColorRole.Window, tok(ui_tokens.BG_RAISED))
+    pal.setColor(QPalette.ColorRole.WindowText, tok(ui_tokens.TEXT))
+    pal.setColor(QPalette.ColorRole.Base, tok(ui_tokens.BG_BASE))
+    pal.setColor(QPalette.ColorRole.AlternateBase, tok(ui_tokens.BG_RAISED))
+    pal.setColor(QPalette.ColorRole.ToolTipBase, tok(ui_tokens.BG_OVERLAY))
+    pal.setColor(QPalette.ColorRole.ToolTipText, tok(ui_tokens.TEXT))
+    pal.setColor(QPalette.ColorRole.Text, tok(ui_tokens.TEXT))
+    pal.setColor(QPalette.ColorRole.PlaceholderText, tok(ui_tokens.TEXT_MUTED))
+    pal.setColor(QPalette.ColorRole.Button, tok(ui_tokens.BG_RAISED))
+    pal.setColor(QPalette.ColorRole.ButtonText, tok(ui_tokens.TEXT))
+    pal.setColor(QPalette.ColorRole.BrightText, tok(ui_tokens.DANGER))
+    pal.setColor(QPalette.ColorRole.Link, tok(ui_tokens.INFO))
+    pal.setColor(QPalette.ColorRole.Highlight, tok(ui_tokens.INFO))
+    pal.setColor(QPalette.ColorRole.HighlightedText, tok(ui_tokens.ON_ACCENT))
     for role in (QPalette.ColorRole.WindowText, QPalette.ColorRole.Text, QPalette.ColorRole.ButtonText):
         pal.setColor(QPalette.ColorGroup.Disabled, role, QColor(127, 127, 127))
     pal.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Highlight, QColor(80, 80, 80))
@@ -10881,7 +10888,9 @@ def _apply_dark_theme(app) -> None:
     app.setPalette(pal)
     # Tooltip explicito (em alguns estilos o ToolTipBase do palette nao cobre tudo)
     app.setStyleSheet(
-        "QToolTip { color: #dcdcdc; background-color: #2d2d2d; border: 1px solid #555; }"
+        f"QToolTip {{ color: {ui_tokens.TEXT}; "
+        f"background-color: {ui_tokens.BG_OVERLAY}; "
+        f"border: 1px solid {ui_tokens.BORDER}; }}"
     )
 
 

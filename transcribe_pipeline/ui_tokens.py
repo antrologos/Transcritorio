@@ -39,6 +39,43 @@ ALL_COLORS: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
+# Derivadas e paletas especiais (nao sao "tokens novos": sao derivacoes
+# de componente e conjuntos de data-viz que acompanham a paleta)
+# ---------------------------------------------------------------------------
+
+ACCENT_HOVER = "#5ae0c4"   # hover do botao primario
+ON_ACCENT = "#0f1419"      # texto sobre fundo ACCENT
+# Variantes para TEXTO PEQUENO sobre fundo escuro: SUCCESS/DANGER puros
+# ficam abaixo de WCAG AA (4,5:1) como texto de 13px; estas clareadas
+# passam com folga. Os tokens-base seguem para chips, bordas e fundos.
+SUCCESS_TEXT = "#3fb950"
+DANGER_TEXT = "#f47067"
+VIDEO_BG = "#111111"       # moldura do video (quase-preto proposital)
+HIGHLIGHT_BG = "#fff3bf"   # realce de busca (fundo claro)
+HIGHLIGHT_TEXT = "#1f2933" # texto sobre o realce
+
+# Cores de VOZ (chips por falante) — conjunto de matizes distintos,
+# estavel por indice de voz; separado dos 12 tokens semanticos.
+VOICE_COLORS = ["#4dabf7", "#69db7c", "#ffa94d", "#e599f7",
+                "#ffd43b", "#63e6be", "#ff8787", "#a5d8ff"]
+
+# Paleta do waveform (grafico): herdada do desenho atual, ja harmonica
+# com a familia INFO. Centralizada aqui para a catraca chegar a zero.
+WAVEFORM = {
+    "bg": "#0f1720",
+    "ruler_text": "#9aa4ad",
+    "grid": "#56616d",
+    "label": "#c7d0d9",
+    "cursor_line": "#5cb7ee",
+    "cursor_fill": "#2f9bd3",
+    "tick": "#4d5d6c",
+    "tick_uncertain": "#e0a83c",
+    "block_dash": "#ffffff",
+    "range": "#ffcc33",
+    "time_text": "#d8dee9",
+}
+
+# ---------------------------------------------------------------------------
 # Espacamento e tipografia
 # ---------------------------------------------------------------------------
 

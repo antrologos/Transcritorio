@@ -16,10 +16,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 RAIZ = Path(__file__).resolve().parents[1] / "transcribe_pipeline"
 
-# Teto por arquivo (medido em 2026-08-31, inicio da R0). SO PODE CAIR.
+# Teto por arquivo. A migracao da R0 (2026-08-31) zerou os 44 hex
+# iniciais: toda cor da GUI vem de ui_tokens. ZERO e o estado final —
+# subir e proibido.
 TETOS = {
-    "review_studio_qt.py": 41,
-    "gui_launcher.py": 3,
+    "review_studio_qt.py": 0,
+    "gui_launcher.py": 0,
 }
 
 HEX_RE = re.compile(r"#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b(?![0-9a-fA-F])")
