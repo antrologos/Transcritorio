@@ -9357,6 +9357,26 @@ if QT_IMPORT_ERROR is None:
             # faltante e oferecido ANTES; idioma sem pacote e avisado
             # ANTES (o WhisperX antigo estourava DEPOIS de transcrever).
             langs_lote, avisos_idioma = app_service.alignment_languages_for(self.context, ids)
+            # E4-4: motor com tempos por palavra NATIVOS (Parakeet) nao
+            # usa alinhador — nada a exigir/avisar. Mas ele so transcreve
+            # portugues: outro idioma no lote bloqueia AQUI, antes do job
+            # (o runner tem o mesmo guard como defesa para a CLI).
+            from . import model_manager as _mm_motor
+            motor_key = asr_model or str((self.context.config.get("asr_model")
+                                          if self.context else "") or "")
+            motor_spec = _mm_motor.ASR_VARIANTS.get(motor_key) or {}
+            if motor_spec.get("engine") == "parakeet_onnx":
+                fora_pt = sorted((set(langs_lote) | set(avisos_idioma)) - {"pt"})
+                if fora_pt:
+                    QMessageBox.warning(
+                        self, "Motor só para português",
+                        "O motor Parakeet pt-BR (experimental) só transcreve "
+                        f"português, e este lote inclui: {', '.join(fora_pt)}.\n\n"
+                        "Ajuste o idioma do projeto (no Motor) ou o idioma do "
+                        "arquivo (nas propriedades), ou escolha um modelo "
+                        "Whisper para transcrever.")
+                    return
+                langs_lote, avisos_idioma = (), ()
             if not self.ensure_models_ready(
                     asr_variants=[asr_model] if asr_model else None,
                     align_languages=langs_lote,

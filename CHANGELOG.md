@@ -8,6 +8,26 @@ assinatura digital, e o SignPath recusou a assinatura gratuita. O canal
 oficial passa a ser **PyPI + uv** (`uv tool install transcritorio`); ver
 `docs/INSTALL_WINDOWS.md` e `docs/LEGACY_STANDALONE.md`.
 
+- **Idioma como capacidade** (etapa 4 do programa multilíngue): 16
+  idiomas ganham pacote de alinhamento dedicado (tempos por palavra) com
+  download avisado ANTES de transcrever — antes, inglês/espanhol/francês
+  baixavam ~360 MB sem avisar no meio do job e ~59 idiomas estouravam
+  erro DEPOIS de transcrever a entrevista inteira. O combo de idioma do
+  Motor e das propriedades do arquivo agora é honesto ("baixa ~1,2 GB" /
+  "Automático — sem tempos por palavra"); o gate considera os idiomas de
+  TODOS os arquivos do lote (metadado por arquivo); o gerenciador lista
+  os pacotes de idioma; o assistente de instalação pergunta os idiomas
+  das gravações. Um pacote multilíngue coringa (MMS, ~1,2 GB, uso
+  não-comercial) cobre mais de 1.100 idiomas sem pacote dedicado —
+  suaíli incluso.
+- **Motor experimental Parakeet pt-BR (TAGARELA)**: novo motor de
+  transcrição só para português (2,5 GB, baixável pelo gerenciador),
+  com pontuação, capitalização e tempos por palavra nativos (dispensa o
+  alinhador). Fala espontânea é o forte do modelo (treinado em corpora
+  de entrevista). Roda inteiramente na CPU a ~13× tempo real. Marcado
+  experimental até a comparação lado a lado com o Whisper large-v3 nos
+  áudios de gabarito; só transcreve português (outros idiomas no lote
+  são bloqueados com aviso antes do job).
 - **Checagem geral pós-lote** (três varreduras exaustivas; ~50 achados,
   criticos corrigidos): "Perguntar" agora oferece o modelo de análise
   ANTES do preparo do encoder (ordem de gates invertida escondia a

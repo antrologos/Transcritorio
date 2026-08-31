@@ -36,6 +36,13 @@ dependencies = [
     "jiwer>=3.0.0",
     "keyring>=24",
     "cryptography>=42",
+    # Motor experimental Parakeet pt-BR (TAGARELA) via ONNX (E4-4).
+    # onnxruntime CPU: ~13x tempo real medido na RTX 4060 (so CPU);
+    # onnxruntime-gpu NAO entra no extra [cuda] — conflita com o pacote
+    # CPU e exigiria cuDNN proprio, sem ganho necessario.
+    "onnx-asr>=0.12,<1.0",
+    # Piso 1.20 (ultima serie com wheel py3.10); em py3.11+ resolve 1.29+.
+    "onnxruntime>=1.20",
 ]
 
 [project.urls]

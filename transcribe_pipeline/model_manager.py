@@ -263,6 +263,24 @@ ASR_VARIANTS: dict[str, dict[str, Any]] = {
         "speed": 8,
         "desc": "Qualidade razoavel.",
     },
+    "parakeet-pt": {
+        # E4-4 (2026-08-30): motor experimental pt-only (decisao do
+        # usuario). Parakeet TDT 0.6B fine-tuned em fala espontanea pt-BR
+        # (NURC/ALIP/C-ORAL); pontuacao/capitalizacao/tempos por palavra
+        # NATIVOS (sem alinhador). Roda via onnx-asr (CPU ~13x tempo
+        # real). "engine" desvia run_whisperx para parakeet_runner. Sai
+        # de experimental so apos A/B contra large-v3 nos gabaritos.
+        "label": "Parakeet pt-BR (TAGARELA) — experimental",
+        "friendly_pt": "⚠ Experimental — só português (2,5 GB); pontuação nativa",
+        "repo": "alefiury/parakeet-tdt-0.6b-v3-ptBR-TAGARELA-onnx",
+        "revision": "f97e702671c4dc14344da4ef7a3c07ba94b279fc",
+        "estimated_gb": 2.55,
+        "quality": 8,
+        "speed": 8,
+        "engine": "parakeet_onnx",
+        "experimental": True,
+        "desc": "Motor experimental para portugues; pontuacao nativa.",
+    },
     "base": {
         # demo_only (2026-08-30): qualidade insuficiente para trabalho
         # real — fora do assistente; baixavel so pelo gerenciador, com o

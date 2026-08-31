@@ -69,6 +69,19 @@ def run_whisperx(
     progress_callback: ProgressCallback | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> int:
+    # Motores nao-Whisper (E4-4): variantes com "engine" proprio desviam
+    # antes de qualquer heuristica de dispositivo — a escolha explicita
+    # do motor vence o fast-path de plataforma.
+    _spec = model_manager.ASR_VARIANTS.get(str(config.get("asr_model") or ""))
+    if _spec and _spec.get("engine") == "parakeet_onnx":
+        from . import parakeet_runner
+        return parakeet_runner.run_parakeet(
+            rows, config, paths,
+            ids=ids, dry_run=dry_run,
+            progress_callback=progress_callback,
+            should_cancel=should_cancel,
+        )
+
     # Apple Silicon fast path: when MPS is detected and mlx-whisper is
     # installed, route transcription through the MLX runner. faster-whisper
     # (used by the whisperx CLI) does not support Metal; without this branch
