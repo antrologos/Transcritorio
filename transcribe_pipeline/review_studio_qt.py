@@ -377,6 +377,52 @@ def media_format_label(status: object) -> str:
     return label
 
 
+def media_splitter_sizes(
+    total: int,
+    video_visible: bool,
+    *,
+    min_media: int = 180,
+    min_media_video: int = 300,
+    min_table: int = 180,
+    min_editor: int = 150,
+) -> list[int]:
+    """Distribuicao [midia, blocos, editor] do review_splitter (2026-08-31).
+
+    O setSizes da construcao rodava com o video oculto e nada
+    redistribuia quando ele aparecia: o painel de midia engordava e a
+    tabela de blocos ficava com ~2 linhas. Invariantes: soma == total
+    exata; a tabela nunca fica abaixo de min_table quando o total
+    permite (o deficit sai primeiro da midia, depois do editor); janela
+    menor que a soma dos pisos escala proporcionalmente.
+
+    min_media_video PRECISA cobrir o minimumSizeHint real do painel de
+    midia com video ligado (video 120 + onda 96 + duas fileiras de
+    botoes) — abaixo disso o QSplitter clampa em silencio e a garantia
+    da funcao vira ficcao. Se mudar o setMinimumHeight do video ou da
+    onda, ajustar aqui junto.
+    """
+    if total <= 0:
+        return [0, 0, 0]
+    piso_media = min_media_video if video_visible else min_media
+    frac_media, frac_editor = (0.36, 0.24) if video_visible else (0.24, 0.28)
+    pisos = piso_media + min_table + min_editor
+    if total < pisos:
+        media = total * piso_media // pisos
+        tabela = total * min_table // pisos
+        return [media, tabela, total - media - tabela]
+    media = max(piso_media, round(total * frac_media))
+    editor = max(min_editor, round(total * frac_editor))
+    tabela = total - media - editor
+    if tabela < min_table:
+        deficit = min_table - tabela
+        cede = min(deficit, media - piso_media)
+        media -= cede
+        deficit -= cede
+        editor -= min(deficit, editor - min_editor)
+        tabela = total - media - editor
+    return [media, tabela, editor]
+
+
 def diar_offer_candidates(
     statuses: list[Any],
     *,
@@ -5076,6 +5122,11 @@ if QT_IMPORT_ERROR is None:
             self.current_play_row: int | None = None
             self.media_candidates: list[Path] = []
             self.media_candidate_index = 0
+            # Painel de video (2026-08-31): preferencia vale SO na sessao
+            # (decisao do usuario); _video_panel_visible e o ultimo estado
+            # APLICADO — detector de transicao do review_splitter.
+            self._video_user_hidden = False
+            self._video_panel_visible = False
             self.worker: PipelineWorker | None = None
             self.current_job_label = ""
             self._loading_editor = False
@@ -6630,11 +6681,16 @@ if QT_IMPORT_ERROR is None:
             media_layout.setContentsMargins(0, 0, 0, 0)
 
             self.video_widget = QVideoWidget()
-            self.video_widget.setMinimumHeight(170)
+            # 120 casa com o piso min_media_video de media_splitter_sizes
+            # (120 + onda 96 + fileiras de botoes) — mudar um exige o outro.
+            self.video_widget.setMinimumHeight(120)
             self.video_widget.setStyleSheet(f"background: {ui_tokens.VIDEO_BG};")
             self.video_widget.setVisible(False)
             self.player.setVideoOutput(self.video_widget)
-            media_layout.addWidget(self.video_widget)
+            # stretch=1: a sobra do painel de midia vai para o video (que
+            # escala com letterbox); o TETO real vem da redistribuicao do
+            # splitter — sem maximumHeight, o arrasto do usuario manda.
+            media_layout.addWidget(self.video_widget, 1)
 
             self.waveform_widget = WaveformWidget()
             self.waveform_widget.seek_requested.connect(self.seek_waveform)
@@ -6709,6 +6765,14 @@ if QT_IMPORT_ERROR is None:
             self.follow_playback_checkbox.setToolTip("Quando ativo, a tabela de blocos acompanha automaticamente o ponto de reprodução do áudio.")
             self.follow_playback_checkbox.setChecked(True)
             media_controls.addWidget(self.follow_playback_checkbox)
+            # Controle contextual de painel (sem QAction/menu, como os
+            # botoes da onda): so aparece quando a midia tem imagem.
+            self.video_toggle_button = QPushButton("Ocultar vídeo")
+            self.video_toggle_button.setToolTip(
+                "Oculta a imagem do vídeo; o áudio continua tocando.")
+            self.video_toggle_button.setVisible(False)
+            self.video_toggle_button.clicked.connect(self._toggle_video_panel)
+            media_controls.addWidget(self.video_toggle_button)
             media_layout.addLayout(media_controls)
 
             self.turn_table = QTableWidget(0, 4)
@@ -6851,7 +6915,9 @@ if QT_IMPORT_ERROR is None:
             self.review_splitter.setStretchFactor(0, 1)
             self.review_splitter.setStretchFactor(1, 3)
             self.review_splitter.setStretchFactor(2, 2)
-            self.review_splitter.setSizes([240, 420, 260])
+            # Uma fonte de verdade com a redistribuicao reativa (920 =
+            # nominal da janela 1440x900; a 1a exibicao reescala).
+            self.review_splitter.setSizes(media_splitter_sizes(920, False))
             return panel
 
         def _build_editor_panel(self) -> QWidget:
@@ -7321,6 +7387,7 @@ if QT_IMPORT_ERROR is None:
 
         def switch_project_context(self, context: app_service.ProjectContext) -> None:
             self.player.stop()
+            self._sync_video_panel(False)  # video do projeto anterior
             self.context = context
             from . import recent_projects
             recent_projects.save_recent(context.paths.project_root)
@@ -8165,6 +8232,7 @@ if QT_IMPORT_ERROR is None:
                 return
             self.player.stop()
             self.player.setSource(QUrl())
+            self._sync_video_panel(False)  # sem isto, retangulo preto residual
             self.review = None
             self.current_interview_id = None
             self.current_turn_id = None
@@ -8223,8 +8291,33 @@ if QT_IMPORT_ERROR is None:
             self.media_candidate_index = index
             self._fallback_media_attempted = False
             media_path = self.media_candidates[index]
-            self.video_widget.setVisible(self.media_has_video(media_path))
+            self._sync_video_panel(self.media_has_video(media_path))
             self.player.setSource(QUrl.fromLocalFile(str(media_path)))
+
+        def _sync_video_panel(self, has_video: bool) -> None:
+            """Choke point do painel de video (2026-08-31): botao contextual
+            + redistribuicao do review_splitter SO na transicao de estado
+            (o arrasto do usuario dentro do mesmo estado e respeitado).
+            Cobre todos os call sites de set_media_source, o toggle e os
+            fluxos de fechar/trocar projeto (retangulo preto residual)."""
+            self.video_toggle_button.setVisible(has_video)
+            self.video_toggle_button.setText(
+                "Mostrar vídeo" if self._video_user_hidden else "Ocultar vídeo")
+            efetivo = has_video and not self._video_user_hidden
+            if efetivo == self._video_panel_visible:
+                return
+            self._video_panel_visible = efetivo
+            # setVisible ANTES do setSizes: o minimo do painel de midia
+            # muda com o video, e o QSplitter clamparia contra o antigo.
+            self.video_widget.setVisible(efetivo)
+            total = sum(self.review_splitter.sizes())  # handles fora
+            if total > 0:
+                self.review_splitter.setSizes(media_splitter_sizes(total, efetivo))
+
+        def _toggle_video_panel(self) -> None:
+            # O botao so esta visivel quando a midia tem imagem.
+            self._video_user_hidden = not self._video_user_hidden
+            self._sync_video_panel(True)
 
         def media_has_video(self, path: Path) -> bool:
             return path.suffix.lower() in VIDEO_SUFFIXES
