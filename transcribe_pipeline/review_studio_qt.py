@@ -5363,6 +5363,14 @@ if QT_IMPORT_ERROR is None:
             "subcontrol-origin: padding; right: 6px; }"
         )
         _MEDIA_BUTTON_GHOST_QSS = ""
+        _TRANSCREVER_PRIMARY_QSS = (
+            f"QToolButton {{ background: {ui_tokens.ACCENT}; color: {ui_tokens.ON_ACCENT}; "
+            "font-weight: 700; font-size: 14px; padding: 6px 14px; "
+            f"border-radius: 6px; border: 1px solid {ui_tokens.ACCENT}; }} "
+            f"QToolButton:hover {{ background: {ui_tokens.ACCENT_HOVER}; "
+            f"border-color: {ui_tokens.ACCENT_HOVER}; }}"
+        )
+        _TRANSCREVER_GHOST_QSS = "font-weight: 700;"
 
         def media_button(self) -> QPushButton:
             button = QPushButton("+ Adicionar mídia…")
@@ -5378,19 +5386,25 @@ if QT_IMPORT_ERROR is None:
             return button
 
         def _update_add_media_emphasis(self, has_rows: bool) -> None:
-            """Toolbar 'Adicionar mídia' is primary (accent) when empty, ghost otherwise.
-
-            Contextual progressive disclosure: the button 'shouts' exactly when it's
-            the user's next logical step. As soon as at least one media file exists,
-            the button steps aside so 'Transcrever' can be visually primary.
+            """Enfase caminha com a jornada (dossie RD): sem midia, Adicionar
+            e primary; midia TODA pendente (R4), Transcrever e primary —
+            fecha o beco pos-adicao em que a unica pista era o bold; com o
+            projeto andando, toolbar neutra (o proximo passo mora na lista).
             """
             button = getattr(self, "_media_button_ref", None)
-            if button is None:
-                return
-            button.setStyleSheet(
-                self._MEDIA_BUTTON_PRIMARY_QSS if not has_rows
-                else self._MEDIA_BUTTON_GHOST_QSS
-            )
+            if button is not None:
+                button.setStyleSheet(
+                    self._MEDIA_BUTTON_PRIMARY_QSS if not has_rows
+                    else self._MEDIA_BUTTON_GHOST_QSS
+                )
+            transcrever = getattr(self, "transcribe_button", None)
+            if transcrever is not None:
+                tudo_pendente = has_rows and all(
+                    not (s.review_exists or s.canonical_exists)
+                    for s in self.statuses)
+                transcrever.setStyleSheet(
+                    self._TRANSCREVER_PRIMARY_QSS if tudo_pendente
+                    else self._TRANSCREVER_GHOST_QSS)
 
         def transcribe_menu_button(self) -> QToolButton:
             # R3: clique direto AGE (☑ marcadas; sem nenhuma ☑, todas as
@@ -7320,22 +7334,26 @@ if QT_IMPORT_ERROR is None:
                 )
                 return
             self.refresh_interviews()
-            QMessageBox.information(
-                self,
-                "Arquivos adicionados",
-                f"{len(expanded)} arquivo(s) foram adicionados ao projeto.",
-            )
+            # R4: o modal "Arquivos adicionados" era um beco (nao apontava
+            # o proximo passo). CTA nao-modal na statusbar; o refresh acima
+            # ja deixou o Transcrever primary quando tudo esta pendente.
+            plural = "s" if len(expanded) > 1 else ""
+            self.progress_label.setText(
+                f"{len(expanded)} arquivo{plural} adicionado{plural}. "
+                "Clique em Transcrever para começar.")
 
         def dragEnterEvent(self, event) -> None:
+            # R4: aceitar TAMBEM sem projeto — o empty state convida a
+            # arrastar, e o drop ignorado em silencio era um beco.
             mime = event.mimeData()
-            if mime is not None and mime.hasUrls() and self.context is not None:
+            if mime is not None and mime.hasUrls():
                 event.acceptProposedAction()
             else:
                 event.ignore()
 
         def dragMoveEvent(self, event) -> None:
             mime = event.mimeData()
-            if mime is not None and mime.hasUrls() and self.context is not None:
+            if mime is not None and mime.hasUrls():
                 event.acceptProposedAction()
             else:
                 event.ignore()
@@ -7353,7 +7371,28 @@ if QT_IMPORT_ERROR is None:
                 event.ignore()
                 return
             event.acceptProposedAction()
+            if self.context is None:
+                self._offer_project_for_dropped(paths)
+                return
             self._ingest_media_paths(paths)
+
+        def _offer_project_for_dropped(self, paths: list[Path]) -> None:
+            """Drop sem projeto aberto (R4): oferecer criar o projeto e
+            ingerir os arquivos arrastados em seguida. `paths` e local —
+            nunca vaza para um drop ou projeto seguinte."""
+            plural = "ns" if len(paths) > 1 else "m"
+            answer = QMessageBox.question(
+                self,
+                "Criar projeto para estas gravações?",
+                f"Você arrastou {len(paths)} ite{plural}, mas ainda não há "
+                "projeto aberto.\n\nCriar um projeto agora? As gravações "
+                "são adicionadas a ele em seguida — e continuam onde estão.",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            self.new_project()
+            if self.context is not None:
+                self._ingest_media_paths(paths)
 
         def save_project_metadata(self) -> None:
             if not self._require_project("Salvar projeto"):
