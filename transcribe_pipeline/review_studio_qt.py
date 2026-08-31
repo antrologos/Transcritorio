@@ -6526,6 +6526,11 @@ if QT_IMPORT_ERROR is None:
             self.docs_panel.show_in_folder_requested.connect(
                 self._show_path_in_folder)
             self.docs_panel.action_requested.connect(self._docs_action)
+            # Abrir do banner de sucesso: os.startfile/xdg-open abrem o
+            # ARQUIVO no app padrao (o nome do helper engana) — o mesmo
+            # gesto do Abrir das linhas do painel.
+            self.docs_panel.open_document_requested.connect(
+                lambda p: open_folder_in_explorer(Path(p)))
             self.review_tabs.addTab(self.docs_panel, "Documentos")
             self.review_tabs.addTab(self._build_props_panel(), "Propriedades")
             self.review_tabs.currentChanged.connect(self._on_review_tab_changed)
@@ -7225,6 +7230,9 @@ if QT_IMPORT_ERROR is None:
             self.context = context
             from . import recent_projects
             recent_projects.save_recent(context.paths.project_root)
+            # R4: sucesso anunciado pertence ao projeto ANTERIOR.
+            if getattr(self, "docs_panel", None) is not None:
+                self.docs_panel.clear_success()
             self.review = None
             self.current_interview_id = None
             self.current_turn_id = None
@@ -10567,10 +10575,21 @@ if QT_IMPORT_ERROR is None:
                 "revisar_grafias": self.open_spelling_review,
                 "verificar": self.run_qc_job,
                 "abrir_resultados": self.open_export_folder,
+                "abrir_nomes_conhecidos": self._open_nomes_conhecidos,
             }
             handler = rotas.get(chave)
             if handler is not None:
                 handler()
+
+        def _open_nomes_conhecidos(self) -> None:
+            """Abre o contexto da pesquisa (seção "## Nomes conhecidos") —
+            acesso que morava só no QMessageBox do glossário (morto na R4)."""
+            if self.context is None:
+                return
+            from .research_context import context_path as _context_path
+            caminho = _context_path(self.context.paths)
+            if caminho.exists():
+                open_folder_in_explorer(caminho)
 
         def _docs_data(self, caminho: Path) -> str:
             try:
@@ -10670,11 +10689,10 @@ if QT_IMPORT_ERROR is None:
             self.docs_panel.set_sections(titulo, desta, projeto)
 
         def _show_summary_results(self, ids: list[str]) -> None:
-            """Aviso de conclusao do resumo com acesso direto ao arquivo.
-
-            Resultado invisivel = falha de desenho (feedback 2026-08-26);
-            esta e a ponte minima ate a auditoria de design decidir a casa
-            definitiva (painel de documentos do arquivo)."""
+            """Fim do resumo anunciado NA CASA (R4): faixa de sucesso na
+            aba Documentos + troca para ela — a linha do resumo aparece
+            atualizada logo abaixo. O QMessageBox modal da ponte morreu
+            (interrompia; o banner e estritamente menos invasivo)."""
             from .summarize import resumo_path as _resumo_path
             if self.context is None:
                 return
@@ -10685,24 +10703,11 @@ if QT_IMPORT_ERROR is None:
             ]
             if not produced:
                 return
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Icon.Information)
-            box.setWindowTitle("Resumo pronto")
-            listing = "\n".join(f"  • {path.name}" for path in produced[:10])
-            box.setText(
-                f"Resumo{'s' if len(produced) > 1 else ''} com temas "
-                f"salvo{'s' if len(produced) > 1 else ''} em:\n\n{listing}\n\n"
-                f"Pasta: {produced[0].parent}"
-            )
-            open_file = box.addButton("Abrir resumo", QMessageBox.ButtonRole.AcceptRole)
-            open_dir = box.addButton("Abrir pasta", QMessageBox.ButtonRole.ActionRole)
-            box.addButton("Fechar", QMessageBox.ButtonRole.RejectRole)
-            box.setDefaultButton(open_file)
-            box.exec()
-            if box.clickedButton() is open_file:
-                QDesktopServices.openUrl(QUrl.fromLocalFile(str(produced[0])))
-            elif box.clickedButton() is open_dir:
-                open_folder_in_explorer(produced[0].parent)
+            n = len(produced)
+            texto = ("Resumo com temas pronto." if n == 1
+                     else f"{n} resumos com temas prontos.")
+            self.docs_panel.show_success(texto, caminho=str(produced[0]))
+            self.review_tabs.setCurrentWidget(self.docs_panel)
 
         def _ensure_optional_model(self, key: str, titulo: str, motivo: str,
                                    needs_llm_env: bool = False) -> bool:
@@ -10861,9 +10866,12 @@ if QT_IMPORT_ERROR is None:
             self._pending_glossario = True
 
         def _show_glossario_results(self) -> None:
-            """Aviso de conclusao com acesso ao glossario e ao contexto."""
+            """Fim do glossário anunciado NA CASA (R4): faixa de sucesso na
+            aba Documentos. Os acessos do QMessageBox antigo sobrevivem
+            como botões do banner (Revisar grafias… / Abrir nomes
+            conhecidos); nada foi alterado nas transcrições — o glossário
+            é só leitura."""
             from .glossario import glossary_report_path, load_glossary
-            from .research_context import context_path as _context_path
             if self.context is None:
                 return
             report = glossary_report_path(self.context.paths)
@@ -10872,36 +10880,16 @@ if QT_IMPORT_ERROR is None:
             glossary = load_glossary(self.context.paths)
             entradas = glossary.get("entradas") or []
             com_variantes = [e for e in entradas if e.get("variantes")]
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Icon.Information)
-            box.setWindowTitle("Glossario pronto")
-            resumo = (
-                f"{len(entradas)} nomes encontrados nas transcricoes"
+            texto = (
+                f"Glossário pronto — {len(entradas)} nomes encontrados"
                 + (f", {len(com_variantes)} com grafias diferentes a conferir."
                    if com_variantes else ".")
             )
-            box.setText(
-                f"{resumo}\n\nGlossario: {report.name}\nPasta: {report.parent}\n\n"
-                "Nada foi alterado nas transcrições.\n"
-                "Dica: declare os nomes corretos na secao \"## Nomes conhecidos\" de\n"
-                f"{_context_path(self.context.paths).name} — a AI passa a reconhecer\n"
-                "as variacoes de grafia com muito mais precisao."
-            )
-            open_file = box.addButton("Abrir glossario", QMessageBox.ButtonRole.AcceptRole)
-            revisar = (box.addButton("Revisar grafias...", QMessageBox.ButtonRole.ActionRole)
-                       if com_variantes else None)
-            open_ctx = box.addButton("Abrir nomes conhecidos", QMessageBox.ButtonRole.ActionRole)
-            box.addButton("Fechar", QMessageBox.ButtonRole.RejectRole)
-            box.setDefaultButton(open_file)
-            box.exec()
-            if box.clickedButton() is open_file:
-                QDesktopServices.openUrl(QUrl.fromLocalFile(str(report)))
-            elif revisar is not None and box.clickedButton() is revisar:
-                self.open_spelling_review()
-            elif box.clickedButton() is open_ctx:
-                ctx = _context_path(self.context.paths)
-                if ctx.exists():
-                    QDesktopServices.openUrl(QUrl.fromLocalFile(str(ctx)))
+            extras = ([("Revisar grafias…", "revisar_grafias")]
+                      if com_variantes else [])
+            extras.append(("Abrir nomes conhecidos", "abrir_nomes_conhecidos"))
+            self.docs_panel.show_success(texto, caminho=str(report), extras=extras)
+            self.review_tabs.setCurrentWidget(self.docs_panel)
 
         def open_spelling_review(self) -> None:
             """Revisao de grafias (lote 6b): so aplica o que o usuario marcar."""
@@ -10997,6 +10985,10 @@ if QT_IMPORT_ERROR is None:
             # Mesma higiene para o glossario: a flag sobrevivia a uma falha e
             # a janela de resultados abria sozinha no fim de OUTRO job.
             self._pending_glossario = False
+            # R4: banner de sucesso da aba Documentos anuncia SEMPRE o
+            # ultimo resultado — job novo comecando o dispensa.
+            if getattr(self, "docs_panel", None) is not None:
+                self.docs_panel.clear_success()
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(0)
             self.progress_bar.setVisible(True)
@@ -11135,6 +11127,15 @@ if QT_IMPORT_ERROR is None:
                 self._pending_glossario = False
                 if not interrompido:
                     self._show_glossario_results()
+            # R4: a verificacao terminava SEM anuncio nenhum — ganha o
+            # mesmo banner, mas SEM roubar a aba (relatorio e secundario).
+            if (self.current_job_label == "Verificar exportações"
+                    and not interrompido and self.context is not None):
+                relatorio = self.context.paths.qc_dir / "qc_metrics.csv"
+                if relatorio.exists():
+                    self.docs_panel.show_success(
+                        "Relatório de verificação pronto.",
+                        caminho=str(relatorio))
             if self._close_after_worker:
                 self._close_after_worker = False
                 self.close()

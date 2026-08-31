@@ -74,4 +74,35 @@ textos2 = [w.text() for w in panel.findChildren(QLabel) if w.text()]
 assert any("Outra" in t for t in textos2)
 print("PASS: set_sections reconstroi sem residuos")
 
+# ------------------------------------------------- banner de sucesso (R4)
+# Vive no layout RAIZ (fora do scroll): set_sections nao pode mata-lo.
+docs_abertos: list[str] = []
+panel.open_document_requested.connect(docs_abertos.append)
+
+panel.show_success("Resumo com temas pronto.", caminho="C:/x/resumo.md",
+                   extras=[("Revisar grafias…", "revisar_grafias")])
+assert panel._sucesso.isVisibleTo(panel)
+assert "Resumo com temas pronto." in panel._sucesso_label.text()
+panel.set_sections("Maria", entradas, projeto)   # refresh NAO derruba o banner
+assert panel._sucesso.isVisibleTo(panel), "set_sections matou o banner"
+
+for botao in panel._sucesso.findChildren(QPushButton):
+    if botao.text() == "Abrir":
+        botao.click()
+assert docs_abertos == ["C:/x/resumo.md"], docs_abertos
+
+recebidos.clear()
+for botao in panel._sucesso.findChildren(QPushButton):
+    if botao.text() == "Revisar grafias…":
+        botao.click()
+assert ("acao", "revisar_grafias") in recebidos
+
+# show_success de novo TROCA os botoes (nao acumula) e clear esconde
+panel.show_success("Glossário pronto — 12 nomes.", caminho="C:/x/glossario.md")
+rotulos = [b.text() for b in panel._sucesso.findChildren(QPushButton)]
+assert rotulos.count("Abrir") == 1 and "Revisar grafias…" not in rotulos, rotulos
+panel.clear_success()
+assert not panel._sucesso.isVisibleTo(panel)
+print("PASS: banner de sucesso (sobrevive ao refresh; sinais; clear)")
+
 print("PASS: toy_ui_docs_panel")

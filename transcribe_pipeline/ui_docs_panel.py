@@ -40,11 +40,34 @@ class DocsPanel(QWidget):
     open_requested = Signal(str)             # caminho do arquivo
     show_in_folder_requested = Signal(str)   # caminho do arquivo
     action_requested = Signal(str)           # acao_chave
+    open_document_requested = Signal(str)    # Abrir do banner de sucesso
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         raiz = QVBoxLayout(self)
         raiz.setContentsMargins(0, 0, 0, 0)
+        # Banner de sucesso (R4): o fim de um job e anunciado AQUI, na
+        # casa dos resultados, no lugar dos QMessageBox modais. Vive no
+        # layout RAIZ, acima do scroll — set_sections destroi e recria o
+        # corpo inteiro, e um banner dentro dele morreria no 1o refresh.
+        self._sucesso = QFrame()
+        self._sucesso.setVisible(False)
+        self._sucesso.setStyleSheet(
+            f"QFrame {{ {ui_tokens.banner_style(ui_tokens.SUCCESS)} }}")
+        sucesso_lay = QHBoxLayout(self._sucesso)
+        sucesso_lay.setContentsMargins(ui_tokens.SP_3, ui_tokens.SP_2,
+                                       ui_tokens.SP_3, ui_tokens.SP_2)
+        self._sucesso_label = QLabel("")
+        self._sucesso_label.setWordWrap(True)
+        self._sucesso_label.setStyleSheet("border: none;")
+        sucesso_lay.addWidget(self._sucesso_label, 1)
+        self._sucesso_fechar = QPushButton("×")
+        self._sucesso_fechar.setFixedWidth(28)
+        self._sucesso_fechar.setToolTip("Dispensar este aviso")
+        self._sucesso_fechar.clicked.connect(self.clear_success)
+        sucesso_lay.addWidget(self._sucesso_fechar)
+        self._sucesso_botoes: list[QPushButton] = []
+        raiz.addWidget(self._sucesso)
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -56,6 +79,43 @@ class DocsPanel(QWidget):
         self._scroll.setWidget(self._corpo)
         raiz.addWidget(self._scroll)
         self.set_sections(None, [], [])
+
+    # -- banner de sucesso (R4) ---------------------------------------------
+    def show_success(
+        self,
+        texto: str,
+        caminho: str = "",
+        extras: list[tuple[str, str]] | None = None,
+    ) -> None:
+        """Anuncia um resultado pronto. caminho -> botao Abrir (emite
+        open_document_requested); extras [(rotulo, acao_chave)] viram
+        botoes que emitem action_requested. Chamada nova TROCA os botoes
+        da anterior — o banner e um slot unico, nunca acumula."""
+        for antigo in self._sucesso_botoes:
+            antigo.setParent(None)
+            antigo.deleteLater()
+        self._sucesso_botoes = []
+        self._sucesso_label.setText(f"✓ {texto}")
+        lay = self._sucesso.layout()
+        posicao = lay.indexOf(self._sucesso_fechar)
+        if caminho:
+            abrir = QPushButton("Abrir")
+            abrir.clicked.connect(
+                lambda _c=False, p=caminho: self.open_document_requested.emit(p))
+            lay.insertWidget(posicao, abrir)
+            posicao += 1
+            self._sucesso_botoes.append(abrir)
+        for rotulo, acao in (extras or []):
+            botao = QPushButton(rotulo)
+            botao.clicked.connect(
+                lambda _c=False, a=acao: self.action_requested.emit(a))
+            lay.insertWidget(posicao, botao)
+            posicao += 1
+            self._sucesso_botoes.append(botao)
+        self._sucesso.setVisible(True)
+
+    def clear_success(self) -> None:
+        self._sucesso.setVisible(False)
 
     # -- montagem -----------------------------------------------------------
     def set_sections(
