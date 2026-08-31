@@ -8,6 +8,25 @@ assinatura digital, e o SignPath recusou a assinatura gratuita. O canal
 oficial passa a ser **PyPI + uv** (`uv tool install transcritorio`); ver
 `docs/INSTALL_WINDOWS.md` e `docs/LEGACY_STANDALONE.md`.
 
+- **Reforma de interface — primeiro contato e polimento (R4)**: a
+  etapa final da reforma. Arrastar gravações sem projeto aberto deixou
+  de ser ignorado — o aplicativo oferece criar o projeto ali mesmo e
+  já adiciona os arquivos; depois de adicionar mídia, a barra de
+  status aponta o próximo passo e o botão Transcrever fica em
+  destaque enquanto tudo está pendente. Resumo e glossário prontos
+  agora são anunciados na própria aba Documentos (uma faixa discreta
+  com Abrir/Revisar grafias, no lugar das janelas que interrompiam), e
+  a verificação — que terminava em silêncio — também. A aba
+  Propriedades ficou editável (língua, falantes, rótulos e contexto,
+  com salvar explícito que grava só o que mudou); o diálogo antigo
+  continua para editar várias entrevistas de uma vez. A Fila de
+  processamento mostra o tempo restante ("cerca de 3min") em vez do
+  horário de término. Quem abre o aplicativo logo após atualizar é
+  avisado quando a janela antiga ainda está aberta ("feche e abra de
+  novo"). E ~70 textos de assistentes e diálogos foram corrigidos —
+  inclusive instruções que apontavam para menus que não existem mais
+  desde a reorganização (agora a guarda automática de textos também
+  vigia assistentes e diálogos).
 - **Reforma de interface — comandos consolidados (R3)**: cada função
   passou a ter UM nome e UM lugar. "Exportar…" é um comando só (o
   escopo se escolhe no diálogo); o trio confuso de falantes virou dois
