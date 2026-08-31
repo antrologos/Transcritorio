@@ -381,46 +381,56 @@ def media_splitter_sizes(
     total: int,
     video_visible: bool,
     *,
-    min_media: int = 180,
-    min_media_video: int = 300,
+    min_video: int = 140,
+    min_audio: int = 180,
     min_table: int = 180,
     min_editor: int = 210,
 ) -> list[int]:
-    """Distribuicao [midia, blocos, editor] do review_splitter (2026-08-31).
+    """Distribuicao [video, audio, blocos, editor] do review_splitter.
 
-    O setSizes da construcao rodava com o video oculto e nada
-    redistribuia quando ele aparecia: o painel de midia engordava e a
-    tabela de blocos ficava com ~2 linhas. Invariantes: soma == total
-    exata; a tabela nunca fica abaixo de min_table quando o total
-    permite (o deficit sai primeiro da midia, depois do editor); janela
-    menor que a soma dos pisos escala proporcionalmente.
+    Desde 2026-08-31 sao QUATRO paineis independentes e COLAPSAVEIS
+    (pedido do usuario: minimizar cada secao a zero e esticar sem
+    teto); esta funcao da a distribuicao das TRANSICOES (video
+    aparece/some) — depois disso quem manda e o arrasto. Invariantes:
+    soma == total exata; a tabela de blocos nunca fica abaixo de
+    min_table quando o total permite (o deficit sai do video, depois
+    do audio, depois do editor); janela menor que a soma dos pisos
+    escala proporcionalmente; video oculto = 0 no primeiro slot.
 
-    min_media_video e min_editor PRECISAM cobrir os minimumSizeHint
-    reais dos paineis (midia com video: 120 + onda 96 + fileiras ≈ 278;
-    editor: text_edit 60 + fileiras ≈ 208) — abaixo disso o QSplitter
-    clampa em silencio e a garantia da funcao vira ficcao. Se mudar o
-    setMinimumHeight do video, da onda ou do text_edit, ajustar junto.
+    Os pisos cobrem os minimumSizeHint reais dos paineis (video 120;
+    audio = onda 96 + duas fileiras de botoes ≈ 176; editor =
+    text_edit 60 + fileiras ≈ 208) para a distribuicao inicial nao
+    nascer clampada. Mudou um minimo interno? Ajustar aqui junto.
     """
     if total <= 0:
-        return [0, 0, 0]
-    piso_media = min_media_video if video_visible else min_media
-    frac_media, frac_editor = (0.36, 0.24) if video_visible else (0.24, 0.28)
-    pisos = piso_media + min_table + min_editor
-    if total < pisos:
-        media = total * piso_media // pisos
-        tabela = total * min_table // pisos
-        return [media, tabela, total - media - tabela]
-    media = max(piso_media, round(total * frac_media))
-    editor = max(min_editor, round(total * frac_editor))
-    tabela = total - media - editor
+        return [0, 0, 0, 0]
+    if video_visible:
+        fracs = (0.22, 0.20, 0.34, 0.24)
+        pisos = (min_video, min_audio, min_table, min_editor)
+    else:
+        fracs = (0.0, 0.26, 0.46, 0.28)
+        pisos = (0, min_audio, min_table, min_editor)
+    soma_pisos = sum(pisos)
+    if total < soma_pisos:
+        video = total * pisos[0] // soma_pisos
+        audio = total * pisos[1] // soma_pisos
+        tabela = total * pisos[2] // soma_pisos
+        return [video, audio, tabela, total - video - audio - tabela]
+    video = max(pisos[0], round(total * fracs[0])) if video_visible else 0
+    audio = max(pisos[1], round(total * fracs[1]))
+    editor = max(pisos[3], round(total * fracs[3]))
+    tabela = total - video - audio - editor
     if tabela < min_table:
         deficit = min_table - tabela
-        cede = min(deficit, media - piso_media)
-        media -= cede
+        cede = min(deficit, video - pisos[0])
+        video -= cede
         deficit -= cede
-        editor -= min(deficit, editor - min_editor)
-        tabela = total - media - editor
-    return [media, tabela, editor]
+        cede = min(deficit, audio - pisos[1])
+        audio -= cede
+        deficit -= cede
+        editor -= min(deficit, editor - pisos[3])
+        tabela = total - video - audio - editor
+    return [video, audio, tabela, editor]
 
 
 def diar_offer_candidates(
@@ -5127,6 +5137,8 @@ if QT_IMPORT_ERROR is None:
             # APLICADO — detector de transicao do review_splitter.
             self._video_user_hidden = False
             self._video_panel_visible = False
+            # Aviso de trocas de falante dispensado (por entrevista, sessao).
+            self._boundary_dismissed: set[str] = set()
             self.worker: PipelineWorker | None = None
             self.current_job_label = ""
             self._loading_editor = False
@@ -6685,21 +6697,20 @@ if QT_IMPORT_ERROR is None:
             self.review_tabs.currentChanged.connect(self._on_review_tab_changed)
             layout.addWidget(self.review_tabs, stretch=1)
 
-            media_panel = QWidget()
-            media_layout = QVBoxLayout(media_panel)
-            media_layout.setContentsMargins(0, 0, 0, 0)
-
+            # O video e um PANE PROPRIO do splitter (2026-08-31): assim ele
+            # colapsa/estica independente do audio. media_panel vira so
+            # onda + controles.
             self.video_widget = QVideoWidget()
-            # 120 casa com o piso min_media_video de media_splitter_sizes
-            # (120 + onda 96 + fileiras de botoes) — mudar um exige o outro.
+            # 120 vale para tamanhos intermediarios; o colapso a zero via
+            # arrasto e permitido pelo setCollapsible do splitter.
             self.video_widget.setMinimumHeight(120)
             self.video_widget.setStyleSheet(f"background: {ui_tokens.VIDEO_BG};")
             self.video_widget.setVisible(False)
             self.player.setVideoOutput(self.video_widget)
-            # stretch=1: a sobra do painel de midia vai para o video (que
-            # escala com letterbox); o TETO real vem da redistribuicao do
-            # splitter — sem maximumHeight, o arrasto do usuario manda.
-            media_layout.addWidget(self.video_widget, 1)
+
+            media_panel = QWidget()
+            media_layout = QVBoxLayout(media_panel)
+            media_layout.setContentsMargins(0, 0, 0, 0)
 
             self.waveform_widget = WaveformWidget()
             self.waveform_widget.seek_requested.connect(self.seek_waveform)
@@ -6866,6 +6877,15 @@ if QT_IMPORT_ERROR is None:
             boundary_next.setToolTip("Próximo bloco marcado")
             boundary_next.clicked.connect(lambda: self._on_boundary_nav(1))
             boundary_layout.addWidget(boundary_next)
+            # Dispensavel (pedido 2026-08-31): o aviso pode ser minimizado.
+            # Vale por entrevista, na sessao — reabrir o app o traz de volta.
+            boundary_dismiss = QPushButton("×")
+            boundary_dismiss.setFixedWidth(28)
+            boundary_dismiss.setToolTip(
+                "Dispensar este aviso nesta entrevista (as marcações "
+                "continuam na coluna Marcações).")
+            boundary_dismiss.clicked.connect(self._dismiss_boundary_banner)
+            boundary_layout.addWidget(boundary_dismiss)
             # Prioridades: separacao falhada > trocas suspeitas > vozes.
             self.banner_area.add_banner("diar_failed", self.diar_failed_banner, 0)
             self.banner_area.add_banner("boundary", self.boundary_banner, 1)
@@ -6915,15 +6935,19 @@ if QT_IMPORT_ERROR is None:
             turn_header.addWidget(self.wrap_turns_checkbox)
             turn_layout.addLayout(turn_header)
             turn_layout.addWidget(self.turn_table)
+            # 4 paineis COLAPSAVEIS (pedido 2026-08-31): video | audio |
+            # blocos | editor — arrastar alem do minimo colapsa a zero, e
+            # com os vizinhos colapsados qualquer painel ocupa tudo.
+            self.review_splitter.addWidget(self.video_widget)
             self.review_splitter.addWidget(media_panel)
             self.review_splitter.addWidget(turn_panel)
             self.review_splitter.addWidget(self._build_editor_panel())
-            self.review_splitter.setCollapsible(0, False)
-            self.review_splitter.setCollapsible(1, False)
-            self.review_splitter.setCollapsible(2, False)
+            for indice in range(4):
+                self.review_splitter.setCollapsible(indice, True)
             self.review_splitter.setStretchFactor(0, 1)
-            self.review_splitter.setStretchFactor(1, 3)
-            self.review_splitter.setStretchFactor(2, 2)
+            self.review_splitter.setStretchFactor(1, 1)
+            self.review_splitter.setStretchFactor(2, 3)
+            self.review_splitter.setStretchFactor(3, 2)
             # Uma fonte de verdade com a redistribuicao reativa (920 =
             # nominal da janela 1440x900; a 1a exibicao reescala).
             self.review_splitter.setSizes(media_splitter_sizes(920, False))
@@ -7909,10 +7933,17 @@ if QT_IMPORT_ERROR is None:
             """Indices dos turnos marcados e ainda nao tratados."""
             return boundary_flagged_rows(self.turns)
 
+        def _dismiss_boundary_banner(self) -> None:
+            if self.current_interview_id:
+                self._boundary_dismissed.add(self.current_interview_id)
+            self._update_boundary_banner()
+
         def _update_boundary_banner(self) -> None:
             if not hasattr(self, "boundary_banner"):
                 return
-            rows = self._boundary_suspect_rows() if self.review else []
+            dispensado = (self.current_interview_id or "") in self._boundary_dismissed
+            rows = (self._boundary_suspect_rows()
+                    if self.review and not dispensado else [])
             if rows:
                 plural = "s" if len(rows) > 1 else ""
                 self.boundary_banner_label.setText(

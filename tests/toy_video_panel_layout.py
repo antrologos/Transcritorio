@@ -1,14 +1,14 @@
-"""Toy 2026-08-31: painel de video compacto + divisor que funciona.
+"""Toy 2026-08-31: 4 paineis verticais colapsaveis + divisores com curso.
 
-Teste real do b45: em entrevista de VIDEO o painel de midia engordava
-(sobra do layout ia toda para o QVideoWidget) e a tabela de blocos
-ficava com ~2 linhas; o setSizes da construcao rodava com o video
-oculto e nada redistribuia na transicao.
+Historia (testes reais b45-b47): o painel de midia engordava com video
+e a tabela ficava com ~2 linhas; depois, os minimumSizeHint travavam o
+curso dos divisores; por fim o usuario pediu: minimizar CADA secao a
+zero e esticar sem teto. O review_splitter virou 4 paineis
+independentes (video | audio | blocos | editor), todos colapsaveis.
 
-Secao A: funcao pura media_splitter_sizes (invariantes de soma, pisos
-e proporcionalidade). Secao B: transicoes via stub bindado (padrao
-toy_open_media_state) — redistribui SO na mudanca de estado; toggle
-oculta o video sem tocar o player; residuo some ao fechar.
+Secao A: funcao pura media_splitter_sizes (4 slots). Secao B:
+transicoes via stub bindado. Secao C: janela real — colapso a zero,
+folga dos divisores e pisos cobrindo os minimos reais.
 """
 from __future__ import annotations
 
@@ -32,34 +32,34 @@ from transcribe_pipeline.review_studio_qt import media_splitter_sizes
 app = QApplication.instance() or QApplication([])
 
 # ---------------------------------------------------------------- Secao A
-for total, video in [(920, True), (920, False), (700, True), (640, True),
+for total, video in [(920, True), (920, False), (760, True), (640, True),
                      (500, True), (1200, True), (2000, False)]:
     partes = media_splitter_sizes(total, video)
-    assert sum(partes) == total, (total, video, partes)
+    assert len(partes) == 4 and sum(partes) == total, (total, video, partes)
     assert all(p >= 0 for p in partes), (total, video, partes)
 
-m, t, e = media_splitter_sizes(920, True)
-assert m >= 300 and t >= 180 and e >= 210, (m, t, e)
-m, t, e = media_splitter_sizes(920, False)
-assert t >= 420, (m, t, e)  # audio: blocos dominam, como o layout atual
-m, t, e = media_splitter_sizes(700, True)
-assert m == 300 and t >= 180, (m, t, e)  # midia clampa no piso
-# Janela menor que a soma dos pisos (690 c/ video): proporcional exato
+v, a, t, e = media_splitter_sizes(920, True)
+assert v >= 140 and a >= 180 and t >= 180 and e >= 210, (v, a, t, e)
+v, a, t, e = media_splitter_sizes(920, False)
+assert v == 0 and t >= 400, (v, a, t, e)  # audio: blocos dominam
+v, a, t, e = media_splitter_sizes(760, True)
+assert t >= 180, (v, a, t, e)  # deficit sai de video/audio, tabela vive
+# Janela menor que a soma dos pisos (710 c/ video): proporcional exato
 for total in (640, 500):
     partes = media_splitter_sizes(total, True)
-    assert sum(partes) == total and all(p > 0 for p in partes), partes
-assert media_splitter_sizes(0, True) == [0, 0, 0]
-assert media_splitter_sizes(-10, False) == [0, 0, 0]
+    assert sum(partes) == total, partes
+assert media_splitter_sizes(0, True) == [0, 0, 0, 0]
+assert media_splitter_sizes(-10, False) == [0, 0, 0, 0]
 # Monotonicidade: mais janela nunca da MENOS tabela
-assert (media_splitter_sizes(1200, True)[1]
-        >= media_splitter_sizes(920, True)[1])
-print("PASS: media_splitter_sizes (somas, pisos, proporcional, monotonia)")
+assert (media_splitter_sizes(1200, True)[2]
+        >= media_splitter_sizes(920, True)[2])
+print("PASS: media_splitter_sizes 4 slots (somas, pisos, proporcional)")
 
 
 # ---------------------------------------------------------------- Secao B
 class _Splitter:
     def __init__(self):
-        self._sizes = [240, 420, 260]
+        self._sizes = [0, 240, 420, 260]
         self.chamadas: list[list[int]] = []
 
     def sizes(self):
@@ -115,7 +115,7 @@ assert stub.review_splitter.chamadas == [media_splitter_sizes(920, True)], \
 print("PASS: audio->video redistribui 1x e mostra o botao")
 
 # 2) video -> video (outro arquivo): NAO redistribui (arrasto respeitado)
-stub.review_splitter._sizes = [500, 250, 170]  # usuario arrastou
+stub.review_splitter._sizes = [300, 200, 250, 170]  # usuario arrastou
 stub.media_candidates = [Path(r"C:\tmp\outro.mp4")]
 stub.set_media_source(0)
 assert len(stub.review_splitter.chamadas) == 1, stub.review_splitter.chamadas
@@ -156,12 +156,7 @@ assert stub3.video_toggle_button.texto == "Mostrar vídeo"
 assert stub3.review_splitter.chamadas == [], stub3.review_splitter.chamadas
 print("PASS: preferencia da sessao vence (video fica oculto, botao oferece)")
 
-# ------------------------------------------------ Secao C: folga REAL
-# Teste real 2026-08-31 (b46): os minimumSizeHint dos paineis (fileira
-# de filtros ~600px; titulo longo + controles do player ~1850px; editor
-# 268px) consumiam a janela inteira e os divisores nao tinham curso
-# NENHUM. Minimos explicitos nos panes horizontais + text_edit 60
-# devolvem o curso; este teste mede a folga na janela real.
+# ------------------------------------------------ Secao C: janela REAL
 import csv
 import tempfile
 
@@ -189,31 +184,38 @@ win.resize(1440, 900)
 win.show()
 app.processEvents()
 
+# 4 paineis, todos colapsaveis (minimo ZERO via arrasto/setSizes)
+assert win.review_splitter.count() == 4
+for i in range(4):
+    assert win.review_splitter.isCollapsible(i), f"pane{i} nao colapsavel"
+assert win.review_splitter.widget(0) is win.video_widget
+
+# Colapso REAL a zero: blocos ocupam tudo
+win.video_widget.setVisible(True)
+app.processEvents()
+total_v = sum(win.review_splitter.sizes())
+win.review_splitter.setSizes([0, 0, total_v, 0])
+app.processEvents()
+tamanhos = win.review_splitter.sizes()
+assert tamanhos[0] == 0 and tamanhos[1] == 0 and tamanhos[3] == 0, tamanhos
+assert tamanhos[2] >= total_v - 10, tamanhos
+print("PASS: cada painel colapsa a zero (blocos podem ocupar tudo)")
+
+# Pisos da funcao cobrem os minimos reais (senao a distribuicao das
+# transicoes nasce clampada)
+assert win.review_splitter.widget(1).minimumSizeHint().height() <= 180
+assert win.review_splitter.widget(3).minimumSizeHint().height() <= 210
+assert win.video_widget.minimumHeight() <= 140
+
+# Horizontal segue com curso (fix do b47)
 from PySide6.QtWidgets import QSplitter
 h_split = win.interview_table.parent()
 while h_split is not None and not isinstance(h_split, QSplitter):
     h_split = h_split.parent()
-assert h_split.widget(0).minimumWidth() <= 240, h_split.widget(0).minimumWidth()
-assert h_split.widget(1).minimumWidth() <= 500, h_split.widget(1).minimumWidth()
 largura = sum(h_split.sizes())
 h_split.setSizes([240, largura - 240])
 app.processEvents()
-assert h_split.sizes()[0] <= 260, (
-    f"splitter horizontal sem curso: {h_split.sizes()} (largura {largura})")
-
-# Vertical: minimos reais dos 3 paineis precisam deixar folga na janela
-# E ficar cobertos pelos pisos da funcao (senao o QSplitter clampa em
-# silencio e a redistribuicao mente).
-alturas = [win.review_splitter.widget(i).minimumSizeHint().height()
-           for i in range(3)]
-total_v = sum(win.review_splitter.sizes())
-assert sum(alturas) <= total_v - 100, (alturas, total_v)
-win.video_widget.setVisible(True)
-app.processEvents()
-media_min = win.review_splitter.widget(0).minimumSizeHint().height()
-editor_min = win.review_splitter.widget(2).minimumSizeHint().height()
-assert media_min <= 300, media_min   # piso min_media_video cobre o real
-assert editor_min <= 210, editor_min  # piso min_editor cobre o real
-print("PASS: divisores com curso real (h<=240/500; v com folga; pisos cobrem)")
+assert h_split.sizes()[0] <= 260, h_split.sizes()
+print("PASS: pisos cobrem minimos reais; horizontal com curso")
 
 print("PASS: toy_video_panel_layout")
