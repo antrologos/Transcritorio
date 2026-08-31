@@ -94,6 +94,7 @@ try:
         QStyle,
         QTableWidget,
         QTableWidgetItem,
+        QTabWidget,
         QTextEdit,
         QTreeWidget,
         QTreeWidgetItem,
@@ -6441,7 +6442,27 @@ if QT_IMPORT_ERROR is None:
 
             self.review_splitter = QSplitter(Qt.Orientation.Vertical)
             self.review_splitter.setHandleWidth(8)
-            layout.addWidget(self.review_splitter, stretch=1)
+            # Abas do painel direito (R2, dossie RD): Transcrição
+            # (trabalho diario) | Documentos (casa dos resultados).
+            # Propriedades chega no proximo passo da R2. O splitter e
+            # REPARENTADO para dentro da aba — nunca recriado (as
+            # ancoras de atalho vivem nos widgets).
+            self.review_tabs = QTabWidget()
+            transcricao_tab = QWidget()
+            transcricao_layout = QVBoxLayout(transcricao_tab)
+            transcricao_layout.setContentsMargins(0, ui_tokens.SP_2, 0, 0)
+            transcricao_layout.addWidget(self.review_splitter)
+            self.review_tabs.addTab(transcricao_tab, "Transcrição")
+            from .ui_docs_panel import DocsPanel
+            self.docs_panel = DocsPanel()
+            self.docs_panel.open_requested.connect(
+                lambda p: open_folder_in_explorer(Path(p)))
+            self.docs_panel.show_in_folder_requested.connect(
+                self._show_path_in_folder)
+            self.docs_panel.action_requested.connect(self._docs_action)
+            self.review_tabs.addTab(self.docs_panel, "Documentos")
+            self.review_tabs.currentChanged.connect(self._on_review_tab_changed)
+            layout.addWidget(self.review_tabs, stretch=1)
 
             media_panel = QWidget()
             media_layout = QVBoxLayout(media_panel)
@@ -7556,6 +7577,8 @@ if QT_IMPORT_ERROR is None:
                 visible = "Identificação de falantes não concluída" in str(job.get("last_error") or "")
             self.diar_failed_banner.setVisible(visible)
             self._update_boundary_banner()
+            # Abrir/trocar de entrevista muda o alvo da aba Documentos.
+            self._on_review_tab_changed(-1)
 
         def _boundary_suspect_rows(self) -> list[int]:
             """Indices dos turnos marcados e ainda nao tratados."""
@@ -10315,6 +10338,132 @@ if QT_IMPORT_ERROR is None:
             if path.exists():
                 QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
+        # ---- aba Documentos (R2) ------------------------------------------
+        def _on_review_tab_changed(self, _index: int) -> None:
+            if getattr(self, "docs_panel", None) is not None and \
+                    self.review_tabs.currentWidget() is self.docs_panel:
+                self._refresh_docs_panel()
+
+        def _show_path_in_folder(self, caminho: str) -> None:
+            if sys.platform == "win32":
+                # /select, COLADO ao caminho (com argumento separado o
+                # Explorer ignora e abre Documentos).
+                subprocess.Popen(["explorer", f"/select,{caminho}"])
+            else:
+                open_folder_in_explorer(Path(caminho).parent)
+
+        def _docs_action(self, chave: str) -> None:
+            """Roteia os botoes da aba Documentos para os fluxos existentes
+            (mesmos gates/confirmacoes de sempre — redundancia estrategica)."""
+            rotas = {
+                "exportar": self.export_reviews,
+                "gerar_resumo": self.run_summarize_job,
+                "gerar_glossario": self.run_glossario_job,
+                "revisar_grafias": self.open_spelling_review,
+                "verificar": self.run_qc_job,
+                "abrir_resultados": self.open_export_folder,
+            }
+            handler = rotas.get(chave)
+            if handler is not None:
+                handler()
+
+        def _docs_data(self, caminho: Path) -> str:
+            try:
+                from datetime import datetime as _dt
+                return _dt.fromtimestamp(caminho.stat().st_mtime).strftime("%d/%m/%Y")
+            except OSError:
+                return ""
+
+        def _refresh_docs_panel(self) -> None:
+            """Reconstroi a aba Documentos a partir do disco (fonte da
+            verdade). Chamado ao abrir a aba, ao abrir/fechar entrevista e
+            ao fim de jobs — nunca em update_action_states (globs custam)."""
+            if getattr(self, "docs_panel", None) is None:
+                return
+            from .ui_docs_panel import DocEntry
+            if self.context is None:
+                self.docs_panel.set_sections(None, [], [])
+                return
+
+            desta: list[DocEntry] = []
+            titulo = None
+            iid = self.current_interview_id
+            if iid:
+                meta = (self.context.metadata.get(iid) or {})
+                titulo = str(meta.get("title") or iid)
+                alvo = self._export_target_dir()
+                for chave, rotulo, ext, frase in [
+                    ("export_docx", "Transcrição final (Word)", "docx",
+                     "ainda não exportada"),
+                    ("export_md", "Transcrição final (texto)", "md",
+                     "ainda não exportada"),
+                    ("export_srt", "Legendas (SRT)", "srt",
+                     "ainda não exportadas"),
+                ]:
+                    achado: Path | None = None
+                    try:
+                        achado = next(iter(sorted(alvo.rglob(f"{iid}*.{ext}"))), None)
+                    except OSError:
+                        achado = None
+                    if achado is not None:
+                        desta.append(DocEntry(
+                            chave, rotulo, estado="existe",
+                            detalhe=f"exportada em {self._docs_data(achado)}",
+                            caminho=str(achado)))
+                    else:
+                        desta.append(DocEntry(
+                            chave, rotulo, estado="ausente", detalhe=frase,
+                            acao_rotulo="Exportar…", acao_chave="exportar"))
+                from .summarize import resumo_path as _resumo_path
+                resumo = _resumo_path(self.context.paths, iid)
+                if resumo.exists():
+                    desta.append(DocEntry(
+                        "resumo", "Resumo com temas", ai=True, estado="existe",
+                        detalhe=f"gerado em {self._docs_data(resumo)}",
+                        caminho=str(resumo)))
+                else:
+                    desta.append(DocEntry(
+                        "resumo", "Resumo com temas", ai=True, estado="ausente",
+                        detalhe="ainda não gerado",
+                        acao_rotulo="✨ Gerar", acao_chave="gerar_resumo"))
+                backups_dir = self.context.paths.review_dir / "edits" / "backups"
+                try:
+                    n_backups = len(list(backups_dir.glob(f"{iid}*")))
+                except OSError:
+                    n_backups = 0
+                if n_backups:
+                    desta.append(DocEntry(
+                        "backups", f"Versões anteriores ({n_backups})",
+                        estado="existe", caminho=str(backups_dir)))
+
+            projeto: list[DocEntry] = []
+            from .glossario import glossary_report_path as _glos_path
+            glos = _glos_path(self.context.paths)
+            if glos.exists():
+                projeto.append(DocEntry(
+                    "glossario", "Glossário de nomes", ai=True, estado="existe",
+                    detalhe=f"gerado em {self._docs_data(glos)}",
+                    caminho=str(glos),
+                    extras=(("Revisar grafias…", "revisar_grafias"),)))
+            else:
+                projeto.append(DocEntry(
+                    "glossario", "Glossário de nomes", ai=True,
+                    estado="ausente", detalhe="ainda não gerado",
+                    acao_rotulo="✨ Gerar", acao_chave="gerar_glossario"))
+            qc_csv = self.context.paths.qc_dir / "qc_metrics.csv"
+            if qc_csv.exists():
+                projeto.append(DocEntry(
+                    "verificacao", "Relatório de verificação", estado="existe",
+                    detalhe=f"gerado em {self._docs_data(qc_csv)}",
+                    caminho=str(qc_csv)))
+            else:
+                projeto.append(DocEntry(
+                    "verificacao", "Relatório de verificação",
+                    estado="ausente", detalhe="ainda não gerado",
+                    acao_rotulo="Gerar", acao_chave="verificar"))
+
+            self.docs_panel.set_sections(titulo, desta, projeto)
+
         def _show_summary_results(self, ids: list[str]) -> None:
             """Aviso de conclusao do resumo com acesso direto ao arquivo.
 
@@ -10697,6 +10846,9 @@ if QT_IMPORT_ERROR is None:
             # downloads no meio de acoes): invalidar o retrato de
             # capacidades evita tooltips/notas mentindo apos o download.
             self._invalidate_capability_cache()
+            # Jobs produzem documentos (exports, resumo, glossario, QC):
+            # se a aba Documentos esta a vista, refletir na hora.
+            self._on_review_tab_changed(-1)
             self.progress_bar.setRange(0, 100)
             # "cancelado" e interrupcao tanto quanto "interrompido": tratar
             # igual (sem barra em 100%, sem dialogos de resultado).

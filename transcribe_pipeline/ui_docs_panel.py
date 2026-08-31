@@ -69,6 +69,10 @@ class DocsPanel(QWidget):
             item = self._corpo_layout.takeAt(0)
             w = item.widget()
             if w is not None:
+                # setParent(None) IMEDIATO: deleteLater e diferido e o
+                # widget orfao continuaria pintado por cima do conteudo
+                # novo ate o event loop girar (visto na galeria da R2).
+                w.setParent(None)
                 w.deleteLater()
 
         if entrevista_titulo is None and not do_projeto:

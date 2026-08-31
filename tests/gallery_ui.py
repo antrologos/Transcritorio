@@ -86,4 +86,11 @@ win.cancel_job_button.setVisible(True)
 app.processEvents()
 captura(win, "03_job_em_andamento")
 
+# Estado 4: aba Documentos (R2)
+if hasattr(win, "review_tabs"):
+    win.review_tabs.setCurrentWidget(win.docs_panel)
+    app.processEvents()
+    captura(win, "04_aba_documentos")
+    win.review_tabs.setCurrentIndex(0)
+
 print("OK: galeria gerada")
