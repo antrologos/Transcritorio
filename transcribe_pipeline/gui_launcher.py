@@ -46,12 +46,16 @@ def _splash_pixmap():
     return pixmap
 
 
-def _request_activate() -> bool:
-    """Tenta acordar uma instancia ja aberta. True = existe, ja foi acordada."""
+def _request_activate(key: str = _SINGLE_INSTANCE_KEY) -> bool:
+    """Tenta acordar uma instancia ja aberta. True = existe, ja foi acordada.
+
+    `key` parametrizada para os toys usarem um socket proprio — com o app
+    REAL aberto na maquina, o probe na chave global encontraria a janela
+    de verdade e o teste viraria refem do ambiente."""
     from PySide6.QtNetwork import QLocalSocket
 
     probe = QLocalSocket()
-    probe.connectToServer(_SINGLE_INSTANCE_KEY)
+    probe.connectToServer(key)
     if not probe.waitForConnected(300):
         return False
     probe.write(b"activate")

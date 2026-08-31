@@ -28,14 +28,16 @@ pixmap = gui_launcher._splash_pixmap()
 assert not pixmap.isNull() and pixmap.width() > 0
 print("PASS: splash pixmap gerado")
 
-key = gui_launcher._SINGLE_INSTANCE_KEY
+# Chave PROPRIA do teste: na chave global, um Transcritorio real aberto
+# na maquina faria o probe achar a janela de verdade (flake ambiental).
+key = f"TranscritorioToyLauncher-{os.getpid()}"
 QLocalServer.removeServer(key)
-assert gui_launcher._request_activate() is False
+assert gui_launcher._request_activate(key) is False
 print("PASS: sem instancia aberta -> probe False (abre normalmente)")
 
 server = QLocalServer()
 assert server.listen(key), server.errorString()
-assert gui_launcher._request_activate() is True
+assert gui_launcher._request_activate(key) is True
 print("PASS: com instancia escutando -> probe True (segunda instancia sai)")
 
 server.close()

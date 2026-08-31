@@ -255,7 +255,7 @@ try:
         fail(f"esperava 1 tabela, achou {len(tables)}")
 
     buttons = [b.text() for b in d.findChildren(QPushButton)]
-    expected_btns = {"Abrir pasta de modelos", "Remover orfaos", "Baixar outros modelos...", "Trocar token HF...", "Fechar"}
+    expected_btns = {"Abrir pasta de modelos", "Remover órfãos", "Baixar outros modelos…", "Trocar token HF…", "Fechar"}
     missing = expected_btns - set(buttons)
     if not missing:
         ok(f"5 botoes principais presentes")

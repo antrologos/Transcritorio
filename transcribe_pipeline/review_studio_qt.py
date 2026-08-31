@@ -1295,14 +1295,14 @@ if QT_IMPORT_ERROR is None:
                         _logger.warning("Arquivo %s falhou no lote: %s", group, exc)
                         continue
                     completed_weight += weight
-                    self.progress.emit(f"Etapa {index} de {len(self.steps)} concluida: {message}", end_percent)
+                    self.progress.emit(f"Etapa {index} de {len(self.steps)} concluída: {message}", end_percent)
                     if self.cancel_after_step and index < len(self.steps):
                         self.finished_ok.emit(f"{self.label} interrompido apos a etapa atual.")
                         return
                 if failed_groups:
                     resumo = (f"{self.label} concluído com {len(failed_groups)} "
                               "arquivo(s) com falha — veja a coluna Transcrição "
-                              "e a Fila de tarefas.")
+                              "e a fila de processamento (Ferramentas).")
                     if seen_groups and failed_groups >= seen_groups:
                         # Todos falharam: vermelho, COM a causa real (num lote
                         # de 1 arquivo o resumo generico escondia o erro).
@@ -1758,12 +1758,12 @@ if QT_IMPORT_ERROR is None:
             self.resize(780, 520)
             layout = QVBoxLayout(self)
 
-            header = QLabel("Modelos locais de transcrição, separação de falantes e IA")
+            header = QLabel("Modelos locais de transcrição, separação de falantes e AI")
             header.setStyleSheet("font-size: 14px; font-weight: 700;")
             layout.addWidget(header)
 
             subtitle = QLabel(
-                "Os modelos ficam em cache local e sao reutilizados entre projetos. "
+                "Os modelos ficam em cache local e são reutilizados entre projetos. "
                 "Remoção libera espaço em disco; você poderá baixar novamente a qualquer momento."
             )
             subtitle.setStyleSheet(_style_muted())
@@ -1788,14 +1788,14 @@ if QT_IMPORT_ERROR is None:
             self.open_folder_btn = QPushButton("Abrir pasta de modelos")
             self.open_folder_btn.clicked.connect(self._open_models_folder)
             btn_row.addWidget(self.open_folder_btn)
-            self.remove_orphans_btn = QPushButton("Remover orfaos")
-            self.remove_orphans_btn.setToolTip("Apagar modelos em cache que não estão mais catalogados pelo Transcritorio.")
+            self.remove_orphans_btn = QPushButton("Remover órfãos")
+            self.remove_orphans_btn.setToolTip("Apagar modelos em cache que não estão mais catalogados pelo Transcritório.")
             self.remove_orphans_btn.clicked.connect(self._remove_orphans)
             btn_row.addWidget(self.remove_orphans_btn)
-            self.download_btn = QPushButton("Baixar outros modelos...")
+            self.download_btn = QPushButton("Baixar outros modelos…")
             self.download_btn.clicked.connect(self._open_download_wizard)
             btn_row.addWidget(self.download_btn)
-            self.token_btn = QPushButton("Trocar token HF...")
+            self.token_btn = QPushButton("Trocar token HF…")
             self.token_btn.clicked.connect(self._change_token)
             btn_row.addWidget(self.token_btn)
             btn_row.addStretch(1)
@@ -2046,7 +2046,7 @@ if QT_IMPORT_ERROR is None:
 
             total_bytes = sum(int(e.get("size_on_disk", 0)) for e in scan)
             self.summary_label.setText(
-                f"Espaco total em cache: {model_manager._format_size(total_bytes)}  |  Pasta: {cache_root}"
+                f"Espaço total em cache: {model_manager._format_size(total_bytes)}  |  Pasta: {cache_root}"
             )
 
         # -- actions ------------------------------------------------------------
@@ -2295,7 +2295,7 @@ if QT_IMPORT_ERROR is None:
             # Aviso especial se e o modelo configurado
             warn = ""
             if status == "Em uso":
-                warn = "\n\nEste modelo está selecionado em Configurar transcrição. Após remover, você precisará baixá-lo de novo ou trocar o modelo antes da proxima transcricao."
+                warn = "\n\nEste modelo está selecionado em Configurar transcrição. Após remover, você precisará baixá-lo de novo ou trocar o modelo antes da próxima transcrição."
             reply = QMessageBox.question(
                 self,
                 "Remover modelo",
@@ -2745,7 +2745,7 @@ if QT_IMPORT_ERROR is None:
             skip_note = QLabel("Deixe em branco para manter o nome atual e decidir depois.")
             skip_note.setStyleSheet(_style_muted())
             layout.addWidget(skip_note)
-            self.dont_ask_checkbox = QCheckBox("Não perguntar ao abrir transcrições deste projeto (reative no menu Transcrever)")
+            self.dont_ask_checkbox = QCheckBox("Não perguntar ao abrir transcrições deste projeto (reative em Ferramentas)")
             layout.addWidget(self.dont_ask_checkbox)
             buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
             buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Aplicar nomes")
@@ -3637,7 +3637,7 @@ if QT_IMPORT_ERROR is None:
                 self.model_combo.addItem(current, current)
             layout.addWidget(self.model_combo)
             nota = QLabel("Modelos instalados neste computador. Para baixar "
-                          "outros, use Transcrever → Gerenciar modelos…")
+                          "outros, use Ferramentas → Gerenciar modelos…")
             nota.setWordWrap(True)
             nota.setStyleSheet(_style_muted())
             layout.addWidget(nota)
@@ -3902,7 +3902,7 @@ if QT_IMPORT_ERROR is None:
             # Recomendado marcado, escolha sempre do usuario.
             chaves_ia = _wizard_optional_keys("completo", hardware, em_cache)
             self._ai_gb = round(sum(tamanhos.get(k, 0.0) for k in chaves_ia), 1)
-            self._ai_download_group = QGroupBox("Modelos de IA do perfil Completo")
+            self._ai_download_group = QGroupBox("Modelos de AI do perfil Completo")
             ai_layout = QVBoxLayout(self._ai_download_group)
             self._ai_now_radio = QRadioButton(
                 f"Baixar agora, junto com os demais (~{self._ai_gb:.1f} GB "
@@ -3916,7 +3916,7 @@ if QT_IMPORT_ERROR is None:
                 caps.capability("resumo_perguntar"), hardware)
             self._ai_blocked_note = QLabel(
                 "O modelo de análise (8,7 GB) não entra no download: precisa de "
-                "placa NVIDIA. As demais funções de IA valem."
+                "placa NVIDIA. As demais funções de AI valem."
                 if bloqueio_qwen else "")
             self._ai_blocked_note.setWordWrap(True)
             self._ai_blocked_note.setStyleSheet(_style_muted())
@@ -3938,7 +3938,7 @@ if QT_IMPORT_ERROR is None:
                 f"Os tamanhos acima são estimativas com o modelo de transcrição "
                 f"recomendado para esta máquina ({variante_label}); na próxima etapa "
                 "você escolhe o modelo exato e o total se ajusta.\n"
-                "Tudo pode ser mudado depois em Transcrever > Gerenciar modelos — "
+                "Tudo pode ser mudado depois em Ferramentas → Gerenciar modelos… — "
                 "nada aqui é definitivo.")
             rodape.setWordWrap(True)
             rodape.setStyleSheet(_style_muted())
@@ -3999,7 +3999,7 @@ if QT_IMPORT_ERROR is None:
                 "áudio até ela.\n"
                 "Gravações em outros idiomas transcrevem normalmente, apenas "
                 "sem os tempos por palavra. Você pode baixar mais idiomas "
-                "depois em Transcrever > Gerenciar modelos.")
+                "depois em Ferramentas → Gerenciar modelos…")
             intro.setWordWrap(True)
             layout.addWidget(intro)
             grade = QGridLayout()
@@ -4041,7 +4041,7 @@ if QT_IMPORT_ERROR is None:
             )
             intro.setWordWrap(True)
             layout.addWidget(intro)
-            faq = QGroupBox("O que são \"componentes de IA\"?")
+            faq = QGroupBox("O que são \"componentes de AI\"?")
             faq.setCheckable(False)
             faq_layout = QVBoxLayout(faq)
             faq_text = QLabel(
@@ -4062,7 +4062,7 @@ if QT_IMPORT_ERROR is None:
             account_intro = QLabel(
                 "Os componentes de transcrição ficam em um site chamado Hugging Face — "
                 "uma biblioteca pública de inteligência artificial. É gratuito e seguro, "
-                "como se fosse um \"Google Acadêmico\" de modelos de IA.\n\n"
+                "como se fosse um \"Google Acadêmico\" de modelos de AI.\n\n"
                 "Você precisa criar uma conta lá para poder baixar os componentes. "
                 "Use qualquer e-mail (pode ser o institucional)."
             )
@@ -4188,8 +4188,8 @@ if QT_IMPORT_ERROR is None:
                 "de um só se quiser comparar qualidades; para instalar um único "
                 "modelo, deixe apenas uma caixa marcada. Modelos maiores acertam "
                 "mais, porém demoram mais e ocupam mais espaço.\n\n"
-                "Você pode instalar ou remover modelos depois, em Transcrever > "
-                "Gerenciar modelos."
+                "Você pode instalar ou remover modelos depois, em Ferramentas → "
+                "Gerenciar modelos…"
             )
             intro.setWordWrap(True)
             layout.addWidget(intro)
@@ -4311,7 +4311,7 @@ if QT_IMPORT_ERROR is None:
             layout.addWidget(QLabel("Cole sua chave aqui:"))
             self.token_edit = QLineEdit()
             self.token_edit.setEchoMode(QLineEdit.EchoMode.Password)
-            self.token_edit.setPlaceholderText("Cole aqui a chave (começa com hf_...)")
+            self.token_edit.setPlaceholderText("Cole aqui a chave (começa com hf_…)")
             # Pre-fill from secure vault if available
             from . import token_vault
             saved = token_vault.retrieve()
@@ -4348,7 +4348,7 @@ if QT_IMPORT_ERROR is None:
                 self.status_label.setText("Cole a chave de acesso no campo acima.")
                 self.status_label.setStyleSheet(_style_err())
                 return False
-            self.status_label.setText("Verificando sua chave...")
+            self.status_label.setText("Verificando sua chave…")
             self.status_label.setStyleSheet(_style_muted())
             # Force UI repaint before blocking call
             from PySide6.QtCore import QCoreApplication
@@ -4479,7 +4479,7 @@ if QT_IMPORT_ERROR is None:
             token_page = self._wizard.page(FirstRunWizard.PAGE_TOKEN)
             token = token_page.token() if hasattr(token_page, "token") else ""
             asr_variants = getattr(self._wizard, "selected_asr_variants", None)
-            self.progress_label.setText("Conectando ao HuggingFace...")
+            self.progress_label.setText("Conectando ao Hugging Face…")
             self._bar_ctrl.start(self.progress_bar)
             self._worker = _SetupDownloadThread(
                 token,
@@ -4503,7 +4503,7 @@ if QT_IMPORT_ERROR is None:
             self._cancelled_by_user = True
             self.cancel_download_button.setEnabled(False)
             self.progress_label.setText(
-                "Cancelando... o que já foi baixado fica guardado e será "
+                "Cancelando… o que já foi baixado fica guardado e será "
                 "aproveitado se você retomar.")
             self.progress_label.setStyleSheet(_style_muted())
             self._worker.request_cancel()
@@ -4540,7 +4540,7 @@ if QT_IMPORT_ERROR is None:
                     "Download cancelado. O que já foi baixado fica guardado.\n"
                     "Use ← Voltar para mudar a escolha e avance para retomar — "
                     "ou feche com \"Pular por agora\" e retome depois em "
-                    "Transcrever > Gerenciar modelos.")
+                    "Ferramentas → Gerenciar modelos…")
                 self.progress_label.setStyleSheet(_style_muted())
             else:
                 self.progress_label.setText(f"Erro: {message}\n\nVerifique sua conexão e tente novamente.")
@@ -4609,7 +4609,7 @@ if QT_IMPORT_ERROR is None:
                         rotulo = str(optional_model(key).label)
                         self.failed.emit(
                             f"Falha ao baixar {rotulo} — você pode tentar de "
-                            "novo depois em Transcrever > Gerenciar modelos…")
+                            "novo depois em Ferramentas → Gerenciar modelos…")
                         return
                 _download_diag_log("[wizard] emitting finished_ok signal")
                 self.finished_ok.emit()
@@ -4671,7 +4671,7 @@ if QT_IMPORT_ERROR is None:
                 layout.addWidget(button)
 
             layout.addStretch()
-            status_label = QLabel("✓ Componentes de IA instalados")
+            status_label = QLabel("✓ Componentes de AI instalados")
             status_label.setStyleSheet(f"{_style_ok()} font-size: 11px;")
             status_label.setAlignment(Qt.AlignmentFlag.AlignRight)
             layout.addWidget(status_label)
@@ -4823,8 +4823,8 @@ if QT_IMPORT_ERROR is None:
                 intro.setPlainText(
                     "Todos os modelos desta instalação já estão baixados e "
                     "prontos — não há nada para baixar agora.\n\n"
-                    "Para ver, baixar ou remover modelos (inclusive os de IA), "
-                    "use Transcrever → Gerenciar modelos…")
+                    "Para ver, baixar ou remover modelos (inclusive os de AI), "
+                    "use Ferramentas → Gerenciar modelos…")
                 intro.setMinimumHeight(90)
             elif self._needs_token:
                 intro.setPlainText(
@@ -4863,12 +4863,12 @@ if QT_IMPORT_ERROR is None:
             links.addStretch()
             layout.addLayout(links)
 
-            self._token_label = QLabel("Token Hugging Face deste usuario:")
+            self._token_label = QLabel("Token Hugging Face deste usuário:")
             self._token_label.setVisible(self._needs_token)
             layout.addWidget(self._token_label)
             self.token_edit = QLineEdit()
             self.token_edit.setEchoMode(QLineEdit.EchoMode.Password)
-            self.token_edit.setPlaceholderText("hf_...")
+            self.token_edit.setPlaceholderText("hf_…")
             self.token_edit.setVisible(self._needs_token)
             # Pre-fill from secure vault if available
             from . import token_vault
@@ -4883,7 +4883,7 @@ if QT_IMPORT_ERROR is None:
             # to paste the token once and never see this dialog again. Users
             # who share a machine can explicitly uncheck.
             self.remember_checkbox.setChecked(True)
-            self.remember_checkbox.setToolTip("Armazena o token criptografado no cofre de credenciais do sistema (Gerenciador de Credenciais no Windows, Keychain no macOS, SecretService no Linux). So voce neste computador pode acessar.")
+            self.remember_checkbox.setToolTip("Armazena o token criptografado no cofre de credenciais do sistema (Gerenciador de Credenciais no Windows, Keychain no macOS, SecretService no Linux). Só você neste computador pode acessar.")
             layout.addWidget(self.remember_checkbox)
 
             status = QTextEdit()
@@ -4891,7 +4891,7 @@ if QT_IMPORT_ERROR is None:
             try:
                 status.setPlainText(app_service.models_status_text(**self._scope))
             except Exception as exc:  # noqa: BLE001
-                status.setPlainText(f"Nao foi possivel listar os modelos: {exc}")
+                status.setPlainText(f"Não foi possível listar os modelos: {exc}")
             status.setMinimumHeight(120)
             layout.addWidget(status)
 
@@ -4935,8 +4935,8 @@ if QT_IMPORT_ERROR is None:
                 _logger.warning("token_vault falhou em accept(): %s", exc)
                 QMessageBox.warning(
                     self,
-                    "Cofre de token indisponivel",
-                    f"Nao foi possivel salvar o token no cofre seguro.\n\n"
+                    "Cofre de token indisponível",
+                    f"Não foi possível salvar o token no cofre seguro.\n\n"
                     f"{type(exc).__name__}: {exc}\n\n"
                     "O download vai prosseguir usando o token desta sessão. "
                     "Você precisará colar o token de novo da próxima vez.",
@@ -5278,12 +5278,12 @@ if QT_IMPORT_ERROR is None:
             self.about_action.setToolTip("Informações sobre o Transcritório: versão e créditos.")
             self.about_action.triggered.connect(self.show_about)
 
-            self.documentation_action = QAction("Documentacao", self)
+            self.documentation_action = QAction("Documentação", self)
             self.documentation_action.setToolTip("Abrir a documentação do projeto, se disponível.")
             self.documentation_action.triggered.connect(self.show_documentation)
 
             self.workflow_help_action = QAction("Fluxo de trabalho", self)
-            self.workflow_help_action.setToolTip("Ver o passo-a-passo basico do Transcritorio.")
+            self.workflow_help_action.setToolTip("Ver o passo a passo básico do Transcritório.")
             self.workflow_help_action.triggered.connect(self.show_workflow_help)
 
             self.cancel_job_action = QAction("Cancelar", self)
@@ -5499,7 +5499,7 @@ if QT_IMPORT_ERROR is None:
                 # instalado por fora (o app fechado); o bundle legado usa o
                 # fluxo antigo do cuda_pack.
                 ferramentas_menu.addAction(
-                    "Instalar aceleração NVIDIA (CUDA)...", self.show_cuda_uv_install_dialog
+                    "Instalar aceleração NVIDIA (CUDA)…", self.show_cuda_uv_install_dialog
                 )
             ferramentas_menu.addSeparator()
             ferramentas_menu.addAction(self.voice_prompt_action)
@@ -5511,8 +5511,8 @@ if QT_IMPORT_ERROR is None:
             ajuda_menu.addAction(self.workflow_help_action)
             ajuda_menu.addSeparator()
             if not _install_tools.is_frozen():
-                ajuda_menu.addAction("Verificar atualizações...", self.show_upgrade_dialog)
-                ajuda_menu.addAction("Reparar instalação...", self.show_repair_dialog)
+                ajuda_menu.addAction("Verificar atualizações…", self.show_upgrade_dialog)
+                ajuda_menu.addAction("Reparar instalação…", self.show_repair_dialog)
                 ajuda_menu.addSeparator()
             ajuda_menu.addAction(self.about_action)
 
@@ -5573,7 +5573,7 @@ if QT_IMPORT_ERROR is None:
                     self,
                     "Aceleração NVIDIA",
                     "A aceleração NVIDIA já está instalada neste computador.\n"
-                    "Escolha o dispositivo em Transcrever → Configurar transcrição.",
+                    "Escolha o dispositivo em Ferramentas → Configurar transcrição…",
                 )
                 _it.mark_cuda_extra_installed(True)
                 return
@@ -5609,7 +5609,7 @@ if QT_IMPORT_ERROR is None:
             QMessageBox.information(
                 self,
                 "Fluxo de trabalho",
-                "Use: Arquivo > Adicionar midia -> Transcrever selecionados -> Abrir transcrição -> Editar -> Salvar transcricao -> Exportar.",
+                "O caminho básico: + Adicionar mídia… → Transcrever → abrir a entrevista (duplo clique) → revisar o texto → Salvar transcrição → Exportar…",
             )
 
         def show_about(self) -> None:
@@ -5634,7 +5634,7 @@ if QT_IMPORT_ERROR is None:
             )
 
         def show_queue(self) -> None:
-            if not self._require_project("Fila de tarefas"):
+            if not self._require_project("Fila de processamento"):
                 return
             self.context = app_service.load_project(self.context.config_path)
             dialog = JobsDialog(self.context, self)
@@ -5819,17 +5819,17 @@ if QT_IMPORT_ERROR is None:
             if not cuda_installer.install_dir_writable():
                 QMessageBox.warning(
                     self,
-                    "Permissao insuficiente",
+                    "Permissão insuficiente",
                     "A pasta de instalação do Transcritório não permite escrita "
-                    "sem privilegios de administrador.\n\n"
-                    "Feche o Transcritorio, clique com o botão direito no "
+                    "sem privilégios de administrador.\n\n"
+                    "Feche o Transcritório, clique com o botão direito no "
                     "atalho, escolha 'Executar como administrador' e tente "
-                    "de novo; OU reinstale o Transcritorio escolhendo "
+                    "de novo; OU reinstale o Transcritório escolhendo "
                     "'Instalar so pra mim (recomendado)'."
                 )
                 return
-            dlg = QProgressDialog("Conectando ao GitHub...", "Cancelar", 0, 100, self)
-            dlg.setWindowTitle("Instalando aceleracao NVIDIA")
+            dlg = QProgressDialog("Conectando ao GitHub…", "Cancelar", 0, 100, self)
+            dlg.setWindowTitle("Instalando aceleração NVIDIA")
             dlg.setWindowModality(Qt.WindowModality.WindowModal)
             dlg.setAutoClose(False)
             dlg.setAutoReset(False)
@@ -5854,17 +5854,17 @@ if QT_IMPORT_ERROR is None:
                 dlg.close()
                 QMessageBox.information(
                     self,
-                    "Aceleracao instalada",
-                    "Pronto! Reinicie o Transcritorio para ativar a aceleracao NVIDIA.",
+                    "Aceleração instalada",
+                    "Pronto! Reinicie o Transcritório para ativar a aceleração NVIDIA.",
                 )
             except Exception as exc:
                 dlg.close()
                 if not cancelled["flag"]:
                     QMessageBox.critical(
                         self,
-                        "Falha ao instalar aceleracao",
-                        f"Nao foi possivel instalar a aceleracao NVIDIA:\n\n{exc}\n\n"
-                        "Voce pode tentar de novo mais tarde (a pergunta vai "
+                        "Falha ao instalar aceleração",
+                        f"Não foi possível instalar a aceleração NVIDIA:\n\n{exc}\n\n"
+                        "Você pode tentar de novo mais tarde (a pergunta vai "
                         "aparecer de novo no próximo início do Transcritório).",
                     )
 
@@ -5888,7 +5888,7 @@ if QT_IMPORT_ERROR is None:
                     _logger.warning("Verificacao de modelos falhou: %s", exc)
                     self.progress_label.setText(
                         "Não foi possível verificar os modelos instalados "
-                        "(confira o modelo de transcrição em Configurações).")
+                        "(confira em Ferramentas → Configurar transcrição…).")
                     return True  # nao bloquear a abertura do app
             if not _models_ready():
                 wizard = FirstRunWizard(self)
@@ -5896,13 +5896,13 @@ if QT_IMPORT_ERROR is None:
                 self._caps_cache = None  # o assistente pode ter mudado o que existe
                 if result == QDialog.DialogCode.Accepted and wizard.download_completed:
                     # Components installed — show project chooser
-                    self.progress_label.setText("Componentes de IA instalados.")
+                    self.progress_label.setText("Componentes de AI instalados.")
                 else:
                     # Skipped or cancelled — show warning
                     if not _models_ready():
                         self.progress_label.setText(
-                            "⚠ Componentes de IA não instalados. "
-                            "Use o menu Transcrever > Gerenciar modelos…"
+                            "⚠ Componentes de AI não instalados. "
+                            "Use Ferramentas → Gerenciar modelos…"
                         )
                         self.progress_label.setStyleSheet(_style_err())
                         self.refresh_interviews()
@@ -6075,7 +6075,7 @@ if QT_IMPORT_ERROR is None:
             if partial:
                 title = "Download anterior inconcluso"
                 msg = (
-                    "Parece que um download anterior dos modelos de IA foi "
+                    "Parece que um download anterior dos modelos de AI foi "
                     "interrompido antes de completar. Alguns arquivos estão "
                     "no cache mas não são suficientes para transcrever.\n\n"
                     "Deseja retomar o download agora? O progresso já baixado "
@@ -6228,7 +6228,7 @@ if QT_IMPORT_ERROR is None:
             filter_row.addSpacing(12)
             filter_row.addWidget(QLabel("Buscar:"))
             self.filter_text_edit = QLineEdit()
-            self.filter_text_edit.setPlaceholderText("ID da entrevista...")
+            self.filter_text_edit.setPlaceholderText("ID da entrevista")
             self.filter_text_edit.setClearButtonEnabled(True)
             self.filter_text_edit.setToolTip("Filtrar por ID (busca parcial).")
             self.filter_text_edit.textChanged.connect(self._apply_interview_filter)
@@ -6643,7 +6643,7 @@ if QT_IMPORT_ERROR is None:
             banner_layout.addWidget(self.voice_banner_button)
             banner_dismiss = QPushButton("Não perguntar neste projeto")
             banner_dismiss.setFlat(True)
-            banner_dismiss.setToolTip("Desliga a pergunta neste projeto. Reative no menu Transcrever.")
+            banner_dismiss.setToolTip("Desliga a pergunta neste projeto. Reative em Ferramentas.")
             banner_dismiss.clicked.connect(self._on_banner_dismiss_clicked)
             banner_layout.addWidget(banner_dismiss)
             # Banner de diarizacao falhada (plano U1.7): o lote continua, mas
@@ -6682,7 +6682,7 @@ if QT_IMPORT_ERROR is None:
             boundary_layout.addWidget(boundary_prev)
             boundary_next = QPushButton("›")
             boundary_next.setFixedWidth(28)
-            boundary_next.setToolTip("Proximo bloco marcado")
+            boundary_next.setToolTip("Próximo bloco marcado")
             boundary_next.clicked.connect(lambda: self._on_boundary_nav(1))
             boundary_layout.addWidget(boundary_next)
             # Prioridades: separacao falhada > trocas suspeitas > vozes.
@@ -6709,7 +6709,7 @@ if QT_IMPORT_ERROR is None:
             find_layout.addWidget(find_prev)
             find_next = QPushButton("›")
             find_next.setFixedWidth(28)
-            find_next.setToolTip("Proximo bloco com o termo")
+            find_next.setToolTip("Próximo bloco com o termo")
             find_next.clicked.connect(lambda: self._find_step(1))
             find_layout.addWidget(find_next)
             find_close = QPushButton("✕")
@@ -6940,7 +6940,7 @@ if QT_IMPORT_ERROR is None:
                     if column == COL_TRANSCRICAO and str(value) == "Falha":
                         item.setToolTip(str((job or {}).get("last_error") or "")
                                         or "A última transcrição falhou — veja "
-                                           "Transcrever → Fila de tarefas.")
+                                           "Ferramentas → Ver fila de processamento.")
                     self.interview_table.setItem(row, column, item)
             self.interview_table.blockSignals(False)
             self.interview_table.setSortingEnabled(not manual_order_active)
@@ -7194,7 +7194,7 @@ if QT_IMPORT_ERROR is None:
                 self,
                 "Abrir projeto",
                 self._browse_dir(),
-                f"Projetos Transcritorio (*{PROJECT_EXTENSION});;Todos os arquivos (*)",
+                f"Projetos Transcritório (*{PROJECT_EXTENSION});;Todos os arquivos (*)",
             )
             if not file_path:
                 return
@@ -7384,7 +7384,7 @@ if QT_IMPORT_ERROR is None:
                 return
             if self.worker and self.worker.isRunning():
                 self.progress_label.setText(
-                    "Rótulos salvos. Para aplicá-los aos documentos, use Transcrever → Atualizar transcricao editavel."
+                    "Rótulos salvos. Uma tarefa está em andamento — para aplicá-los aos documentos, salve os rótulos de novo quando ela terminar."
                 )
                 return
             answer = QMessageBox.question(
@@ -7622,7 +7622,7 @@ if QT_IMPORT_ERROR is None:
                     self.progress_label.setText(
                         "Este arquivo não tem tempos por palavra (o duplo clique numa "
                         "palavra não leva ao áudio). Instale \"Tempos por palavra\" em "
-                        "Transcrever → Gerenciar modelos… e transcreva novamente.")
+                        "Ferramentas → Gerenciar modelos… e transcreva novamente.")
                 else:
                     self.progress_label.setText(
                         "Este arquivo foi transcrito sem tempos por palavra — "
@@ -8196,7 +8196,7 @@ if QT_IMPORT_ERROR is None:
                         "não leva ao áudio. "
                         + ("Transcreva novamente para gerá-los."
                            if pronto else
-                           "Instale \"Tempos por palavra\" em Transcrever → "
+                           "Instale \"Tempos por palavra\" em Ferramentas → "
                            "Gerenciar modelos… e transcreva novamente."))
                 return
             try:
@@ -10902,8 +10902,8 @@ if QT_IMPORT_ERROR is None:
                 QMessageBox.information(
                     self, "Nada a revisar",
                     "Nenhuma variação de grafia foi encontrada.\n\n"
-                    "Gere o glossário primeiro (menu Transcrever) — e, para "
-                    "melhorar a deteccao, declare os nomes corretos na secao "
+                    "Gere o glossário primeiro (menu Analisar) — e, para "
+                    "melhorar a detecção, declare os nomes corretos na seção "
                     "\"## Nomes conhecidos\" do contexto da pesquisa.")
                 return
             ids = [r["interview_id"] for r in self.context.rows]

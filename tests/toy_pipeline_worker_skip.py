@@ -67,7 +67,7 @@ oks, errs, _msgs = _roda(steps)
 assert executado == ["A1", "A2", "B1", "B2"], executado  # A3 pulado
 assert not errs, errs                                    # falha parcial nao e vermelho
 assert oks and "1 arquivo(s) com falha" in oks[0], oks
-assert "Fila de tarefas" in oks[0], oks
+assert "fila de processamento" in oks[0], oks
 
 # --- todos os arquivos falham: ai sim o lote termina em vermelho ---
 executado.clear()

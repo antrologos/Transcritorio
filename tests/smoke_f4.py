@@ -159,7 +159,7 @@ check("1.6 alignment + diarization aparecem como Pendente")
 
 # Summary
 summary_text = dlg.summary_label.text()
-assert "Espaco total" in summary_text
+assert "Espaço total" in summary_text
 # Soma esperada: tiny (2KB) + medium (6KB) + orfao (2KB) = 10KB fallback
 # mas hub pode retornar size_on_disk diferente. Verificar "KB" aparece.
 assert "KB" in summary_text or "MB" in summary_text or "GB" in summary_text
@@ -312,7 +312,7 @@ with patch.object(runtime, "model_cache_dir", return_value=cache_root):
     dlg5 = ModelManagerDialog(lambda: win.context, win)
 btns = sorted({b.text() for b in dlg5.findChildren(QPushButton) if not b.parent() or b.parent() is dlg5 or True})
 # Filtrar so os botoes top-level do dialog, nao os de cada linha (que sao "Remover")
-expected = {"Abrir pasta de modelos", "Remover orfaos", "Baixar outros modelos...", "Trocar token HF...", "Fechar"}
+expected = {"Abrir pasta de modelos", "Remover órfãos", "Baixar outros modelos…", "Trocar token HF…", "Fechar"}
 for e in expected:
     assert e in btns, f"faltando {e!r}: {btns}"
 check(f"8.1 5 botoes esperados + 'Remover': {sorted(expected)}")
