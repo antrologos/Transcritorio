@@ -5289,6 +5289,10 @@ if QT_IMPORT_ERROR is None:
             button = QPushButton(action.text())
             button.setToolTip(action.toolTip())
             button.setEnabled(action.isEnabled())
+            # Ancora a acao no botao (nao exibe nada): o botao vira a
+            # "casa" declarada da acao — e o smoke_nav_ui detecta acoes
+            # sem casa varrendo widget.actions() (Programa R, R0).
+            button.addAction(action)
             button.clicked.connect(lambda _checked=False, item=action: item.trigger())
             # O botao precisa SEGUIR a acao: QAction.trigger() dispara mesmo
             # com a acao desabilitada, entao um botao que nao espelha o
