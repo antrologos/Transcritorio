@@ -3393,7 +3393,7 @@ if QT_IMPORT_ERROR is None:
             self.model_combo.setCurrentIndex(current_idx)
             model_row = QHBoxLayout()
             model_row.addWidget(self.model_combo, stretch=1)
-            self.install_models_btn = QPushButton("Gerenciar modelos...")
+            self.install_models_btn = QPushButton("Gerenciar modelos…")
             self.install_models_btn.setToolTip("Ver, baixar e remover os modelos deste computador.")
             self.install_models_btn.clicked.connect(self._open_model_setup)
             model_row.addWidget(self.install_models_btn)
@@ -3606,7 +3606,7 @@ if QT_IMPORT_ERROR is None:
                 self.model_combo.addItem(current, current)
             layout.addWidget(self.model_combo)
             nota = QLabel("Modelos instalados neste computador. Para baixar "
-                          "outros, use Transcrever → Gerenciar modelos...")
+                          "outros, use Transcrever → Gerenciar modelos…")
             nota.setWordWrap(True)
             nota.setStyleSheet(_style_muted())
             layout.addWidget(nota)
@@ -4578,7 +4578,7 @@ if QT_IMPORT_ERROR is None:
                         rotulo = str(optional_model(key).label)
                         self.failed.emit(
                             f"Falha ao baixar {rotulo} — você pode tentar de "
-                            "novo depois em Transcrever > Gerenciar modelos...")
+                            "novo depois em Transcrever > Gerenciar modelos…")
                         return
                 _download_diag_log("[wizard] emitting finished_ok signal")
                 self.finished_ok.emit()
@@ -4793,7 +4793,7 @@ if QT_IMPORT_ERROR is None:
                     "Todos os modelos desta instalação já estão baixados e "
                     "prontos — não há nada para baixar agora.\n\n"
                     "Para ver, baixar ou remover modelos (inclusive os de IA), "
-                    "use Transcrever → Gerenciar modelos...")
+                    "use Transcrever → Gerenciar modelos…")
                 intro.setMinimumHeight(90)
             elif self._needs_token:
                 intro.setPlainText(
@@ -4993,23 +4993,23 @@ if QT_IMPORT_ERROR is None:
             self.setAcceptDrops(True)
 
         def _build_actions(self) -> None:
-            self.add_folder_action = QAction("Adicionar pasta...", self)
-            self.add_folder_action.setToolTip("Escolher uma pasta com audios ou videos.")
+            self.add_folder_action = QAction("Adicionar pasta…", self)
+            self.add_folder_action.setToolTip("Escolher uma pasta com áudios ou vídeos.")
             self.add_folder_action.triggered.connect(self.add_audio_folder)
 
-            self.new_project_action = QAction("Novo projeto...", self)
+            self.new_project_action = QAction("Novo projeto…", self)
             self.new_project_action.setShortcut(QKeySequence("Ctrl+N"))
-            self.new_project_action.setToolTip("Criar uma nova pasta de projeto de transcricoes. (Ctrl+N)")
+            self.new_project_action.setToolTip("Criar uma nova pasta de projeto de transcrições. (Ctrl+N)")
             self.new_project_action.triggered.connect(self.new_project)
 
-            self.open_project_action = QAction("Abrir projeto...", self)
+            self.open_project_action = QAction("Abrir projeto…", self)
             self.open_project_action.setShortcut(QKeySequence("Ctrl+O"))
             self.open_project_action.setToolTip(
                 "Abrir um projeto existente: escolha o arquivo .transcritorio "
                 "dentro da pasta do projeto. (Ctrl+O)")
             self.open_project_action.triggered.connect(self.open_project)
 
-            self.add_files_action = QAction("Adicionar arquivos...", self)
+            self.add_files_action = QAction("Adicionar arquivos…", self)
             self.add_files_action.setShortcut(QKeySequence("Ctrl+I"))
             self.add_files_action.setToolTip(
                 "Adicionar arquivos de áudio ou vídeo ao projeto. (Ctrl+I)\n"
@@ -5033,15 +5033,15 @@ if QT_IMPORT_ERROR is None:
             self.exit_action.setToolTip("Fechar o Transcritório.")
             self.exit_action.triggered.connect(self.close)
 
-            self.apply_metadata_action = QAction("Editar propriedades...", self)
+            self.apply_metadata_action = QAction("Editar propriedades…", self)
             self.apply_metadata_action.setToolTip("Aplicar língua, falantes, rótulos ou contexto aos arquivos selecionados.")
             self.apply_metadata_action.triggered.connect(self.apply_metadata_to_selected)
 
             self.queue_action = QAction("Ver fila de processamento", self)
-            self.queue_action.setToolTip("Ver o estado das transcricoes em lote.")
+            self.queue_action.setToolTip("Ver o estado das transcrições em lote.")
             self.queue_action.triggered.connect(self.show_queue)
 
-            self.engine_settings_action = QAction("Configurar transcricao...", self)
+            self.engine_settings_action = QAction("Configurar transcrição…", self)
             self.engine_settings_action.setToolTip("Escolher GPU/CPU, modelo, precisao e batch.")
             self.engine_settings_action.triggered.connect(self.configure_engine)
 
@@ -5053,7 +5053,7 @@ if QT_IMPORT_ERROR is None:
             self.model_status_action.setToolTip("Mostrar quais modelos locais ja foram baixados.")
             self.model_status_action.triggered.connect(self.show_model_status)
 
-            self.model_manager_action = QAction("Gerenciar modelos...", self)
+            self.model_manager_action = QAction("Gerenciar modelos…", self)
             self.model_manager_action.setToolTip("Ver tamanho em disco, remover modelos, trocar token HF, baixar outros.")
             self.model_manager_action.triggered.connect(self.show_model_manager)
 
@@ -5066,36 +5066,36 @@ if QT_IMPORT_ERROR is None:
             self.reload_list_action.setToolTip("Recarregar a lista de entrevistas a partir dos arquivos do projeto. (F5)")
             self.reload_list_action.triggered.connect(self.refresh_interviews)
 
-            self.open_transcript_action = QAction("Abrir transcricao", self)
-            self.open_transcript_action.setToolTip("Abrir a transcricao do arquivo selecionado (duplo-clique ou Enter na linha). Selecione um arquivo na lista.")
+            self.open_transcript_action = QAction("Abrir transcrição", self)
+            self.open_transcript_action.setToolTip("Abrir a transcrição do arquivo selecionado (duplo-clique ou Enter na linha). Selecione um arquivo na lista.")
             self.open_transcript_action.triggered.connect(self.open_selected_review)
 
             self.transcribe_action = QAction("Transcrever selecionados", self)
             self.transcribe_action.setToolTip("Transcrever os arquivos selecionados na lista do projeto.")
             self.transcribe_action.triggered.connect(self.run_full_transcription_job)
 
-            self.transcribe_pending_action = QAction("Transcrever todos nao transcritos", self)
-            self.transcribe_pending_action.setToolTip("Transcrever todos os arquivos do projeto que ainda nao tem transcricao.")
+            self.transcribe_pending_action = QAction("Transcrever todos não transcritos", self)
+            self.transcribe_pending_action.setToolTip("Transcrever todos os arquivos do projeto que ainda não têm transcrição.")
             self.transcribe_pending_action.triggered.connect(self.run_pending_transcription_job)
 
             self.transcribe_current_action = QAction("Transcrever este arquivo", self)
-            self.transcribe_current_action.setToolTip("Transcrever a midia aberta agora.")
+            self.transcribe_current_action.setToolTip("Transcrever a mídia aberta agora.")
             self.transcribe_current_action.triggered.connect(self.run_current_file_transcription_job)
 
-            self.retranscribe_current_action = QAction("Transcrever novamente...", self)
+            self.retranscribe_current_action = QAction("Transcrever novamente…", self)
             self.retranscribe_current_action.setToolTip(
-                "Refazer a transcricao do arquivo aberto, podendo escolher outro modelo.\n"
-                "A transcricao editavel e recriada (copia de seguranca das edicoes em edits/backups).")
+                "Refazer a transcrição do arquivo aberto, podendo escolher outro modelo.\n"
+                "A transcrição editável é recriada (cópia de segurança das edições em edits/backups).")
             self.retranscribe_current_action.triggered.connect(self.retranscribe_current_file)
 
             self.save_action = QAction("Salvar transcrição", self)
             self.save_action.setShortcut(QKeySequence.StandardKey.Save)
-            self.save_action.setToolTip("Salvar a transcricao editavel desta entrevista.")
+            self.save_action.setToolTip("Salvar a transcrição editável desta entrevista.")
             self.save_action.triggered.connect(lambda _checked=False: self.save_current_turn(force=True))
 
-            self.generate_files_action = QAction("Exportar...", self)
+            self.generate_files_action = QAction("Exportar…", self)
             self.generate_files_action.setShortcut(QKeySequence("Ctrl+E"))
-            self.generate_files_action.setToolTip("Exportar a transcricao aberta, os arquivos selecionados ou todas as transcricoes. (Ctrl+E)")
+            self.generate_files_action.setToolTip("Exportar a transcrição aberta, os arquivos selecionados ou todas as transcrições. (Ctrl+E)")
             self.generate_files_action.triggered.connect(self.export_current_review)
 
             self.export_selected_action = QAction("Exportar selecionados...", self)
@@ -5106,7 +5106,7 @@ if QT_IMPORT_ERROR is None:
             self.delete_transcription_action.setToolTip("Apagar apenas os arquivos de transcricao gerados. O audio original e mantido no projeto.")
             self.delete_transcription_action.triggered.connect(self.delete_selected_transcriptions)
 
-            self.rename_interview_action = QAction("Renomear rotulo...", self)
+            self.rename_interview_action = QAction("Renomear rótulo…", self)
             self.rename_interview_action.setShortcut(QKeySequence(Qt.Key.Key_F2))
             self.rename_interview_action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             self.rename_interview_action.triggered.connect(self.rename_selected_interview)
@@ -5124,27 +5124,27 @@ if QT_IMPORT_ERROR is None:
             for _reorder_action in (self.rename_interview_action, self.move_up_action, self.move_down_action):
                 _reorder_action.setShortcutVisibleInContextMenu(True)
 
-            self.trash_selected_action = QAction("Enviar para Lixeira...", self)
+            self.trash_selected_action = QAction("Enviar para a Lixeira…", self)
             self.trash_selected_action.setShortcut(QKeySequence(Qt.Key.Key_Delete))
             # ApplicationShortcut: Del dispara de qualquer lugar; effective_target_ids trata selecao.
             self.trash_selected_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
             self.trash_selected_action.setToolTip(
                 "Enviar os arquivos SELECIONADOS na lista (destaque) para a Lixeira do projeto.\n"
-                "As caixas de marcacao nao contam — elas escolhem o que transcrever.\n"
-                "Reversivel com Ctrl+Z nesta sessao. (Del)")
+                "As caixas de marcação não contam — elas escolhem o que transcrever.\n"
+                "Reversível com Ctrl+Z nesta sessão. (Del)")
             self.trash_selected_action.triggered.connect(self.trash_selected_interviews)
 
-            self.trash_undo_action = QAction("Desfazer exclusao", self)
+            self.trash_undo_action = QAction("Desfazer exclusão", self)
             self.trash_undo_action.setShortcut(QKeySequence("Ctrl+Z"))
             # ApplicationShortcut + guard em undo_last_trash delega ao editor quando foco e QTextEdit
             self.trash_undo_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
-            self.trash_undo_action.setToolTip("Desfaz a ultima exclusao desta sessao (Ctrl+Z).")
+            self.trash_undo_action.setToolTip("Desfaz a última exclusão desta sessão (Ctrl+Z).")
             self.trash_undo_action.triggered.connect(self.undo_last_trash)
 
-            self.trash_redo_action = QAction("Refazer exclusao", self)
+            self.trash_redo_action = QAction("Refazer exclusão", self)
             self.trash_redo_action.setShortcut(QKeySequence("Ctrl+Shift+Z"))
             self.trash_redo_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
-            self.trash_redo_action.setToolTip("Refaz a ultima exclusao desfeita (Ctrl+Shift+Z).")
+            self.trash_redo_action.setToolTip("Refaz a última exclusão desfeita (Ctrl+Shift+Z).")
             self.trash_redo_action.triggered.connect(self.redo_last_trash)
 
             for _trash_action in (self.trash_selected_action, self.trash_undo_action, self.trash_redo_action):
@@ -5188,18 +5188,18 @@ if QT_IMPORT_ERROR is None:
 
             self.find_action = QAction("Buscar neste arquivo", self)
             self.find_action.setShortcut(QKeySequence("Ctrl+F"))
-            self.find_action.setToolTip("Filtra os blocos da transcricao aberta pelo termo digitado.")
+            self.find_action.setToolTip("Filtra os blocos da transcrição aberta pelo termo digitado.")
             self.find_action.triggered.connect(self.show_find_bar)
 
-            self.project_search_action = QAction("Buscar palavras...", self)
+            self.project_search_action = QAction("Buscar palavras…", self)
             self.project_search_action.setShortcut(QKeySequence("Ctrl+Shift+F"))
             self.project_search_action.setToolTip(
-                "Busca palavras e expressoes exatas nas transcricoes do projeto.\n"
-                "Le o texto transcrito (revisado, quando houver), nunca o audio;\n"
-                "na janela, da para restringir a entrevista aberta ou escolher quais entram.")
+                "Busca palavras e expressões exatas nas transcrições do projeto.\n"
+                "Lê o texto transcrito (revisado, quando houver), nunca o áudio;\n"
+                "na janela, dá para restringir a entrevista aberta ou escolher quais entram.")
             self.project_search_action.triggered.connect(lambda: self.open_word_search())
 
-            self.explore_action = QAction("✨ Perguntar às entrevistas com AI...", self)
+            self.explore_action = QAction("✨ Perguntar às entrevistas com AI…", self)
             self.explore_action.setToolTip(
                 "Faça perguntas e receba respostas citando os trechos, ou encontre\n"
                 "trechos pelo significado, mesmo sem as palavras exatas.\n"
@@ -5224,7 +5224,7 @@ if QT_IMPORT_ERROR is None:
                 "AI local — nada sai do seu computador.")
             self.glossario_action.triggered.connect(self.run_glossario_job)
 
-            self.spelling_action = QAction("✨ Revisar grafias de nomes...", self)
+            self.spelling_action = QAction("✨ Revisar grafias de nomes…", self)
             self.spelling_action.setToolTip(
                 "Mostra os nomes que aparecem escritos de formas diferentes e deixa\n"
                 "você corrigir ocorrência por ocorrência, com o trecho à vista.\n"
@@ -5236,7 +5236,7 @@ if QT_IMPORT_ERROR is None:
             self.render_action.setToolTip("Remontar a transcrição editável a partir dos dados brutos (ASR + diarização).\nSelecione ao menos um arquivo.")
             self.render_action.triggered.connect(self.run_render_job)
 
-            self.qc_action = QAction("Verificar exportacoes", self)
+            self.qc_action = QAction("Verificar exportações", self)
             self.qc_action.setToolTip("Verificar a qualidade das transcrições geradas (integridade e consistência).")
             self.qc_action.triggered.connect(self.run_qc_job)
 
@@ -5257,7 +5257,7 @@ if QT_IMPORT_ERROR is None:
             self.workflow_help_action.triggered.connect(self.show_workflow_help)
 
             self.cancel_job_action = QAction("Cancelar", self)
-            self.cancel_job_action.setToolTip("Cancela o processamento atual. O WhisperX e interrompido; outras etapas param no proximo ponto seguro.")
+            self.cancel_job_action.setToolTip("Cancela o processamento atual. O motor é interrompido; outras etapas param no próximo ponto seguro.")
             self.cancel_job_action.triggered.connect(self.cancel_current_job)
 
             self.undo_action = self.undo_stack.createUndoAction(self, "Desfazer")
@@ -5320,7 +5320,7 @@ if QT_IMPORT_ERROR is None:
         _MEDIA_BUTTON_GHOST_QSS = ""
 
         def media_button(self) -> QPushButton:
-            button = QPushButton("+ Adicionar mídia...")
+            button = QPushButton("+ Adicionar mídia…")
             button.setToolTip(
                 "Adicionar arquivos de áudio/vídeo ao projeto.\n"
                 "Também pode arrastar arquivos do Explorer/Finder para a janela."
@@ -5371,7 +5371,7 @@ if QT_IMPORT_ERROR is None:
                 recent_menu.addSeparator()
                 recent_menu.addAction(str(self.context.paths.project_root), self.refresh_interviews)
             arquivo_menu.addSeparator()
-            add_media_menu = arquivo_menu.addMenu("Adicionar midia...")
+            add_media_menu = arquivo_menu.addMenu("Adicionar mídia")
             add_media_menu.addAction(self.add_files_action)
             add_media_menu.addAction(self.add_folder_action)
             arquivo_menu.addAction(self.reload_list_action)
@@ -5547,7 +5547,7 @@ if QT_IMPORT_ERROR is None:
             QMessageBox.information(
                 self,
                 "Fluxo de trabalho",
-                "Use: Arquivo > Adicionar midia -> Transcrever selecionados -> Abrir transcricao -> Editar -> Salvar transcricao -> Exportar.",
+                "Use: Arquivo > Adicionar midia -> Transcrever selecionados -> Abrir transcrição -> Editar -> Salvar transcricao -> Exportar.",
             )
 
         def show_about(self) -> None:
@@ -5840,7 +5840,7 @@ if QT_IMPORT_ERROR is None:
                     if not _models_ready():
                         self.progress_label.setText(
                             "⚠ Componentes de IA não instalados. "
-                            "Use o menu Transcrever > Gerenciar modelos..."
+                            "Use o menu Transcrever > Gerenciar modelos…"
                         )
                         self.progress_label.setStyleSheet(_style_err())
                         self.refresh_interviews()
@@ -5992,7 +5992,7 @@ if QT_IMPORT_ERROR is None:
             if not self.ensure_ffmpeg():
                 return False
             # asr_variants: quem vai transcrever com um modelo DIFERENTE do
-            # configurado (Transcrever novamente...) valida esse modelo — o
+            # configurado (Transcrever novamente…) valida esse modelo — o
             # default continua sendo o do projeto.
             variants = asr_variants or self._configured_asr_variants()
             # require_diarization=True: acoes explicitas de falantes (Identificar
@@ -6244,7 +6244,7 @@ if QT_IMPORT_ERROR is None:
             _es_layout.addWidget(self._empty_sub)
             _cta_row = QHBoxLayout()
             _cta_row.addStretch(1)
-            self._empty_cta_btn = QPushButton("+ Adicionar mídia...")
+            self._empty_cta_btn = QPushButton("+ Adicionar mídia…")
             self._empty_cta_btn.setStyleSheet(self._MEDIA_BUTTON_PRIMARY_QSS)
             _cta_menu = QMenu(self._empty_cta_btn)
             _cta_menu.addAction(self.add_files_action)
@@ -6608,7 +6608,7 @@ if QT_IMPORT_ERROR is None:
             QShortcut(QKeySequence("Escape"), self.find_input, activated=self._close_find_bar)
             turn_layout.addWidget(self.find_bar)
             turn_header = QHBoxLayout()
-            turn_header.addWidget(QLabel("Blocos da transcricao"))
+            turn_header.addWidget(QLabel("Blocos da transcrição"))
             find_toggle = QPushButton("🔍 Buscar")
             find_toggle.setFlat(True)
             find_toggle.setToolTip("Buscar nos blocos deste arquivo (Ctrl+F)")
@@ -6731,8 +6731,8 @@ if QT_IMPORT_ERROR is None:
             line.setFrameShape(QFrame.Shape.HLine)
             grid.addWidget(line, 4, 0, 1, 4)
             hint = QLabel(
-                "Dica: clique no texto para editar; duplo clique numa palavra leva o audio ate ela; "
-                "clique no tempo ou duplo clique na linha para ir ao inicio do bloco.")
+                "Dica: clique no texto para editar; duplo clique numa palavra leva o áudio até ela; "
+                "clique no tempo ou duplo clique na linha para ir ao início do bloco.")
             hint.setStyleSheet(_style_muted())
             grid.addWidget(hint, 5, 0, 1, 4)
             return group
@@ -7462,7 +7462,7 @@ if QT_IMPORT_ERROR is None:
                     self.progress_label.setText(
                         "Este arquivo não tem tempos por palavra (o duplo clique numa "
                         "palavra não leva ao áudio). Instale \"Tempos por palavra\" em "
-                        "Transcrever → Gerenciar modelos... e transcreva novamente.")
+                        "Transcrever → Gerenciar modelos… e transcreva novamente.")
                 else:
                     self.progress_label.setText(
                         "Este arquivo foi transcrito sem tempos por palavra — "
@@ -7849,7 +7849,7 @@ if QT_IMPORT_ERROR is None:
             self.turn_table.setRowCount(0)
             self.text_edit.clear()
             self.undo_stack.clear()
-            self.review_title.setText(f"Midia: {interview_id} - ainda sem transcricao")
+            self.review_title.setText(f"Mídia: {interview_id} - ainda sem transcrição")
             self.set_editor_enabled(False)
             self.set_media_source(preferred_media_index(self.media_candidates))
             self.load_waveform()
@@ -8035,7 +8035,7 @@ if QT_IMPORT_ERROR is None:
                         + ("Transcreva novamente para gerá-los."
                            if pronto else
                            "Instale \"Tempos por palavra\" em Transcrever → "
-                           "Gerenciar modelos... e transcreva novamente."))
+                           "Gerenciar modelos… e transcreva novamente."))
                 return
             try:
                 index = review_store.find_turn_index(self.review, self.current_turn_id)
@@ -8412,7 +8412,7 @@ if QT_IMPORT_ERROR is None:
             if single_target and self.context:
                 only = self.effective_target_ids()[0]
                 single_target_busy = (self.context.jobs.get(only) or {}).get("status") in ("Rodando", "Na fila")
-            rename_reason = "Selecione um unico arquivo para renomear." if not single_target else "Aguarde a transcricao terminar."
+            rename_reason = "Selecione um único arquivo para renomear." if not single_target else "Aguarde a transcricao terminar."
             reorder_reason = "Selecione um unico arquivo para reordenar." if not single_target else "Aguarde a transcricao terminar."
             self._set_action(self.rename_interview_action, not busy and single_target and not single_target_busy, reason_busy if busy else rename_reason)
             self._set_action(self.move_up_action, not busy and single_target and not single_target_busy, reason_busy if busy else reorder_reason)
@@ -8430,12 +8430,12 @@ if QT_IMPORT_ERROR is None:
             self._set_action(
                 self.trash_undo_action,
                 not any_busy and can_undo,
-                reason_busy if any_busy else "Nada a desfazer nesta sessao.",
+                reason_busy if any_busy else "Nada a desfazer nesta sessão.",
             )
             self._set_action(
                 self.trash_redo_action,
                 not any_busy and can_redo,
-                reason_busy if any_busy else "Nada a refazer nesta sessao.",
+                reason_busy if any_busy else "Nada a refazer nesta sessão.",
             )
             self._set_action(self.export_current_action, not busy and has_review, reason_busy if busy else reason_open)
             self._set_action(self.close_open_file_action, not busy and has_open_file, reason_busy if busy else "Nenhum arquivo aberto.")
@@ -8769,7 +8769,7 @@ if QT_IMPORT_ERROR is None:
                 return
             ids = self.effective_target_ids(cursor_row)
             if len(ids) != 1:
-                QMessageBox.information(self, "Selecione um arquivo", "Selecione um unico arquivo para renomear.")
+                QMessageBox.information(self, "Selecione um arquivo", "Selecione um único arquivo para renomear.")
                 return
             interview_id = ids[0]
             busy = [iid for iid in ids if (self.context.jobs.get(iid) or {}).get("status") in ("Rodando", "Na fila")]
@@ -8780,7 +8780,7 @@ if QT_IMPORT_ERROR is None:
             current_title = str(metadata.get("title") or "").strip() or interview_id
             raw, ok = QInputDialog.getText(
                 self,
-                "Renomear rotulo",
+                "Renomear rótulo",
                 "Novo rotulo para exibicao (deixe vazio para usar o nome do arquivo):",
                 text=current_title,
             )
@@ -8903,7 +8903,7 @@ if QT_IMPORT_ERROR is None:
                 QMessageBox.information(
                     self, "Selecione arquivos",
                     "Selecione (destaque) ao menos um arquivo na lista para enviar a Lixeira.\n"
-                    "As caixas de marcacao nao contam para esta acao — elas escolhem o que transcrever.")
+                    "As caixas de marcação não contam para esta acao — elas escolhem o que transcrever.")
                 return
             busy_ids = [iid for iid in ids if (self.context.jobs.get(iid) or {}).get("status") in ("Rodando", "Na fila")]
             if busy_ids:
@@ -9629,7 +9629,7 @@ if QT_IMPORT_ERROR is None:
             # Retranscrever e uma decisao EXPLICITA (pipeline-safety): o
             # baseline sera sobrescrito e a transcricao editavel recriada.
             # confirmed_recreate=True vem de fluxos que ja avisaram
-            # (Transcrever novamente...), para nao perguntar duas vezes.
+            # (Transcrever novamente…), para nao perguntar duas vezes.
             ja_transcritas: list[str] = []
             for iid in ids:
                 status = self.status_by_interview_id(iid)
@@ -9705,7 +9705,7 @@ if QT_IMPORT_ERROR is None:
                             ids=[item],
                             # asr_model efetivo SEMPRE no override: igual a
                             # config no fluxo normal; o escolhido na rodada
-                            # de "Transcrever novamente...".
+                            # de "Transcrever novamente…".
                             overrides={"diarize": False, "asr_model": asr_model},
                             progress_callback=progress,
                             should_cancel=should_cancel,
@@ -10598,7 +10598,7 @@ if QT_IMPORT_ERROR is None:
                 )
                 if answer != QMessageBox.StandardButton.Yes:
                     return
-            self.start_worker("Verificar exportacoes", [("Verificando exportacoes...", lambda: app_service.qc_interviews(self.context, ids=ids))])
+            self.start_worker("Verificar exportações", [("Verificando exportacoes...", lambda: app_service.qc_interviews(self.context, ids=ids))])
 
         def start_worker(self, label: str, steps: list[tuple], weights: list[int] | None = None) -> None:
             if self.worker and self.worker.isRunning():

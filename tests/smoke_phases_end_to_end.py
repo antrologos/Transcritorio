@@ -102,9 +102,9 @@ try:
 
     shortcuts = dict(collected)
     expected_shortcuts = {
-        "Novo projeto...": "Ctrl+N",
-        "Abrir projeto...": "Ctrl+O",
-        "Exportar...": "Ctrl+E",
+        "Novo projeto…": "Ctrl+N",
+        "Abrir projeto…": "Ctrl+O",
+        "Exportar…": "Ctrl+E",
         "Salvar transcrição": "Ctrl+S",
     }
     for label, sc in expected_shortcuts.items():

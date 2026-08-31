@@ -129,7 +129,7 @@ check(f"1.3 11 atalhos essenciais presentes")
 # Itens renomeados (F2)
 editar = menu_items["Editar"]
 assert "Limpar transcricao gerada..." in editar
-assert "Enviar para Lixeira..." in editar
+assert "Enviar para a Lixeira…" in editar
 check("1.4 Editar: Limpar transcricao gerada + Enviar para Lixeira (F2)")
 
 # F3: Abrir pasta Resultados
@@ -137,7 +137,7 @@ assert "Abrir pasta Resultados" in menu_items["Arquivo"]
 check("1.5 Arquivo: Abrir pasta Resultados (F3)")
 
 # F4: Gerenciar modelos
-assert "Gerenciar modelos..." in menu_items["Transcrever"]
+assert "Gerenciar modelos…" in menu_items["Transcrever"]
 assert "Configurar modelos..." not in menu_items["Transcrever"]
 assert "Status dos modelos" not in menu_items["Transcrever"]
 check("1.6 Transcrever: Gerenciar modelos... (F4 fundiu)")
@@ -283,7 +283,7 @@ for menu_act in win.menuBar().actions():
     if submenu and menu_act.text() == "Transcrever":
         transcrever_items_after = [a.text() for a in submenu.actions() if a.text() and not a.isSeparator()]
         break
-assert "Gerenciar modelos..." in transcrever_items_after
+assert "Gerenciar modelos…" in transcrever_items_after
 check("7.1 menu intacto apos fechar ModelManager")
 
 

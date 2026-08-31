@@ -105,7 +105,7 @@ for menu_act in win.menuBar().actions():
     ]
 
 assert "Limpar transcricao gerada..." in menu_items_by_title["Editar"], menu_items_by_title["Editar"]
-assert "Enviar para Lixeira..." in menu_items_by_title["Editar"]
+assert "Enviar para a Lixeira…" in menu_items_by_title["Editar"]
 check("1.4 Editar contem 'Limpar transcricao gerada...' e 'Enviar para Lixeira...'")
 
 assert "Abrir pasta Resultados" in menu_items_by_title["Arquivo"], menu_items_by_title["Arquivo"]
@@ -118,7 +118,7 @@ check("1.6 Ajuda contem 'Fluxo de trabalho'")
 header("FASE 2 - SAVE/EXPORT UX")
 
 assert win.delete_transcription_action.text() == "Limpar transcricao gerada..."
-assert win.trash_selected_action.text() == "Enviar para Lixeira..."
+assert win.trash_selected_action.text() == "Enviar para a Lixeira…"
 check("2.1 Actions renomeadas")
 
 assert saved_status_message() == "Todas as alteracoes foram salvas"
