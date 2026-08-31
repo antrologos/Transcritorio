@@ -51,7 +51,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # Emit per-word timestamps (required for pyannote-based diarization
     # post-processing). Default True; rarely needs to be turned off.
     "asr_word_timestamps": True,
-    "diarize": True,
+    # Tri-state (2026-08-31): "auto" separa falantes quando o modelo
+    # esta instalado no momento do job; True/False sao escolhas
+    # explicitas do usuario. Resolvido por model_manager.diarize_effective.
+    "diarize": "auto",
     "diarize_model": "pyannote/speaker-diarization-community-1",
     "diarization_num_speakers": 2,
     "diarization_source": "pyannote_exclusive",

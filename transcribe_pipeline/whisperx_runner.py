@@ -110,7 +110,9 @@ def run_whisperx(
             failures += 1
             break
         wav = paths.project_root / row["wav_path"]
-        if config.get("diarize", True):
+        # Tri-state "auto" (2026-08-31): a decisao de separar falantes e
+        # resolvida no momento do job, nunca lida como booleano cru.
+        if model_manager.diarize_effective(config)[0]:
             validate_local_diarization_model(config.get("diarize_model"))
         device, fell_back = runtime.resolve_device(config.get("asr_device"))
         if fell_back:
@@ -174,7 +176,7 @@ def run_whisperx(
             command.append("--no_align")
             print(f"[Transcritorio] Transcrevendo {row['interview_id']} sem "
                   f"tempos por palavra ({align_motivo}).")
-        if config.get("diarize", True):
+        if model_manager.diarize_effective(config)[0]:
             command.append("--diarize")
             add_optional_arg(command, "--min_speakers", config.get("min_speakers"))
             add_optional_arg(command, "--max_speakers", config.get("max_speakers"))

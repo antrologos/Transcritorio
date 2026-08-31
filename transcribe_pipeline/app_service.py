@@ -368,6 +368,12 @@ def required_models_ready(asr_variants: list[str] | None = None, include_diariza
     return model_manager.all_required_models_cached(asr_variants=asr_variants, include_diarization=include_diarization, include_alignment=include_alignment, align_languages=align_languages)
 
 
+# Re-export: a GUI consome a decisao via app_service; a implementacao
+# vive no model_manager porque os runners de ASR tambem a usam e nao
+# podem importar app_service (ciclo).
+diarize_effective = model_manager.diarize_effective
+
+
 def alignment_languages_for(context: ProjectContext, ids: list[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Idiomas de alinhamento exigidos pelo LOTE (etapa 4).
 

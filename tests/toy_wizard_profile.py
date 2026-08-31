@@ -126,7 +126,9 @@ wizard._profile_radios["essencial"].setChecked(True)
 wizard.done(1)  # Accepted
 assert app_settings.install_profile() == "essencial"
 assert app_settings.alignment_default() is False
-assert app_settings.diarize_default() is False
+# Tri-state 2026-08-31: o perfil Essencial NAO congela mais "sem
+# falantes" — grava "auto" (separa quando o modelo for instalado).
+assert app_settings.diarize_default() == "auto"
 # o modelo escolhido vira default da maquina (projetos novos herdam)
 assert app_settings.asr_model_default() == "small", app_settings.asr_model_default()
 print("PASS: perfil persistido por maquina")

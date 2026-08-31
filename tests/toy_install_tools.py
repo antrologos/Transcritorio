@@ -41,12 +41,16 @@ with tempfile.TemporaryDirectory() as tmp:
     assert CUDA_FLAGS in install_tools.repair_command()
     print("PASS: flag cuda_extra_installed persiste e muda o reparo")
 
-    # app_settings round-trip + arquivo corrompido nunca crasha
+    # app_settings round-trip + arquivo corrompido nunca crasha.
+    # Tri-state 2026-08-31: False persistido era artefato do perfil
+    # Essencial ("nao instalado agora") e vira "auto"; True continua True.
     app_settings.save({"diarize_default": False})
-    assert app_settings.diarize_default() is False
+    assert app_settings.diarize_default() == "auto"
+    app_settings.save({"diarize_default": True})
+    assert app_settings.diarize_default() is True
     app_settings._settings_path().write_text("nao-e-json{", encoding="utf-8")
     assert app_settings.load() == {}
-    assert app_settings.diarize_default() is True  # default seguro
+    assert app_settings.diarize_default() == "auto"  # default seguro
     print("PASS: app_settings round-trip + corrompido -> default")
 
     # ensure_first_run_setup nunca levanta (frozen simulado e nao-frozen)

@@ -21,7 +21,7 @@ from typing import Any, Callable
 from .config import Paths
 from .manifest import selected_rows
 from . import runtime
-from .model_manager import validate_local_diarization_model
+from .model_manager import diarize_effective, validate_local_diarization_model
 from .utils import append_jsonl, format_timestamp, now_utc, sanitize_message, write_json
 
 
@@ -160,7 +160,8 @@ def run_mlx_whisper(
     # Fail fast when diarization is enabled but the model is missing — matches
     # whisperx_runner behavior (otherwise we'd spend 5+ min transcribing before
     # the diarize step discovers the missing model).
-    if config.get("diarize", True):
+    # Tri-state "auto" (2026-08-31): resolver, nunca booleano cru.
+    if diarize_effective(config)[0]:
         validate_local_diarization_model(config.get("diarize_model"))
 
     # pyannote metrics env var — set only when explicitly configured so MLX

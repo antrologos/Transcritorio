@@ -395,7 +395,8 @@ def run_parakeet(
             "em Gerenciar modelos antes de transcrever com este motor."
         )
 
-    if config.get("diarize", True):
+    # Tri-state "auto" (2026-08-31): resolver, nunca booleano cru.
+    if model_manager.diarize_effective(config)[0]:
         validate_local_diarization_model(config.get("diarize_model"))
 
     from .whisperx_runner import asr_output_dir

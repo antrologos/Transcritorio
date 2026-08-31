@@ -39,9 +39,21 @@ def save(updates: dict[str, Any]) -> None:
     write_json(path, data)
 
 
-def diarize_default() -> bool:
-    """Default de 'diarize' para PROJETOS NOVOS (escolha do wizard)."""
-    return bool(load().get("diarize_default", True))
+def diarize_default() -> bool | str:
+    """Default de 'diarize' para PROJETOS NOVOS: True ou "auto".
+
+    "auto" = separar falantes quando o modelo estiver instalado no
+    momento do job (resolvido por model_manager.diarize_effective).
+    False persistido NAO e devolvido: ele so foi gravado pelo perfil
+    Essencial de wizards antigos, e significava "nao instalado agora",
+    nunca "nao quero falantes" — congela-lo nos projetos novos era o
+    bug (2026-08-31). O False explicito continua existindo, mas apenas
+    POR PROJETO, quando o usuario desmarca a caixa Separar falantes.
+    """
+    raw = load().get("diarize_default", "auto")
+    if raw is True:
+        return True
+    return "auto"
 
 
 def asr_model_default() -> str:

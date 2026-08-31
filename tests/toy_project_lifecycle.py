@@ -34,10 +34,13 @@ with tempfile.TemporaryDirectory() as tmp:
     root = Path(tmp) / "Meu Projeto.transcricao"
     context = app_service.create_project(root, project_name="Meu Projeto")
     assert context.config["asr_model"] == "tiny", context.config["asr_model"]
-    assert context.config["diarize"] is False
+    # Tri-state 2026-08-31: False do wizard antigo vira "auto" — o
+    # projeto passa a separar falantes assim que o modelo for instalado,
+    # em vez de congelar "sem falantes" para sempre.
+    assert context.config["diarize"] == "auto", context.config["diarize"]
     # o run_config gravado tambem (nao so o objeto em memoria)
     texto = (root / "Transcricoes" / "00_config" / "run_config.yaml").read_text(encoding="utf-8")
-    assert "asr_model: tiny" in texto and "diarize: false" in texto.lower()
+    assert "asr_model: tiny" in texto and "diarize: auto" in texto.lower()
 
     # descritor sem mangling: "Meu Projeto.transcritorio"
     descritores = sorted(p.name for p in root.glob("*.transcritorio"))

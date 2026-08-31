@@ -3791,7 +3791,12 @@ if QT_IMPORT_ERROR is None:
                 try:
                     from . import app_settings
                     updates = {
-                        "diarize_default": bool(self.wants_diarization),
+                        # "auto" (2026-08-31): o perfil decide o que
+                        # INSTALAR, nunca congela "sem falantes" como
+                        # preferencia — projetos passam a separar sozinhos
+                        # assim que o modelo for instalado.
+                        "diarize_default": (True if self.wants_diarization
+                                            else "auto"),
                         "install_profile": str(self.selected_profile),
                     }
                     # O modelo escolhido vira o default da MAQUINA: projetos
@@ -5623,10 +5628,15 @@ if QT_IMPORT_ERROR is None:
             if not hasattr(self, "diarize_checkbox"):
                 return
             from . import app_settings as _settings
+            # A caixa mostra o estado EFETIVO: com "auto", segue a
+            # instalacao do modelo no momento (tri-state 2026-08-31).
+            if self.context:
+                efetivo = app_service.diarize_effective(self.context.config or {})[0]
+            else:
+                efetivo = app_service.diarize_effective(
+                    {"diarize": _settings.diarize_default()})[0]
             self.diarize_checkbox.blockSignals(True)
-            self.diarize_checkbox.setChecked(
-                bool(self.context.config.get("diarize", True)) if self.context
-                else bool(_settings.diarize_default()))
+            self.diarize_checkbox.setChecked(efetivo)
             self.diarize_checkbox.blockSignals(False)
 
         def _maybe_offer_parakeet_gpu(self) -> None:
@@ -5930,13 +5940,15 @@ if QT_IMPORT_ERROR is None:
         def _configured_diarize(self) -> bool:
             """Se a diarizacao entra nos gates de modelos.
 
-            Com projeto aberto: o 'diarize' do projeto. Sem projeto (startup):
-            a escolha persistida do wizard — senao quem pulou o token veria o
-            wizard reaparecer a cada inicio."""
+            Com projeto aberto: o 'diarize' EFETIVO do projeto (tri-state
+            "auto" resolvido pela instalacao). Sem projeto (startup): o
+            default do wizard, resolvido do mesmo jeito — senao quem
+            pulou o token veria o wizard reaparecer a cada inicio."""
             if self.context is not None:
-                return bool((self.context.config or {}).get("diarize", True))
+                return app_service.diarize_effective(self.context.config or {})[0]
             from . import app_settings
-            return app_settings.diarize_default()
+            return app_service.diarize_effective(
+                {"diarize": app_settings.diarize_default()})[0]
 
         def ensure_ffmpeg(self) -> bool:
             """O ffmpeg e pre-requisito externo (prepara o audio e le a
@@ -6100,13 +6112,15 @@ if QT_IMPORT_ERROR is None:
             self.diarize_checkbox = QCheckBox("Separar falantes")
             self.diarize_checkbox.setToolTip(
                 "Identifica automaticamente quem esta falando (Entrevistador/Entrevistado).\n"
+                "Ligado sozinho sempre que o recurso esta instalado neste computador.\n"
                 "Desative para audios com um unico falante ou para transcrever mais rapido."
             )
-            # Sem projeto aberto, o estado default e o da INSTALACAO (perfil
-            # essencial = desmarcado) — um True fixo mentia para o usuario
-            # essencial ate o primeiro _sync_diarize_checkbox.
+            # Sem projeto aberto, o estado default e o EFETIVO da maquina:
+            # tri-state "auto" resolvido pela instalacao (2026-08-31) — um
+            # booleano cru trataria "auto" como sempre-ligado.
             from . import app_settings as _settings_cb
-            self.diarize_checkbox.setChecked(bool(_settings_cb.diarize_default()))
+            self.diarize_checkbox.setChecked(app_service.diarize_effective(
+                {"diarize": _settings_cb.diarize_default()})[0])
             self.diarize_checkbox.toggled.connect(self._on_diarize_toggled)
             action_bar.addWidget(self.diarize_checkbox)
             action_bar.addWidget(self.action_button(self.save_action))
@@ -9593,6 +9607,21 @@ if QT_IMPORT_ERROR is None:
                     "O texto e os tempos por bloco saem normalmente. Idiomas "
                     "com pacote de alinhamento podem ser escolhidos no Motor "
                     "(link \"Modelo\"/\"Motor\" no topo).")
+            # Tri-state "auto" (2026-08-31): decidir UMA vez por lote, no
+            # momento do job. Auto resolvido para "sem falantes" (modelo
+            # nao instalado) avisa com todas as letras — antes o lote saia
+            # sem falantes em silencio e o usuario concluia que o app nao
+            # separava.
+            do_diarize, motivo_diarize = app_service.diarize_effective(
+                self.context.config or {})
+            if not do_diarize and motivo_diarize:
+                QMessageBox.information(
+                    self, "Sem separação de falantes",
+                    "Este lote será transcrito SEM separar quem fala: "
+                    f"{motivo_diarize}.\n\n"
+                    "O texto sai normalmente. Depois de instalar o recurso, "
+                    "use Transcrever → Reprocessar falantes para separar sem "
+                    "transcrever de novo.")
             # Retranscrever e uma decisao EXPLICITA (pipeline-safety): o
             # baseline sera sobrescrito e a transcricao editavel recriada.
             # confirmed_recreate=True vem de fluxos que ja avisaram
@@ -9617,7 +9646,7 @@ if QT_IMPORT_ERROR is None:
                 )
                 if answer != QMessageBox.StandardButton.Yes:
                     return
-            if bool(self.context.config.get("diarize", True)):
+            if do_diarize:
                 if not self._ask_speaker_counts_if_needed(ids):
                     return
                 self._reset_speakers_confirmed(ids)
@@ -9631,7 +9660,6 @@ if QT_IMPORT_ERROR is None:
             # default "auto" (v0.2+) e preciso resolver antes do lookup.
             from . import runtime as _runtime_w
             asr_device = _runtime_w.resolve_device(str(self.context.config.get("asr_device") or "auto"))[0]
-            do_diarize = bool(self.context.config.get("diarize", True))
             do_boundary = do_diarize and bool(self.context.config.get("boundary_check", True))
             w5 = _pipeline_weights(asr_model, asr_device)
             # 7 fases: [prepare, asr, diarize, render, conferir trocas,

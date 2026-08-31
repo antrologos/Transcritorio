@@ -755,6 +755,47 @@ def validate_local_diarization_model(model_name: str | os.PathLike[str] | None) 
     return LOCAL_PYANNOTE_MODEL
 
 
+def local_pyannote_cached(cache_dir: Path | None = None) -> bool:
+    """O modelo de separacao de falantes esta instalado (pesos completos)?"""
+    try:
+        snap = cached_snapshot_path(LOCAL_PYANNOTE_MODEL, cache_dir,
+                                    revision=LOCAL_PYANNOTE_REVISION)
+        return bool(snap and _snapshot_has_weights(snap))
+    except Exception:  # noqa: BLE001 - cache ilegivel = tratar como ausente
+        return False
+
+
+def diarize_effective(config: dict | None,
+                      cache_dir: Path | None = None) -> tuple[bool, str]:
+    """Resolve o tri-state `diarize` do projeto: (separar?, motivo).
+
+    Semantica (2026-08-31, "instalado => aplicado"): `true` explicito
+    sempre separa (o gate oferece o download se o modelo faltar);
+    `false` explicito nunca separa (o usuario DESMARCOU a caixa);
+    "auto"/ausente — o novo default — separa quando o pyannote esta
+    instalado NO MOMENTO DO JOB. Antes, o perfil de instalacao
+    congelava false no projeto na criacao, e a transcricao saia sem
+    falantes para sempre mesmo com o modelo instalado depois.
+
+    O motivo so e preenchido quando o automatico resolve para "sem
+    falantes" — e a mensagem honesta que a GUI mostra antes do lote.
+    Vive aqui (nao no app_service) porque os runners de ASR tambem
+    consomem a decisao e nao podem importar app_service (ciclo).
+    """
+    raw = (config or {}).get("diarize", "auto")
+    if isinstance(raw, bool):
+        return (raw, "")
+    valor = str(raw or "auto").strip().lower()
+    if valor in ("true", "1", "yes", "sim"):
+        return (True, "")
+    if valor in ("false", "0", "no", "nao", "não"):
+        return (False, "")
+    if local_pyannote_cached(cache_dir):
+        return (True, "")
+    return (False, "o modelo de separação de falantes não está instalado — "
+                   "disponível em Gerenciar modelos")
+
+
 def hf_cache_path(repo_id: str, cache_dir: Path | None = None) -> Path:
     root = cache_dir or runtime.model_cache_dir()
     return root / ("models--" + repo_id.replace("/", "--"))

@@ -8,6 +8,16 @@ assinatura digital, e o SignPath recusou a assinatura gratuita. O canal
 oficial passa a ser **PyPI + uv** (`uv tool install transcritorio`); ver
 `docs/INSTALL_WINDOWS.md` e `docs/LEGACY_STANDALONE.md`.
 
+- **Separação de falantes automática quando instalada**: a opção
+  "Separar falantes" ganhou o modo automático (novo padrão) — separa
+  quem fala sempre que o recurso estiver instalado no computador, no
+  momento da transcrição. Antes, um projeto criado pelo perfil
+  Essencial gravava "sem falantes" para sempre, mesmo que o modelo
+  fosse instalado depois — e a transcrição saía sem falantes em
+  silêncio. Agora: instalou, aplica; desligado só se você desmarcar a
+  caixa de propósito; e quando o recurso falta, o app avisa com todas
+  as letras antes de transcrever (e ensina o caminho do Reprocessar
+  falantes para separar depois sem transcrever de novo).
 - **Idioma como capacidade** (etapa 4 do programa multilíngue): 16
   idiomas ganham pacote de alinhamento dedicado (tempos por palavra) com
   download avisado ANTES de transcrever — antes, inglês/espanhol/francês
