@@ -6112,9 +6112,22 @@ if QT_IMPORT_ERROR is None:
             header.addWidget(self.project_label)
             root_layout.addLayout(header)
 
-            action_bar = QHBoxLayout()
-            action_bar.addWidget(self.media_button())
-            action_bar.addWidget(self.transcribe_menu_button())
+            # Toolbar real (R1): ordem = jornada — producao | revisao |
+            # analise. Botoes de acao via addAction espelham a QAction
+            # nativamente. A caixa Separar falantes fica no fim ate a R3
+            # (familia transcrever a leva para o dropdown).
+            from . import ui_shell
+            toolbar = ui_shell.build_tool_bar(self)
+            toolbar.addWidget(self.media_button())
+            toolbar.addWidget(self.transcribe_menu_button())
+            toolbar.addSeparator()
+            toolbar.addAction(self.save_action)
+            toolbar.addAction(self.generate_files_action)
+            toolbar.addSeparator()
+            # Identidade propria da exploracao por sentido (feedback
+            # 2026-08-26: nunca misturar com a busca de palavras).
+            toolbar.addAction(self.explore_action)
+            toolbar.addSeparator()
             self.diarize_checkbox = QCheckBox("Separar falantes")
             self.diarize_checkbox.setToolTip(
                 "Identifica automaticamente quem esta falando (Entrevistador/Entrevistado).\n"
@@ -6128,16 +6141,12 @@ if QT_IMPORT_ERROR is None:
             self.diarize_checkbox.setChecked(app_service.diarize_effective(
                 {"diarize": _settings_cb.diarize_default()})[0])
             self.diarize_checkbox.toggled.connect(self._on_diarize_toggled)
-            action_bar.addWidget(self.diarize_checkbox)
-            action_bar.addWidget(self.action_button(self.save_action))
-            action_bar.addWidget(self.action_button(self.generate_files_action))
-            # Identidade propria da exploracao por sentido (feedback
-            # 2026-08-26: nunca misturar com a busca de palavras).
-            action_bar.addWidget(self.action_button(self.explore_action))
-            action_bar.addStretch()
-            root_layout.addLayout(action_bar)
+            toolbar.addWidget(self.diarize_checkbox)
+            self.addToolBar(toolbar)
 
-            progress_row = QHBoxLayout()
+            # Statusbar real (R1): estado EMBAIXO. Nomes de atributo
+            # preservados (aliasing) — PipelineWorker/update_action_states
+            # escrevem por nome e seguem intocados.
             self.progress_label = QLabel("Pronto.")
             self.save_status_label = QLabel("Sem transcrição aberta.")
             self.save_status_label.setStyleSheet(_style_muted())
@@ -6146,11 +6155,13 @@ if QT_IMPORT_ERROR is None:
             self.progress_bar.setVisible(False)
             self.cancel_job_button = self.action_button(self.cancel_job_action)
             self.cancel_job_button.setVisible(False)
-            progress_row.addWidget(self.progress_label, stretch=2)
-            progress_row.addWidget(self.save_status_label, stretch=1)
-            progress_row.addWidget(self.progress_bar, stretch=3)
-            progress_row.addWidget(self.cancel_job_button)
-            root_layout.addLayout(progress_row)
+            self.setStatusBar(ui_shell.build_status_bar(
+                self,
+                activity_label=self.progress_label,
+                progress_bar=self.progress_bar,
+                cancel_button=self.cancel_job_button,
+                save_label=self.save_status_label,
+            ))
 
             splitter = QSplitter(Qt.Orientation.Horizontal)
             splitter.addWidget(self._build_interview_panel())
