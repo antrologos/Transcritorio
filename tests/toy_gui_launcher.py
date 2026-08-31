@@ -43,5 +43,36 @@ print("PASS: com instancia escutando -> probe True (segunda instancia sai)")
 server.close()
 QLocalServer.removeServer(key)
 
+# ---- R4: identidade da instalacao + aviso de build antigo ---------------
+ident = gui_launcher._instance_identity()
+assert ident and "+" in ident, ident
+print(f"PASS: identidade da instalacao ({ident})")
+
+# Server LEGADO (escuta mas nunca le nem responde): probe True e on_stale
+# CHAMADO — a travessia real de upgrade, com a janela antiga aberta que
+# fecha o socket sem ler. Sem on_stale (default), nada acontece.
+avisos: list[bool] = []
+key2 = f"TranscritorioToyLauncher2-{os.getpid()}"
+QLocalServer.removeServer(key2)
+server2 = QLocalServer()
+assert server2.listen(key2), server2.errorString()
+assert gui_launcher._request_activate(key2, on_stale=lambda: avisos.append(True)) is True
+assert avisos == [True], "server sem resposta deveria disparar on_stale"
+print("PASS: server pre-protocolo -> on_stale na 2a instancia")
+
+# O payload novo chega inteiro ao server (formato "activate <identidade>")
+# mesmo com o cliente ja desconectado (named pipes preservam os bytes).
+if server2.waitForNewConnection(200):
+    conn = server2.nextPendingConnection()
+    if conn is not None:
+        if conn.bytesAvailable() or conn.waitForReadyRead(200):
+            dados = bytes(conn.readAll()).decode("utf-8", "replace")
+            assert dados.startswith("activate "), dados
+            assert dados.split(" ", 1)[1] == ident, dados
+            print("PASS: payload 'activate <identidade>' legivel pelo server")
+        conn.close()
+server2.close()
+QLocalServer.removeServer(key2)
+
 print()
 print("PASS: toy_gui_launcher")

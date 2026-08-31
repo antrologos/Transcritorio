@@ -46,8 +46,48 @@ def _splash_pixmap():
     return pixmap
 
 
-def _request_activate(key: str = _SINGLE_INSTANCE_KEY) -> bool:
+def _instance_identity() -> str:
+    """Identidade desta instalacao para o protocolo de instancia unica.
+
+    __version__ do modulo e hardcoded (0.1.8) e __build__ fica "dev" no
+    canal uv/PyPI — sozinhos nao distinguem releases. A versao REAL do
+    wheel instalado (importlib.metadata) + __build__ (local-<sha> nos
+    wheels locais, timestamp no frozen legado) cobre todos os canais."""
+    from . import __build__, __version__
+    try:
+        from importlib.metadata import version
+        pkg = version("transcritorio")
+    except Exception:  # noqa: BLE001 - rodando da fonte sem instalacao
+        pkg = __version__
+    return f"{pkg}+{__build__}"
+
+
+def _warn_stale_window() -> None:
+    """Aviso da 2a instancia (a que morre): a janela aberta e de um build
+    que nem entende o protocolo — anterior ao instalado com certeza."""
+    from PySide6.QtWidgets import QMessageBox
+
+    box = QMessageBox()
+    box.setIcon(QMessageBox.Icon.Information)
+    box.setWindowTitle("Versão mais nova instalada")
+    box.setText(
+        "A janela aberta do Transcritório parece ser de uma versão "
+        "anterior à que está instalada neste computador.\n\n"
+        "Feche aquela janela e abra o aplicativo de novo para usar a "
+        "versão atual.")
+    box.exec()
+
+
+def _request_activate(key: str = _SINGLE_INSTANCE_KEY, on_stale=None) -> bool:
     """Tenta acordar uma instancia ja aberta. True = existe, ja foi acordada.
+
+    Envia "activate <identidade>" e espera a identidade do servidor de
+    volta. Divisao do aviso de build antigo (R4): se o servidor RESPONDE
+    diferente, ele mesmo avisa na janela aberta; se NAO responde, e um
+    build pre-protocolo (anterior por definicao) e `on_stale` e chamado
+    AQUI, na instancia nova — unico jeito de avisar quando a janela
+    aberta e velha demais para ler o payload. Servidores antigos fecham
+    sem ler: o payload extra e inofensivo para eles.
 
     `key` parametrizada para os toys usarem um socket proprio — com o app
     REAL aberto na maquina, o probe na chave global encontraria a janela
@@ -58,10 +98,16 @@ def _request_activate(key: str = _SINGLE_INSTANCE_KEY) -> bool:
     probe.connectToServer(key)
     if not probe.waitForConnected(300):
         return False
-    probe.write(b"activate")
+    minha = _instance_identity()
+    probe.write(f"activate {minha}".encode("utf-8"))
     probe.flush()
     probe.waitForBytesWritten(300)
+    resposta = b""
+    if probe.waitForReadyRead(500):
+        resposta = bytes(probe.readAll())
     probe.disconnectFromServer()
+    if on_stale is not None and not resposta.strip():
+        on_stale()
     return True
 
 
@@ -74,13 +120,13 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("Transcritorio")
 
-    if _request_activate():
+    if _request_activate(on_stale=_warn_stale_window):
         return 0
     QLocalServer.removeServer(_SINGLE_INSTANCE_KEY)  # socket orfao de crash anterior
     server = QLocalServer()
     if not server.listen(_SINGLE_INSTANCE_KEY):
         # Corrida rara: outra instancia ganhou o listen entre o probe e aqui.
-        if _request_activate():
+        if _request_activate(on_stale=_warn_stale_window):
             return 0
         server = None  # segue sem instancia unica — abrir e melhor que falhar
 

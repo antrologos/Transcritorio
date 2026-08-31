@@ -11345,17 +11345,47 @@ def main(splash: Any = None, single_instance_server: Any = None) -> int:
             pass
     if single_instance_server is not None:
         # Segundo clique no icone: em vez de outra janela, trazer esta para
-        # frente (gui_launcher ja barrou o processo novo).
+        # frente (gui_launcher ja barrou o processo novo). Desde a R4 o
+        # ping carrega a identidade da instalacao ("activate <ver>+<build>")
+        # e o servidor responde a propria: se o processo novo e de um wheel
+        # MAIS NOVO que esta janela, avisar aqui — o usuario clicou no
+        # icone esperando a versao recem-instalada e recebeu a antiga.
         def _on_second_instance_ping() -> None:
+            payload = b""
             try:
                 connection = single_instance_server.nextPendingConnection()
                 if connection is not None:
+                    try:
+                        if connection.waitForReadyRead(200):
+                            payload = bytes(connection.readAll())
+                        from .gui_launcher import _instance_identity
+                        connection.write(_instance_identity().encode("utf-8"))
+                        connection.flush()
+                        connection.waitForBytesWritten(200)
+                    except Exception:  # noqa: BLE001 - protocolo nunca
+                        pass           # impede o raise da janela
                     connection.close()
             except Exception:
                 pass
             window.showNormal()
             window.raise_()
             window.activateWindow()
+            try:
+                texto = payload.decode("utf-8", "replace").strip()
+                if texto.startswith("activate "):
+                    from .gui_launcher import _instance_identity
+                    outra = texto.split(" ", 1)[1].strip()
+                    if (outra and outra != _instance_identity()
+                            and not getattr(window, "_stale_build_warned", False)):
+                        window._stale_build_warned = True  # 1x por sessao
+                        QTimer.singleShot(0, lambda: QMessageBox.information(
+                            window,
+                            "Versão mais nova instalada",
+                            "Uma versão mais nova do Transcritório foi "
+                            "instalada neste computador.\n\nFeche esta janela "
+                            "e abra o aplicativo de novo para usá-la."))
+            except Exception:  # noqa: BLE001 - payload legado/parcial
+                pass
         single_instance_server.newConnection.connect(_on_second_instance_ping)
         window._single_instance_server = single_instance_server
     if os.environ.get("QT_QPA_PLATFORM", "").lower() != "offscreen":
