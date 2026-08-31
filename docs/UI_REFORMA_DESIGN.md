@@ -1,6 +1,6 @@
 # Programa R — Dossiê de design da reforma de UI
 
-**Status**: EM APROVAÇÃO (aguardando o aceite do autor)
+**Status**: APROVADO pelo autor em 2026-08-31 (os 5 pontos da seção 9)
 **Data**: 2026-08-31
 **Plano-programa**: `.claude/plans/` (Programa R). Nenhuma mudança
 visível de UI é implementada antes do aceite deste dossiê.
