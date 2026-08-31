@@ -8,6 +8,16 @@ assinatura digital, e o SignPath recusou a assinatura gratuita. O canal
 oficial passa a ser **PyPI + uv** (`uv tool install transcritorio`); ver
 `docs/INSTALL_WINDOWS.md` e `docs/LEGACY_STANDALONE.md`.
 
+- **Reforma de interface — abas e a casa dos resultados (R2)**: o
+  painel direito ganhou três abas. **Transcrição** segue sendo o
+  trabalho diário; **Documentos** é a casa de tudo que o app produz —
+  transcrição final, legendas, ✨ resumo, glossário, relatório de
+  verificação e versões anteriores, cada item com Abrir/Gerar ali
+  mesmo e a data em que foi feito (fim do "não sei onde salvou");
+  **Propriedades** reúne os dados da entrevista aberta (gravação
+  original, formato, duração, língua, falantes, contexto). Os três
+  avisos acima dos blocos passam a ocupar um único espaço, um por vez,
+  do mais urgente ao menos.
 - **Reforma de interface — janela nova (R1)**: a janela ganhou a
   estrutura definitiva: barra de ferramentas fixa no topo (Adicionar
   mídia · Transcrever | Salvar · Exportar | ✨ Perguntar), barra de
