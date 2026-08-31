@@ -1932,6 +1932,52 @@ if QT_IMPORT_ERROR is None:
                                  "-", False, f"opt:{asset.key}", gb_hint,
                                  (f"Atenção: {cap.label} {aviso}. Por sua conta e risco."
                                   if aviso else "")))
+            # Aceleracao GPU do Parakeet — unico item NAO-HF do
+            # gerenciador: pacote pip (onnxruntime-gpu) num diretorio
+            # isolado (ver onnx_env.py). O sentinel "env:onnx_gpu" no
+            # campo repo roteia remocao/download para os ramos proprios.
+            import sys as _sys
+            if _sys.platform == "win32" and not getattr(_sys, "frozen", False):
+                from . import onnx_env as _onnx_env, runtime as _rt
+                rotulo_gpu = "Aceleração do Parakeet na GPU"
+                gb_gpu = f"~{_onnx_env.ESTIMATED_GB:.1f} GB".replace(".", ",")
+                dir_gpu = _onnx_env.onnx_env_dir()
+                if not hw.has_gpu:
+                    rows.append((rotulo_gpu, "env:onnx_gpu", 0, "Incompativel",
+                                 "-", False, None, gb_gpu,
+                                 "Requer uma placa de vídeo NVIDIA."))
+                elif not _rt.cuda_libs_present():
+                    rows.append((rotulo_gpu, "env:onnx_gpu", 0, "Incompativel",
+                                 "-", False, None, gb_gpu,
+                                 "Requer o Transcritório instalado com a "
+                                 "aceleração NVIDIA (CUDA)."))
+                elif _onnx_env.onnx_env_ready():
+                    try:
+                        size_gpu = sum(f.stat().st_size
+                                       for f in dir_gpu.rglob("*") if f.is_file())
+                        dt_gpu = _onnx_env.marker_path().stat().st_mtime
+                        data_gpu = datetime.fromtimestamp(dt_gpu).strftime("%d/%m/%Y")
+                    except OSError:
+                        size_gpu, data_gpu = 0, "-"
+                    rows.append((rotulo_gpu, "env:onnx_gpu", size_gpu, "Instalado",
+                                 data_gpu, True, None, "",
+                                 "O motor Parakeet usa a GPU quando o Dispositivo "
+                                 "é Automático ou GPU."))
+                elif dir_gpu.exists():
+                    rows.append((rotulo_gpu, "env:onnx_gpu", 0, "Incompleto",
+                                 "-", False, "env:onnx_gpu", gb_gpu,
+                                 "Instalação incompleta ou desatualizada — "
+                                 "Baixar refaz do zero."))
+                else:
+                    vram_gpu = _rt.total_vram_gb()
+                    aviso_gpu = ("" if vram_gpu is None or vram_gpu >= 6.0 else
+                                 "Atenção: pouca memória de vídeo (usa ~4,7 GB). "
+                                 "Por sua conta e risco — se falhar, o app volta "
+                                 "para o processador sozinho. ")
+                    rows.append((rotulo_gpu, "env:onnx_gpu", 0, "Disponivel",
+                                 "-", False, "env:onnx_gpu", gb_gpu,
+                                 aviso_gpu + "Acelera o motor Parakeet pt-BR "
+                                 "(~4x mais rápido que no processador)."))
             # Orfaos
             for repo in model_manager.orphan_repos(cache_root):
                 entry = scan_by_repo.get(repo)
@@ -1992,6 +2038,8 @@ if QT_IMPORT_ERROR is None:
                 if parent is not None and hasattr(parent, "show_model_setup"):
                     parent.show_model_setup(include_diarization=True)
                     self._populate()
+            elif kind == "env":
+                self._install_onnx_gpu_env()
 
         def _download_optional(self, key: str) -> None:
             """Delegar a oferta padrao da janela (_ensure_optional_model):
@@ -2078,6 +2126,74 @@ if QT_IMPORT_ERROR is None:
                 parent._invalidate_capability_cache()
             self._populate()
 
+        def _install_onnx_gpu_env(self) -> None:
+            """Instalar a aceleracao GPU do Parakeet (pip --target isolado).
+
+            Nao e um modelo HF: nao passa pelo download_optional_model.
+            O download do uv nao e cancelavel no meio (mesma limitacao
+            aceita no llm_env) — o dialogo nao promete cancelamento.
+            """
+            from . import onnx_env as _onnx_env, runtime as _rt
+            janela = self.parent()
+            if janela is not None and getattr(janela, "_model_download_busy", False):
+                QMessageBox.information(self, "Download em andamento",
+                                        "Aguarde o download atual terminar.")
+                return
+            from . import model_manager
+            disk = model_manager.check_disk_space(_onnx_env.ESTIMATED_GB + 0.2)
+            if not disk.get("ok"):
+                QMessageBox.warning(self, "Espaço em disco insuficiente",
+                                    str(disk.get("message") or ""))
+                return
+            vram = _rt.total_vram_gb()
+            aviso = ""
+            if vram is not None and vram < 6.0:
+                aviso = ("\n\nAtenção: sua placa tem pouca memória de vídeo "
+                         f"({vram:.0f} GB; o Parakeet usa ~4,7 GB). Por sua "
+                         "conta e risco — se falhar, o app volta para o "
+                         "processador sozinho.")
+            answer = QMessageBox.question(
+                self, "Instalar aceleração GPU?",
+                "Instalar a aceleração do Parakeet na GPU agora "
+                f"(uma vez, ~{_onnx_env.ESTIMATED_GB:.1f} GB)?\n"
+                f"Espaço livre em disco: {disk.get('free_gb', 0):.1f} GB."
+                + aviso,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            dialog = QProgressDialog("Baixando a aceleração GPU...", None, 0, 100, self)
+            dialog.setWindowTitle("Aceleração GPU")
+            dialog.setWindowModality(Qt.WindowModality.WindowModal)
+            dialog.setAutoClose(False)
+            dialog.show()
+
+            def on_progress(detail: dict) -> None:
+                dialog.setValue(max(0, min(100, int(detail.get("progress") or 0))))
+                if detail.get("message"):
+                    dialog.setLabelText(str(detail["message"]))
+                QApplication.processEvents()
+
+            if janela is not None:
+                janela._model_download_busy = True
+            try:
+                rc = _onnx_env.create_onnx_env(progress_callback=on_progress)
+            except Exception as exc:  # noqa: BLE001 - excecao subiria sem mensagem
+                rc = 1
+                print(f"create_onnx_env: {exc}")
+            finally:
+                if janela is not None:
+                    janela._model_download_busy = False
+                dialog.close()
+            if rc != 0:
+                QMessageBox.warning(
+                    self, "Instalação não concluída",
+                    "Não foi possível instalar a aceleração GPU. "
+                    "Verifique a conexão e tente de novo.")
+                return
+            self._populate()
+
         def _jobs_using_model_repo(self, repo_id: str) -> int:
             """Retorna numero de jobs Rodando/Na fila que estao usando este modelo.
 
@@ -2104,6 +2220,39 @@ if QT_IMPORT_ERROR is None:
 
         def _remove_model(self, repo_id: str, status: str) -> None:
             from . import model_manager
+            if repo_id == "env:onnx_gpu":
+                # Sentinel do diretorio de aceleracao (nao e repo HF).
+                # Enquanto o modelo Parakeet estiver em uso por um job,
+                # bloquear tambem a remocao do acelerador.
+                from . import onnx_env as _onnx_env
+                parakeet_repo = str(model_manager.ASR_VARIANTS.get(
+                    "parakeet-pt", {}).get("repo") or "")
+                if parakeet_repo and self._jobs_using_model_repo(parakeet_repo):
+                    QMessageBox.information(
+                        self, "Acao bloqueada",
+                        "Ha tarefas na fila usando o motor Parakeet. Cancele "
+                        "ou aguarde antes de remover a aceleração.")
+                    return
+                reply = QMessageBox.question(
+                    self, "Remover aceleração GPU",
+                    "Remover a aceleração do Parakeet na GPU?\n\n"
+                    "O motor continua funcionando no processador. Você pode "
+                    "instalar de novo depois.",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    return
+                if _onnx_env.remove_onnx_env():
+                    QMessageBox.information(self, "Aceleração removida",
+                                            "A aceleração GPU foi removida.")
+                else:
+                    QMessageBox.warning(
+                        self, "Nao foi possivel remover",
+                        "Feche o app e tente de novo, ou apague a pasta "
+                        f"manualmente: {_onnx_env.onnx_env_dir()}")
+                self._populate()
+                return
             busy_n = self._jobs_using_model_repo(repo_id)
             if busy_n:
                 QMessageBox.information(
@@ -5479,6 +5628,54 @@ if QT_IMPORT_ERROR is None:
                 bool(self.context.config.get("diarize", True)) if self.context
                 else bool(_settings.diarize_default()))
             self.diarize_checkbox.blockSignals(False)
+
+        def _maybe_offer_parakeet_gpu(self) -> None:
+            """Oferta unica da aceleracao GPU do Parakeet, na primeira
+            transcricao com o motor em maquina apta sem o pacote.
+
+            Nao bloqueia o job: qualquer resposta segue transcrevendo
+            (a diferenca e so CPU vs GPU). VRAM < 6 GB nao recebe a
+            oferta proativa (a linha do gerenciador continua la, com o
+            aviso por conta e risco)."""
+            if sys.platform != "win32" or getattr(sys, "frozen", False):
+                return
+            if getattr(self, "_parakeet_gpu_prompted", False):
+                return
+            self._parakeet_gpu_prompted = True
+            from . import onnx_env as _onnx_env, runtime as _runtime
+            flag = _runtime.app_data_dir() / "parakeet_gpu_prompt_dismissed.flag"
+            if flag.exists():
+                return
+            if _onnx_env.onnx_env_ready() or not _runtime.cuda_libs_present():
+                return
+            from . import capabilities as _caps
+            hw = _caps.hardware_snapshot()
+            if not hw.has_gpu:
+                return
+            if hw.vram_gb is not None and hw.vram_gb < 6.0:
+                return
+            box = QMessageBox(self)
+            box.setWindowTitle("Acelerar o Parakeet na GPU?")
+            box.setIcon(QMessageBox.Icon.Question)
+            box.setText(
+                "O motor Parakeet pode usar a sua placa NVIDIA e ficar "
+                "cerca de 4x mais rápido (uma hora de gravação em ~1 minuto).\n\n"
+                "Instalar a aceleração agora (uma vez, ~0,3 GB)? Sem ela, a "
+                "transcrição segue normalmente no processador.")
+            instalar = box.addButton("Instalar agora", QMessageBox.ButtonRole.AcceptRole)
+            box.addButton("Agora não", QMessageBox.ButtonRole.RejectRole)
+            nunca = box.addButton("Não perguntar de novo", QMessageBox.ButtonRole.DestructiveRole)
+            box.exec()
+            if box.clickedButton() is nunca:
+                try:
+                    flag.parent.mkdir(parents=True, exist_ok=True)
+                    flag.write_text("dismissed", encoding="utf-8")
+                except OSError:
+                    pass
+                return
+            if box.clickedButton() is instalar:
+                dlg = ModelManagerDialog(lambda: self.context, self)
+                dlg._install_onnx_gpu_env()
 
         def _maybe_offer_cuda_install(self) -> None:
             """Se Windows + NVIDIA detectada + bundle sem torch_cuda + flag
@@ -9377,6 +9574,9 @@ if QT_IMPORT_ERROR is None:
                         "Whisper para transcrever.")
                     return
                 langs_lote, avisos_idioma = (), ()
+                # Oferta unica da aceleracao GPU (nao bloqueia: qualquer
+                # resposta segue transcrevendo — so muda CPU vs GPU).
+                self._maybe_offer_parakeet_gpu()
             if not self.ensure_models_ready(
                     asr_variants=[asr_model] if asr_model else None,
                     align_languages=langs_lote,

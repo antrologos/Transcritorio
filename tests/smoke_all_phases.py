@@ -243,8 +243,9 @@ with patch.object(runtime, "model_cache_dir", return_value=cache_root):
 
 # 6 ASR (base demo nao-instalado nao e oferecido, 2026-08-30; parakeet-pt
 # experimental oferecido, E4-4) + 2 fixos + 15 pacotes de idioma (etapa 4)
-# + 1 MMS coringa + 3 opcionais de IA + 1 orfao = 28 linhas
-assert mm_dialog.table.rowCount() == 28
+# + 1 MMS coringa + 3 opcionais de IA + 1 orfao = 28 linhas; +1 no Windows
+# (linha da aceleracao GPU do Parakeet, so win32 nao-frozen)
+assert mm_dialog.table.rowCount() == 28 + (1 if sys.platform == "win32" else 0)
 check(f"6.1 tabela: {mm_dialog.table.rowCount()} linhas")
 
 # Espacamento total valido

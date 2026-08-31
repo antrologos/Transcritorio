@@ -94,8 +94,11 @@ with patch.object(runtime, "model_cache_dir", return_value=cache_root):
 # Esperado: 6 ASR (tiny instalado aparece; base demo NAO instalado some —
 # demos nao sao oferecidos, 2026-08-30; parakeet-pt experimental oferecido,
 # E4-4) + 2 fixos + 15 pacotes de idioma (etapa 4; pt ja esta nos fixos)
-# + 1 MMS coringa + 3 opcionais + 1 orfao = 28
-assert dlg.table.rowCount() == 28, f"esperava 28 linhas, got {dlg.table.rowCount()}"
+# + 1 MMS coringa + 3 opcionais + 1 orfao = 28; +1 no Windows (linha da
+# aceleracao GPU do Parakeet, so win32 nao-frozen)
+esperado = 28 + (1 if sys.platform == "win32" else 0)
+assert dlg.table.rowCount() == esperado, \
+    f"esperava {esperado} linhas, got {dlg.table.rowCount()}"
 check(f"1.1 tabela com {dlg.table.rowCount()} linhas")
 
 # Verificar cada linha tem dados

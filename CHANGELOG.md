@@ -28,6 +28,15 @@ oficial passa a ser **PyPI + uv** (`uv tool install transcritorio`); ver
   experimental até a comparação lado a lado com o Whisper large-v3 nos
   áudios de gabarito; só transcreve português (outros idiomas no lote
   são bloqueados com aviso antes do job).
+- **Aceleração do Parakeet na GPU (opcional)**: com placa NVIDIA, o
+  motor Parakeet pode usar a GPU e ficar ~4x mais rápido (uma hora de
+  gravação em ~1 minuto; medido: 62x tempo real com ~4,7 GB de memória
+  de vídeo). É um pacote opcional de ~300 MB — oferecido uma vez na
+  primeira transcrição com o motor e sempre disponível em Gerenciar
+  modelos (instalar/remover). O seletor de Dispositivo do Motor passa a
+  valer também para o Parakeet (CPU força o processador). Se a GPU
+  falhar por qualquer motivo, a transcrição continua no processador
+  sozinha, com aviso — o trabalho nunca é perdido.
 - **Checagem geral pós-lote** (três varreduras exaustivas; ~50 achados,
   criticos corrigidos): "Perguntar" agora oferece o modelo de análise
   ANTES do preparo do encoder (ordem de gates invertida escondia a

@@ -21,17 +21,23 @@ asr_output_dir; diarizacao/render/review seguem inalterados.
 """
 from __future__ import annotations
 
+import json
 import math
+import os
 import re
+import sys
 import time
 from pathlib import Path
 from typing import Any, Callable
+from uuid import uuid4
 
 from .config import Paths
 from .manifest import selected_rows
-from . import model_manager, runtime
+from . import model_manager, onnx_env, runtime
 from .model_manager import validate_local_diarization_model
-from .utils import append_jsonl, now_utc, sanitize_message, write_json
+from .utils import (append_jsonl, now_utc, parse_progress_json_line,
+                    run_command_stream, sanitize_message,
+                    secure_subprocess_env, write_json)
 
 ProgressCallback = Callable[[dict[str, Any]], None]
 
@@ -42,6 +48,28 @@ SAMPLE_RATE = 16_000
 # Janela < 200 s (limite do export); overlap para o merge ter contexto.
 WINDOW_S = 170.0
 OVERLAP_S = 5.0
+# Janela do modo GPU: 96 s mediu 62x tempo real com 4,7 GB de VRAM na
+# RTX 4060 (170 s chega a 7,9 GB — perigoso em placas de 8 GB, e mais
+# LENTO por janela: a atencao e quadratica). CPU segue com 170 s
+# (RAM barata, menos emendas).
+GPU_WINDOW_S = 96.0
+# Exit code do worker quando o CUDA EP nao esta utilizavel (fallback
+# com mensagem especifica, distinto de falha geral).
+WORKER_EXIT_NO_CUDA = 42
+
+# Flag de MODULO, nao de chamada: a GUI transcreve um lote chamando
+# run_whisperx uma vez POR ARQUIVO, entao um flag local repetiria ~10 s
+# de init CUDA fadado a falhar a cada entrevista. Reseta ao reiniciar o
+# app.
+_GPU_FAILED_THIS_SESSION = False
+
+
+class ParakeetGpuError(RuntimeError):
+    """Falha do worker GPU — recuperavel via fallback CPU."""
+
+
+class _WorkerCancelled(Exception):
+    """Cancelamento do usuario durante o worker GPU (nao e falha)."""
 # Quebra de segmento: pontuacao de fim de frase, pausa longa ou duracao.
 _SENTENCE_END = (".", "?", "!", "…")
 _MAX_GAP_S = 1.0
@@ -166,6 +194,146 @@ def words_to_segments(words: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return segments
 
 
+def gpu_execution_plan(
+    resolved_device: str,
+    *,
+    platform: str,
+    frozen: bool,
+    env_ready: bool,
+    cuda_ok: bool,
+    gpu_failed_before: bool,
+) -> tuple[str, str]:
+    """Decide ("gpu"|"cpu", motivo) — pura, testavel.
+
+    resolved_device vem de runtime.resolve_device (ja aplicou "auto").
+    Windows nao-frozen apenas: o CUDA EP do onnxruntime-gpu 1.22 usa as
+    DLLs do torch/lib (layout do pip Windows); macOS nao tem CUDA;
+    Linux tem outro layout de DLLs (follow-up registrado). No frozen,
+    sys.executable e a GUI — relancaria o app.
+    """
+    if resolved_device != "cuda":
+        return ("cpu", "")
+    if platform != "win32":
+        return ("cpu", "aceleração GPU do Parakeet indisponível neste sistema")
+    if frozen:
+        return ("cpu", "a instalação standalone não suporta a aceleração do Parakeet")
+    if not cuda_ok:
+        return ("cpu", "componentes CUDA ausentes — instale o Transcritório "
+                       "com aceleração NVIDIA")
+    if not env_ready:
+        return ("cpu", "aceleração GPU do Parakeet não instalada — disponível "
+                       "em Gerenciar modelos")
+    if gpu_failed_before:
+        return ("cpu", "a GPU falhou nesta sessão; usando o processador")
+    return ("gpu", "")
+
+
+def worker_command_env(
+    python_exe: str,
+    worker_path: Path,
+    wav: Path,
+    model_dir: Path,
+    out_path: Path,
+    *,
+    window_s: float,
+    overlap_s: float,
+    torch_lib: Path,
+    onnx_dir: Path,
+    base_env: dict[str, str],
+) -> tuple[list[str], dict[str, str]]:
+    """Comando + ambiente do worker GPU (pura, testavel).
+
+    PYTHONPATH prefixado pelo dir onnx-gpu: o subprocesso resolve
+    `onnxruntime` de la (sombreando o CPU do app) e todo o resto do
+    site-packages normal. PATH prefixado pelo torch/lib para as DLLs
+    CUDA. PYTHONIOENCODING evita mojibake do @PROGRESS no pipe.
+    """
+    command = [
+        python_exe, "-B", str(worker_path),
+        "--wav", str(wav),
+        "--model-dir", str(model_dir),
+        "--out", str(out_path),
+        "--window-s", str(window_s),
+        "--overlap-s", str(overlap_s),
+        "--torch-lib", str(torch_lib),
+        "--onnx-dir", str(onnx_dir),
+    ]
+    env = dict(base_env)
+    previous = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = str(onnx_dir) + (os.pathsep + previous if previous else "")
+    env["PATH"] = str(torch_lib) + os.pathsep + env.get("PATH", "")
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    return command, env
+
+
+def _recognize_via_worker(
+    wav: Path,
+    snap: Path,
+    interview_id: str,
+    progress_callback: ProgressCallback | None,
+    should_cancel: Callable[[], bool] | None,
+) -> tuple[list[list[dict[str, Any]]], list[float]]:
+    """Roda o worker GPU e devolve (palavras_por_janela, offsets).
+
+    Levanta _WorkerCancelled quando o usuario cancelou no meio (nao e
+    falha — o chamador NAO deve cair para CPU) e ParakeetGpuError para
+    qualquer problema do worker (o chamador faz fallback CPU).
+    """
+    torch_lib = onnx_env.torch_lib_dir()
+    if torch_lib is None:
+        raise ParakeetGpuError("torch/lib nao encontrado no ambiente do app")
+    tmp_dir = runtime.app_data_dir() / "tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    out_path = tmp_dir / f"parakeet_{uuid4().hex[:12]}.json"
+    worker_path = Path(__file__).with_name("parakeet_worker.py")
+    command, env = worker_command_env(
+        sys.executable, worker_path, wav, snap, out_path,
+        window_s=GPU_WINDOW_S, overlap_s=OVERLAP_S,
+        torch_lib=torch_lib, onnx_dir=onnx_env.onnx_env_dir(),
+        base_env=secure_subprocess_env())
+
+    def on_output(line: str) -> None:
+        data = parse_progress_json_line(line)
+        if data:
+            _emit(progress_callback, interview_id, data)
+
+    try:
+        completed = run_command_stream(
+            command, on_output=on_output, should_cancel=should_cancel, env=env)
+        # Cancelamento PRIMEIRO: terminate() no Windows devolve rc 1 —
+        # classificar por returncode confundiria cancelar com falha e
+        # dispararia uma re-transcricao CPU inteira.
+        if should_cancel is not None and should_cancel():
+            raise _WorkerCancelled()
+        if completed.returncode == WORKER_EXIT_NO_CUDA:
+            tail = (completed.stdout or "").strip().splitlines()
+            raise ParakeetGpuError(
+                "CUDA indisponivel no pacote de aceleracao"
+                + (f" ({tail[-1][:160]})" if tail else ""))
+        if completed.returncode != 0 or not out_path.exists():
+            tail = sanitize_message((completed.stdout or "").strip()[-240:])
+            raise ParakeetGpuError(
+                tail or f"worker saiu com codigo {completed.returncode}")
+        try:
+            data = json.loads(out_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ParakeetGpuError(f"saida do worker ilegivel: {exc}") from exc
+        windows = data.get("windows") if isinstance(data, dict) else None
+        if not windows:
+            raise ParakeetGpuError("worker nao devolveu janelas")
+        per_window = [
+            tokens_to_words(list(w.get("tokens") or []),
+                            list(w.get("timestamps") or []),
+                            w.get("logprobs"))
+            for w in windows
+        ]
+        offsets = [float(w.get("offset", 0.0)) for w in windows]
+        return per_window, offsets
+    finally:
+        out_path.unlink(missing_ok=True)
+
+
 def language_supported(config: dict) -> tuple[bool, str]:
     """(ok, idioma_normalizado): o motor so aceita portugues explicito."""
     raw = config.get("asr_language")
@@ -185,6 +353,7 @@ def run_parakeet(
     should_cancel: Callable[[], bool] | None = None,
 ) -> int:
     """Transcreve as linhas com o TAGARELA ONNX. Retorna nro de falhas."""
+    global _GPU_FAILED_THIS_SESSION
     variant = str(config.get("asr_model") or "")
     spec = model_manager.ASR_VARIANTS.get(variant) or {}
     repo = str(spec.get("repo") or "")
@@ -236,6 +405,20 @@ def run_parakeet(
     import numpy as np
     import onnx_asr
 
+    resolved_device, _ = runtime.resolve_device(config.get("asr_device"))
+    plan, plan_motivo = gpu_execution_plan(
+        resolved_device,
+        platform=sys.platform,
+        frozen=bool(getattr(sys, "frozen", False)),
+        env_ready=onnx_env.onnx_env_ready(),
+        cuda_ok=runtime.cuda_libs_present(),
+        gpu_failed_before=_GPU_FAILED_THIS_SESSION,
+    )
+    if resolved_device == "cuda" and plan == "cpu" and plan_motivo:
+        # Aviso unico por chamada; a oferta visivel de instalar a
+        # aceleracao mora na GUI (antes do job).
+        print(f"[Transcritorio] Parakeet: {plan_motivo} — transcrevendo no processador.")
+
     model = None  # carregado no primeiro uso (3-4 s; uma vez por lote)
     failures = 0
     for row in selected_rows(rows, ids):
@@ -270,43 +453,65 @@ def run_parakeet(
             continue
 
         started = time.monotonic()
+        device_used = "cuda" if plan == "gpu" else "cpu"
         try:
-            if model is None:
-                _emit(progress_callback, interview_id,
-                      {"event": "asr_progress", "progress": 1,
-                       "message": "Carregando o modelo Parakeet pt-BR..."})
-                model = onnx_asr.load_model(
-                    "nemo-parakeet-tdt-0.6b-v3", str(snap)).with_timestamps()
-
-            audio = _read_wav_mono16k(wav, np)
-            total_s = len(audio) / SAMPLE_RATE
-            step = WINDOW_S - OVERLAP_S
-            n_win = max(1, math.ceil(max(total_s - OVERLAP_S, 1e-9) / step))
-
             offsets: list[float] = []
             per_window: list[list[dict[str, Any]]] = []
-            cancelled = False
-            for i in range(n_win):
-                if should_cancel is not None and should_cancel():
-                    cancelled = True
-                    break
-                off = i * step
-                chunk = audio[int(off * SAMPLE_RATE):
-                              int((off + WINDOW_S) * SAMPLE_RATE)]
-                result = model.recognize(chunk, sample_rate=SAMPLE_RATE)
-                offsets.append(off)
-                per_window.append(tokens_to_words(
-                    list(result.tokens), list(result.timestamps),
-                    list(result.logprobs) if result.logprobs is not None else None))
-                pct = max(1, min(98, int(round((i + 1) / n_win * 98))))
-                _emit(progress_callback, interview_id,
-                      {"event": "asr_progress", "progress": pct,
-                       "message": f"Transcrevendo com Parakeet ({pct}%)..."})
-            if cancelled:
-                failures += 1
-                break
+            overlap_used = OVERLAP_S
 
-            words = merge_windows(per_window, offsets)
+            if plan == "gpu":
+                try:
+                    per_window, offsets = _recognize_via_worker(
+                        wav, snap, interview_id, progress_callback, should_cancel)
+                except _WorkerCancelled:
+                    failures += 1
+                    break
+                except ParakeetGpuError as exc:
+                    _GPU_FAILED_THIS_SESSION = True
+                    plan = "cpu"
+                    device_used = "cpu"
+                    _emit(progress_callback, interview_id,
+                          {"event": "asr_progress", "progress": 1,
+                           "message": ("A GPU falhou; continuando no processador. "
+                                       f"({sanitize_message(str(exc))[:160]})")})
+
+            if plan == "cpu":
+                if model is None:
+                    _emit(progress_callback, interview_id,
+                          {"event": "asr_progress", "progress": 1,
+                           "message": "Carregando o modelo Parakeet pt-BR..."})
+                    model = onnx_asr.load_model(
+                        "nemo-parakeet-tdt-0.6b-v3", str(snap)).with_timestamps()
+
+                audio = _read_wav_mono16k(wav, np)
+                total_s = len(audio) / SAMPLE_RATE
+                step = WINDOW_S - OVERLAP_S
+                n_win = max(1, math.ceil(max(total_s - OVERLAP_S, 1e-9) / step))
+
+                offsets = []
+                per_window = []
+                cancelled = False
+                for i in range(n_win):
+                    if should_cancel is not None and should_cancel():
+                        cancelled = True
+                        break
+                    off = i * step
+                    chunk = audio[int(off * SAMPLE_RATE):
+                                  int((off + WINDOW_S) * SAMPLE_RATE)]
+                    result = model.recognize(chunk, sample_rate=SAMPLE_RATE)
+                    offsets.append(off)
+                    per_window.append(tokens_to_words(
+                        list(result.tokens), list(result.timestamps),
+                        list(result.logprobs) if result.logprobs is not None else None))
+                    pct = max(1, min(98, int(round((i + 1) / n_win * 98))))
+                    _emit(progress_callback, interview_id,
+                          {"event": "asr_progress", "progress": pct,
+                           "message": f"Transcrevendo com Parakeet ({pct}%)..."})
+                if cancelled:
+                    failures += 1
+                    break
+
+            words = merge_windows(per_window, offsets, overlap_s=overlap_used)
             segments = words_to_segments(words)
         except Exception as exc:
             detail = sanitize_message(str(exc).strip() or type(exc).__name__)
@@ -316,7 +521,7 @@ def run_parakeet(
                   {"event": "asr_error", "progress": 0,
                    "message": f"Parakeet falhou ({type(exc).__name__}): {detail}"})
             _log_job(paths, interview_id, repo, config, "error",
-                     error=sanitize_message(str(exc)))
+                     error=sanitize_message(str(exc)), device=device_used)
             failures += 1
             continue
 
@@ -336,11 +541,13 @@ def run_parakeet(
         _write_txt(output_dir / f"{interview_id}.txt", segments)
         _write_tsv(output_dir / f"{interview_id}.tsv", segments)
 
+        rotulo_device = "GPU" if device_used == "cuda" else "CPU"
         _emit(progress_callback, interview_id,
               {"event": "asr_done", "progress": 100,
-               "message": f"Parakeet concluido em {elapsed:.1f}s"})
+               "message": f"Parakeet ({rotulo_device}) concluido em {elapsed:.1f}s"})
         _log_job(paths, interview_id, repo, config, "ok",
-                 output_dir=str(output_dir), elapsed_s=elapsed)
+                 output_dir=str(output_dir), elapsed_s=elapsed,
+                 device=device_used)
 
     return failures
 
@@ -386,10 +593,11 @@ def _log_job(
     output_dir: str | None = None,
     elapsed_s: float | None = None,
     error: str | None = None,
+    device: str = "cpu",
 ) -> None:
     # Mesmo schema do jobs.jsonl do whisperx_runner/mlx_whisper_runner;
-    # backend distingue o produtor e align documenta a decisao (tempos
-    # por palavra nativos do TDT — nenhum alinhador envolvido).
+    # backend distingue o produtor, align documenta a decisao (tempos
+    # por palavra nativos do TDT) e device registra CPU vs GPU (worker).
     entry: dict[str, Any] = {
         "interview_id": interview_id,
         "stage": "transcribe",
@@ -400,6 +608,7 @@ def _log_job(
         "backend": "parakeet-onnx",
         "language": "pt",
         "align": "native",
+        "device": device,
         "compute_type": "",
         "batch_size": "",
         "variant": config.get("asr_variant") or "",

@@ -88,7 +88,11 @@ def run_command_stream(
     cwd: Path | None = None,
     on_output: Callable[[str], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    # env: sobrescreve o ambiente do filho (ex.: worker GPU do Parakeet
+    # com PYTHONPATH/PATH proprios). Quem passa e responsavel por partir
+    # de secure_subprocess_env() — nunca de os.environ cru.
     process = subprocess.Popen(
         args,
         cwd=str(cwd) if cwd else None,
@@ -98,7 +102,7 @@ def run_command_stream(
         encoding="utf-8",
         errors="replace",
         bufsize=1,
-        env=secure_subprocess_env(),
+        env=env if env is not None else secure_subprocess_env(),
         **_no_window_flags(),
     )
     stdout_parts: list[str] = []
