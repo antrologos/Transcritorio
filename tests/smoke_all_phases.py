@@ -161,6 +161,18 @@ assert hasattr(win, "diar_offer_banner")
 assert not win.diar_offer_banner.isVisible()  # nada transcrito sem separacao
 check("1.7 R3-c4: menus sem o par morto; banner de oferta na lista")
 
+# R3-c5/c6: fusoes finais — Creditos+Sobre viram "Sobre o Transcritório";
+# "Atualizar biblioteca" fundiu no F5 (Recarregar lista agora tambem
+# procura gravacoes novas); a chave "Separar falantes" saiu da toolbar e
+# virou item checkavel (dropdown do Transcrever + catalogo Entrevista).
+assert "Sobre o Transcritório" in menu_items["Ajuda"]
+assert "Creditos" not in menu_items["Ajuda"]
+assert "Atualizar biblioteca" not in todos_itens
+assert "Separar falantes" in menu_items["Entrevista"]
+assert win.diarize_toggle_action.isCheckable()
+assert win.transcribe_button.popupMode().name == "MenuButtonPopup"
+check("1.8 R3-c5/c6: Sobre unico; biblioteca fundiu no F5; chave checkavel")
+
 
 # ==== PASSO 2: Projeto carregado + actions desabilitadas sem selecao (F1+F4) ====
 header("PASSO 2 - Projeto sem selecao: actions destrutivas desabilitadas")

@@ -96,6 +96,7 @@ try:
         QTableWidgetItem,
         QTabWidget,
         QTextEdit,
+        QToolButton,
         QTreeWidget,
         QTreeWidgetItem,
         QVBoxLayout,
@@ -5080,14 +5081,13 @@ if QT_IMPORT_ERROR is None:
             self.model_manager_action.setToolTip("Ver tamanho em disco, remover modelos, trocar token HF, baixar outros.")
             self.model_manager_action.triggered.connect(self.show_model_manager)
 
-            self.refresh_library_action = QAction("Atualizar biblioteca", self)
-            self.refresh_library_action.setToolTip("Procurar gravações nas pastas cadastradas.")
-            self.refresh_library_action.triggered.connect(self.run_manifest_job)
-
+            # R3: "Atualizar biblioteca" fundiu aqui — F5 tambem procura
+            # gravações novas nas pastas do projeto (run_manifest_job
+            # termina em refresh), em vez de so reler o que ja se conhece.
             self.reload_list_action = QAction("Recarregar lista", self)
             self.reload_list_action.setShortcut(QKeySequence("F5"))
-            self.reload_list_action.setToolTip("Recarregar a lista de entrevistas a partir dos arquivos do projeto. (F5)")
-            self.reload_list_action.triggered.connect(self.refresh_interviews)
+            self.reload_list_action.setToolTip("Procurar gravações novas nas pastas do projeto e recarregar a lista. (F5)")
+            self.reload_list_action.triggered.connect(self.run_manifest_job)
 
             self.open_transcript_action = QAction("Abrir transcrição", self)
             self.open_transcript_action.setToolTip("Abrir a transcrição do arquivo selecionado (duplo-clique ou Enter na linha). Selecione um arquivo na lista.")
@@ -5100,6 +5100,16 @@ if QT_IMPORT_ERROR is None:
             self.transcribe_pending_action = QAction("Transcrever todos não transcritos", self)
             self.transcribe_pending_action.setToolTip("Transcrever todos os arquivos do projeto que ainda não têm transcrição.")
             self.transcribe_pending_action.triggered.connect(self.run_pending_transcription_job)
+
+            # R3: a chave de separacao saiu da toolbar (checkbox solto) e
+            # virou item checkavel no dropdown do Transcrever + catalogo.
+            self.diarize_toggle_action = QAction("Separar falantes", self)
+            self.diarize_toggle_action.setCheckable(True)
+            self.diarize_toggle_action.setToolTip(
+                "Identifica automaticamente quem está falando (Entrevistador/Entrevistado).\n"
+                "Ligado sozinho sempre que o recurso está instalado neste computador.\n"
+                "Desative para áudios com um único falante ou para transcrever mais rápido.")
+            self.diarize_toggle_action.toggled.connect(self._on_diarize_toggled)
 
             self.transcribe_current_action = QAction("Transcrever este arquivo", self)
             self.transcribe_current_action.setToolTip("Transcrever a mídia aberta agora.")
@@ -5263,13 +5273,10 @@ if QT_IMPORT_ERROR is None:
             self.qc_action.setToolTip("Verificar a qualidade das transcrições geradas (integridade e consistência).")
             self.qc_action.triggered.connect(self.run_qc_job)
 
-            self.about_action = QAction("Sobre", self)
+            # R3: "Creditos" fundiu aqui — os dois abriam o mesmo dialogo.
+            self.about_action = QAction("Sobre o Transcritório", self)
             self.about_action.setToolTip("Informações sobre o Transcritório: versão e créditos.")
             self.about_action.triggered.connect(self.show_about)
-
-            self.credits_action = QAction("Creditos", self)
-            self.credits_action.setToolTip("Ver os créditos do Transcritório.")
-            self.credits_action.triggered.connect(self.show_about)
 
             self.documentation_action = QAction("Documentacao", self)
             self.documentation_action.setToolTip("Abrir a documentação do projeto, se disponível.")
@@ -5371,16 +5378,39 @@ if QT_IMPORT_ERROR is None:
                 else self._MEDIA_BUTTON_GHOST_QSS
             )
 
-        def transcribe_menu_button(self) -> QPushButton:
-            button = QPushButton(self.transcribe_action.text())
-            button.setToolTip(self.transcribe_action.toolTip())
-            button.setDefault(True)
+        def transcribe_menu_button(self) -> QToolButton:
+            # R3: clique direto AGE (☑ marcadas; sem nenhuma ☑, todas as
+            # pendentes); a setinha abre as variantes e a chave de
+            # separacao de falantes que morava solta na toolbar.
+            button = QToolButton()
+            button.setText("Transcrever")
+            button.setToolTip(
+                "Transcrever as entrevistas marcadas com ☑.\n"
+                "Sem nenhuma marcada, transcreve todas as pendentes.")
+            button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
             button.setStyleSheet("font-weight: 700;")
+            button.clicked.connect(self._on_transcribe_button_clicked)
             menu = QMenu(button)
             menu.addAction(self.transcribe_action)
             menu.addAction(self.transcribe_pending_action)
+            menu.addSeparator()
+            menu.addAction(self.diarize_toggle_action)
             button.setMenu(menu)
+            self.transcribe_button = button
             return button
+
+        def _on_transcribe_button_clicked(self) -> None:
+            """Clique direto no botao Transcrever (R3): ☑ marcadas; sem
+            nenhuma marcada, todas as pendentes."""
+            if not self._require_project("Transcrever"):
+                return
+            marcadas = [s.interview_id for s in self.statuses
+                        if s.interview_id in self._checked_ids]
+            if marcadas:
+                self.run_full_transcription_job(ids=marcadas)
+                return
+            self.run_pending_transcription_job()
 
         def _build_menus(self) -> None:
             # Estrutura da reforma (Programa R, dossie RD aprovado
@@ -5429,9 +5459,10 @@ if QT_IMPORT_ERROR is None:
             entrevista_menu.addAction(self.close_open_file_action)
             entrevista_menu.addSeparator()
             entrevista_menu.addAction(self.transcribe_action)
+            entrevista_menu.addAction(self.transcribe_pending_action)
             entrevista_menu.addAction(self.transcribe_current_action)
             entrevista_menu.addAction(self.retranscribe_current_action)
-            entrevista_menu.addAction(self.transcribe_pending_action)
+            entrevista_menu.addAction(self.diarize_toggle_action)
             entrevista_menu.addSeparator()
             entrevista_menu.addAction(self.name_voices_action)
             entrevista_menu.addAction(self.improve_speakers_action)
@@ -5459,7 +5490,6 @@ if QT_IMPORT_ERROR is None:
             ferramentas_menu = self.menuBar().addMenu("Ferramentas")
             ferramentas_menu.addAction(self.queue_action)
             ferramentas_menu.addAction(self.qc_action)
-            ferramentas_menu.addAction(self.refresh_library_action)
             ferramentas_menu.addSeparator()
             ferramentas_menu.addAction(self.engine_settings_action)
             ferramentas_menu.addAction(self.model_manager_action)
@@ -5484,7 +5514,6 @@ if QT_IMPORT_ERROR is None:
                 ajuda_menu.addAction("Verificar atualizações...", self.show_upgrade_dialog)
                 ajuda_menu.addAction("Reparar instalação...", self.show_repair_dialog)
                 ajuda_menu.addSeparator()
-            ajuda_menu.addAction(self.credits_action)
             ajuda_menu.addAction(self.about_action)
 
         def _show_uv_command_dialog(self, title: str, intro: str, command: str) -> None:
@@ -5623,7 +5652,7 @@ if QT_IMPORT_ERROR is None:
                 QMessageBox.critical(self, "Não foi possível salvar a configuração", sanitize_message(str(exc)))
                 return
             self.refresh_interviews()
-            self._sync_diarize_checkbox()
+            self._sync_diarize_toggle()
             self.progress_label.setText("Configuração de transcrição atualizada.")
 
         def _on_diarize_toggled(self, checked: bool) -> None:
@@ -5661,20 +5690,20 @@ if QT_IMPORT_ERROR is None:
             if box.clickedButton() is preparar:
                 self.show_model_setup()
 
-        def _sync_diarize_checkbox(self) -> None:
-            if not hasattr(self, "diarize_checkbox"):
+        def _sync_diarize_toggle(self) -> None:
+            if not hasattr(self, "diarize_toggle_action"):
                 return
             from . import app_settings as _settings
-            # A caixa mostra o estado EFETIVO: com "auto", segue a
+            # A chave mostra o estado EFETIVO: com "auto", segue a
             # instalacao do modelo no momento (tri-state 2026-08-31).
             if self.context:
                 efetivo = app_service.diarize_effective(self.context.config or {})[0]
             else:
                 efetivo = app_service.diarize_effective(
                     {"diarize": _settings.diarize_default()})[0]
-            self.diarize_checkbox.blockSignals(True)
-            self.diarize_checkbox.setChecked(efetivo)
-            self.diarize_checkbox.blockSignals(False)
+            self.diarize_toggle_action.blockSignals(True)
+            self.diarize_toggle_action.setChecked(efetivo)
+            self.diarize_toggle_action.blockSignals(False)
 
         def _maybe_offer_parakeet_gpu(self) -> None:
             """Oferta unica da aceleracao GPU do Parakeet, na primeira
@@ -6138,8 +6167,8 @@ if QT_IMPORT_ERROR is None:
 
             # Toolbar real (R1): ordem = jornada — producao | revisao |
             # analise. Botoes de acao via addAction espelham a QAction
-            # nativamente. A caixa Separar falantes fica no fim ate a R3
-            # (familia transcrever a leva para o dropdown).
+            # nativamente. A chave Separar falantes vive no dropdown do
+            # Transcrever (R3) — a toolbar nao carrega mais estado solto.
             from . import ui_shell
             toolbar = ui_shell.build_tool_bar(self)
             toolbar.addWidget(self.media_button())
@@ -6151,22 +6180,10 @@ if QT_IMPORT_ERROR is None:
             # Identidade propria da exploracao por sentido (feedback
             # 2026-08-26: nunca misturar com a busca de palavras).
             toolbar.addAction(self.explore_action)
-            toolbar.addSeparator()
-            self.diarize_checkbox = QCheckBox("Separar falantes")
-            self.diarize_checkbox.setToolTip(
-                "Identifica automaticamente quem esta falando (Entrevistador/Entrevistado).\n"
-                "Ligado sozinho sempre que o recurso esta instalado neste computador.\n"
-                "Desative para áudios com um único falante ou para transcrever mais rápido."
-            )
-            # Sem projeto aberto, o estado default e o EFETIVO da maquina:
-            # tri-state "auto" resolvido pela instalacao (2026-08-31) — um
-            # booleano cru trataria "auto" como sempre-ligado.
-            from . import app_settings as _settings_cb
-            self.diarize_checkbox.setChecked(app_service.diarize_effective(
-                {"diarize": _settings_cb.diarize_default()})[0])
-            self.diarize_checkbox.toggled.connect(self._on_diarize_toggled)
-            toolbar.addWidget(self.diarize_checkbox)
             self.addToolBar(toolbar)
+            # Estado inicial da chave (sem projeto = default EFETIVO da
+            # maquina; tri-state "auto" resolvido pela instalacao).
+            self._sync_diarize_toggle()
 
             # Statusbar real (R1): estado EMBAIXO. Nomes de atributo
             # preservados (aliasing) — PipelineWorker/update_action_states
@@ -6873,7 +6890,7 @@ if QT_IMPORT_ERROR is None:
             self._status_map = {s.interview_id: s for s in self.statuses}
             if hasattr(self, "project_label"):
                 self._update_project_label()
-            self._sync_diarize_checkbox()
+            self._sync_diarize_toggle()
             self._sync_voice_prompt_action()
             self.interview_table.setSortingEnabled(False)
             self.interview_table.blockSignals(True)
@@ -8536,7 +8553,6 @@ if QT_IMPORT_ERROR is None:
             self.apply_metadata_action.setEnabled(not busy and has_project and has_table_selection)
             self.queue_action.setEnabled(has_project)
             self._set_action(self.engine_settings_action, not busy and has_project, reason_busy if busy else reason_project)
-            self._set_action(self.refresh_library_action, not busy and has_project, reason_busy if busy else reason_project)
             self._set_action(self.reload_list_action, not busy and has_project, reason_busy if busy else reason_project)
             self._set_action(self.open_transcript_action, not busy and has_table_selection, reason_busy if busy else reason_select)
             self._set_action(self.transcribe_action, not busy and has_selected, reason_busy if busy else reason_checked)
@@ -8635,8 +8651,10 @@ if QT_IMPORT_ERROR is None:
                 self.progress_bar.setVisible(busy)
             if hasattr(self, "cancel_job_button"):
                 self.cancel_job_button.setVisible(busy)
-            if hasattr(self, "diarize_checkbox"):
-                self.diarize_checkbox.setEnabled(not busy and has_project)
+            if hasattr(self, "transcribe_button"):
+                self.transcribe_button.setEnabled(not busy and has_project)
+            self._set_action(self.diarize_toggle_action, not busy and has_project,
+                             reason_busy if busy else reason_project)
             if hasattr(self, "save_block_button"):
                 self.save_block_button.setEnabled(not busy and has_turn)
             if hasattr(self, "merge_button"):
@@ -9681,7 +9699,7 @@ if QT_IMPORT_ERROR is None:
         def run_manifest_job(self) -> None:
             if not self.save_current_turn():
                 return
-            self.start_worker("Atualizar biblioteca", [("Procurando gravações...", lambda: app_service.refresh_manifest(self.context))])
+            self.start_worker("Recarregar lista", [("Procurando gravações...", lambda: app_service.refresh_manifest(self.context))])
 
         def run_full_transcription_job(self, ids: list[str] | None = None, *,
                                        asr_model: str | None = None,
