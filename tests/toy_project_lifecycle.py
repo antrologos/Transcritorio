@@ -73,10 +73,12 @@ with tempfile.TemporaryDirectory() as tmp:
     # projeto legitimo abre pelo descritor E pela pasta
     root = Path(tmp) / "Legitimo.transcricao"
     app_service.create_project(root, project_name="Legitimo")
+    # resolve() dos DOIS lados: no macOS o tempdir e /var -> /private/var
+    # e no Windows do CI aparecem nomes 8.3 — igualdade textual flakeia.
     reaberto = app_service.open_project(root / "Legitimo.transcritorio")
-    assert reaberto.paths.project_root == root
+    assert reaberto.paths.project_root.resolve() == root.resolve()
     reaberto2 = app_service.open_project(root)
-    assert reaberto2.paths.project_root == root
+    assert reaberto2.paths.project_root.resolve() == root.resolve()
 print("PASS: open_project sem auto-criacao")
 
 # --- run_config.yaml sumido: recriar com os defaults da MAQUINA (F8) ---

@@ -12,6 +12,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # O runner Windows usa cp1252 no stdout: prints com "…"/"✨" dos toys
+  # estouravam UnicodeEncodeError. UTF-8 em todo o CI.
+  PYTHONUTF8: "1"
+
 jobs:
   # Gate do canal uv/PyPI (v0.2): o lockfile precisa acompanhar o pyproject
   # e a resolucao dos perfis default e [cuda] precisa ser instalavel.

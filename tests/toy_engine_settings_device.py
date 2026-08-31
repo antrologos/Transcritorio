@@ -31,15 +31,21 @@ def _item_cuda(dlg):
     return dlg.device_combo.model().item(idx)
 
 
-# --- sem GPU: item CUDA desabilitado com motivo; config "cuda" cai p/ auto ---
+# --- sem GPU: item CUDA desabilitado com motivo; config "cuda" cai p/ auto.
+# NO macOS o comportamento correto e OUTRO: "cuda" e a rota documentada do
+# MLX/Metal e nunca e desabilitado (review_studio_qt, device_combo) ---
 os.environ["TRANSCRITORIO_FAKE_HARDWARE"] = "cpu"
 dlg = EngineSettingsDialog({"asr_device": "cuda"})
-assert _item_cuda(dlg).isEnabled() is False
-assert "NVIDIA" in _item_cuda(dlg).toolTip()
-assert dlg.device_combo.currentData() == "auto", dlg.device_combo.currentData()
+if sys.platform == "darwin":
+    assert _item_cuda(dlg).isEnabled() is True
+    print("PASS: no macOS o CUDA segue habilitado (rota MLX/Metal)")
+else:
+    assert _item_cuda(dlg).isEnabled() is False
+    assert "NVIDIA" in _item_cuda(dlg).toolTip()
+    assert dlg.device_combo.currentData() == "auto", dlg.device_combo.currentData()
+    print("PASS: sem GPU o CUDA fica desabilitado com motivo e cai para auto")
 # CPU continua escolhivel
 assert dlg.device_combo.findData("cpu") >= 0
-print("PASS: sem GPU o CUDA fica desabilitado com motivo e cai para auto")
 
 # --- com GPU: CUDA habilitado e escolha preservada ---
 os.environ["TRANSCRITORIO_FAKE_HARDWARE"] = "gpu8"
