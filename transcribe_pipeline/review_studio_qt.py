@@ -6113,18 +6113,14 @@ if QT_IMPORT_ERROR is None:
             self._build_menus()
             root = QWidget()
             root_layout = QVBoxLayout(root)
-            header = QHBoxLayout()
-            title = QLabel(APP_NAME)
-            title.setStyleSheet("font-size: 18px; font-weight: 700;")
-            header.addWidget(title)
-            header.addStretch()
+            # R1: o header customizado morreu. O nome do projeto vive na
+            # barra de titulo da janela; o selo Modelo/Motor (clicavel)
+            # vive na statusbar (criado aqui, posicionado adiante).
             self.project_label = QLabel(self.project_header_text())
             self.project_label.setStyleSheet(_style_muted())
             self.project_label.setTextFormat(Qt.TextFormat.RichText)
             self.project_label.linkActivated.connect(lambda _link: self.configure_engine())
             self._update_project_label()
-            header.addWidget(self.project_label)
-            root_layout.addLayout(header)
 
             # Toolbar real (R1): ordem = jornada — producao | revisao |
             # analise. Botoes de acao via addAction espelham a QAction
@@ -6175,6 +6171,7 @@ if QT_IMPORT_ERROR is None:
                 progress_bar=self.progress_bar,
                 cancel_button=self.cancel_job_button,
                 save_label=self.save_status_label,
+                engine_badge=self.project_label,
             ))
 
             splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -6358,21 +6355,29 @@ if QT_IMPORT_ERROR is None:
             return str(Path.home())
 
         def _update_project_label(self) -> None:
-            """Texto + tooltip do cabecalho, coerentes com o estado: sem
-            projeto o tooltip nao promete links "Modelo"/"Motor" que nao
-            existem no texto."""
+            """Selo Modelo/Motor da statusbar + titulo da janela (R1).
+
+            O nome do projeto mora na barra de titulo ("Transcritório —
+            <nome>"); o caminho completo mora no tooltip do selo. Sem
+            projeto, o tooltip nao promete links que nao existem."""
             if not hasattr(self, "project_label"):
                 return
             self.project_label.setText(self.project_header_text())
-            self.project_label.setToolTip(
-                "Clique em \"Modelo\" ou \"Motor\" para configurar a transcrição "
-                "(modelo Whisper, dispositivo CUDA/CPU, idioma)."
-                if self.context is not None else "Nenhum projeto aberto.")
+            if self.context is not None:
+                nome = str(self.context.project.get("project_name")
+                           or self.context.paths.project_root.name)
+                self.setWindowTitle(f"{APP_NAME} — {nome}")
+                self.project_label.setToolTip(
+                    f"Projeto: {self.context.paths.project_root}\n"
+                    "Clique em \"Modelo\" ou \"Motor\" para configurar a "
+                    "transcrição (modelo Whisper, dispositivo CUDA/CPU, idioma).")
+            else:
+                self.setWindowTitle(APP_NAME)
+                self.project_label.setToolTip("Nenhum projeto aberto.")
 
         def project_header_text(self) -> str:
             if self.context is None:
                 return "Nenhum projeto aberto"
-            name = str(self.context.project.get("project_name") or self.context.paths.project_root.name)
             from . import model_manager
             from . import runtime as _runtime_local
             model = model_manager.resolve_asr_model(str(self.context.config.get("asr_model", "?")))
@@ -6391,10 +6396,8 @@ if QT_IMPORT_ERROR is None:
                 f'Motor: {backend}'
                 f'</a>'
             )
-            return (f"Projeto: {name}  |  "
-                    f'<a href="engine-settings" style="color:{ui_tokens.TEXT_MUTED};text-decoration:underline;">Modelo: {model}</a>'
-                    f"  |  {badge}"
-                    f"  |  {self.context.paths.project_root}")
+            return (f'<a href="engine-settings" style="color:{ui_tokens.TEXT_MUTED};text-decoration:underline;">Modelo: {model}</a>'
+                    f"  ·  {badge}")
 
         def _build_review_panel(self) -> QWidget:
             panel = QWidget()
