@@ -1,6 +1,7 @@
 """Toy test: fonte de falantes do render decidida POR arquivo (SL-B1).
 
-Bug original: run_render_job e os fluxos de rotulos/nomes forcavam
+Bug original: os fluxos de render/rotulos/nomes (inclusive a acao
+"Atualizar transcricao editavel", removida na R3/R4) forcavam
 overrides={"diarization_source": "pyannote_exclusive"} — no perfil
 essencial (sem diarizacao) o exclusive.json nao existe e o render
 falhava. A decisao correta ja existia no fluxo principal:

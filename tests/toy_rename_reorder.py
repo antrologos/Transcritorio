@@ -12,11 +12,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from transcribe_pipeline.project_store import (
+    _merge_interview_order,
+    _reorder_move,
+)
 from transcribe_pipeline.review_studio_qt import (
     MAX_TITLE_CHARS,
     _sanitize_rename_title,
-    _reorder_move,
-    _merge_interview_order,
 )
 
 

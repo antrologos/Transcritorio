@@ -269,7 +269,6 @@ def _sanitize_rename_title(raw: str) -> tuple[str, bool]:
     return cleaned, truncated
 
 
-from .project_store import _reorder_move, _merge_interview_order  # re-export for tests
 from .boundary_check import BOUNDARY_NOTE_MARKER
 from . import ui_tokens
 
@@ -725,11 +724,6 @@ def order_role_suggestions(turns: list[dict[str, Any]], speaker_ids: list[str], 
             own = f"Participante {participant}"
             result[key] = [own, "Moderador"] + [name for name in participant_names if name != own]
     return result
-
-
-def turn_preview(turn: dict[str, Any], max_chars: int = 120) -> str:
-    text = " ".join(str(turn.get("text", "")).split())
-    return text if len(text) <= max_chars else text[: max_chars - 3].rstrip() + "..."
 
 
 def display_flags(turn: dict[str, Any]) -> str:
@@ -7458,13 +7452,6 @@ if QT_IMPORT_ERROR is None:
             if self.context is not None:
                 self._ingest_media_paths(paths)
 
-        def save_project_metadata(self) -> None:
-            if not self._require_project("Salvar projeto"):
-                return
-            self.context = app_service.save_project_metadata(self.context)
-            self.set_save_state("Projeto salvo.")
-            self.refresh_interviews()
-
         def open_project_folder(self) -> None:
             if not self._require_project("Abrir pasta do projeto"):
                 return
@@ -7606,11 +7593,6 @@ if QT_IMPORT_ERROR is None:
                     check_item.setCheckState(Qt.CheckState.Checked)
             self.interview_table.blockSignals(False)
             self.update_action_states()
-
-        def open_review_from_row(self, row: int, _column: int) -> None:
-            item = self.interview_table.item(row, COL_ARQUIVO)
-            if item:
-                self.open_review(str(item.data(Qt.ItemDataRole.UserRole) or item.text()))
 
         def open_selected_review(self) -> None:
             # Abrir a linha ATIVA (cursor), nao o primeiro checkbox marcado:
@@ -10505,31 +10487,6 @@ if QT_IMPORT_ERROR is None:
             # editor (mesma corrida autosave x rebuild do fluxo principal).
             self.set_editor_enabled(False)
             self.start_worker(f"Melhorar falantes de {interview_id}", steps, weights=[70, 25, 5])
-
-        def run_render_job(self) -> None:
-            if not self.save_current_turn():
-                return
-            ids = self.selected_ids_for_job()
-            if not ids:
-                QMessageBox.information(self, "Selecione uma entrevista", "Selecione uma entrevista para montar a transcrição editável.")
-                return
-            # Um step por arquivo: a fonte de falantes e decidida POR
-            # arquivo (_render_source_overrides), nao forcada. O passo
-            # final atualiza as REVIEWS pristinas (edicoes humanas sao
-            # preservadas) — sem ele a acao "Atualizar transcricao
-            # editavel" nao atualizava a transcricao editavel.
-            steps: list[tuple] = [
-                (f"Montando transcrição editável ({item})...",
-                 lambda item=item: app_service.render_interviews(
-                     self.context, ids=[item],
-                     overrides=self._render_source_overrides(item)))
-                for item in ids
-            ]
-            steps.append((
-                "Atualizando transcrições editáveis...",
-                lambda alvo=list(ids): app_service.refresh_unedited_reviews(self.context, alvo),
-            ))
-            self.start_worker("Montar transcrição editável", steps)
 
         def run_summarize_job(self) -> None:
             """Resumo com indice tematico (fase 2.1) — analise 100% local."""
