@@ -8,6 +8,23 @@ assinatura digital, e o SignPath recusou a assinatura gratuita. O canal
 oficial passa a ser **PyPI + uv** (`uv tool install transcritorio`); ver
 `docs/INSTALL_WINDOWS.md` e `docs/LEGACY_STANDALONE.md`.
 
+- **Reforma de interface — comandos consolidados (R3)**: cada função
+  passou a ter UM nome e UM lugar. "Exportar…" é um comando só (o
+  escopo se escolhe no diálogo); o trio confuso de falantes virou dois
+  comandos claros — "Dar nome às vozes…" e "Refazer separação de
+  falantes…" (que avisa: descarta edições e guarda cópia em
+  Documentos › Versões anteriores) — e a remontagem da transcrição
+  ficou automática; "Limpar transcrição gerada" agora se chama
+  "Apagar transcrição… (a gravação fica)". Quando há entrevistas
+  transcritas ainda sem separação de vozes e o recurso está
+  instalado, a lista oferece um botão "Separar falantes agora" — sem
+  procurar em menu. O botão Transcrever age direto no clique
+  (☑ marcadas; sem nenhuma marcada, todas as pendentes) e a setinha
+  guarda as variantes e a chave "Separar falantes", que saiu da barra
+  de ferramentas. F5 ("Recarregar lista") também procura gravações
+  novas nas pastas do projeto, e "Créditos" e "Sobre" viraram um
+  único "Sobre o Transcritório". Quatro comandos órfãos ou duplicados
+  foram removidos.
 - **Reforma de interface — abas e a casa dos resultados (R2)**: o
   painel direito ganhou três abas. **Transcrição** segue sendo o
   trabalho diário; **Documentos** é a casa de tudo que o app produz —
