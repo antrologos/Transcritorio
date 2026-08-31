@@ -8152,6 +8152,10 @@ if QT_IMPORT_ERROR is None:
             self.set_editor_enabled(False)
             self.set_media_source(preferred_media_index(self.media_candidates))
             self.load_waveform()
+            # Mesma cascata do close_open_file: sem ela, os banners da
+            # entrevista aberta ANTES (trocas de falante, vozes) ficavam
+            # pintados sobre a midia sem transcricao (teste real do b44).
+            self._update_voice_banner()
             self.set_save_state("Arquivo sem transcrição. Use Transcrever este arquivo para gerar a transcrição editável.")
             self.progress_label.setText("Arquivo aberto como mídia. Use Transcrever este arquivo para criar a transcrição.")
             self.update_action_states()
