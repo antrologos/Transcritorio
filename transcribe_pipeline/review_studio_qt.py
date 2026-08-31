@@ -705,7 +705,7 @@ def format_job_time(value: str) -> str:
 
 def format_eta(seconds: float | None) -> str:
     if seconds is None or seconds <= 0:
-        return "estimando..."
+        return "estimando…"
     total = int(round(seconds))
     if total < 60:
         return f"cerca de {total}s"
@@ -718,16 +718,24 @@ def format_eta(seconds: float | None) -> str:
     return f"cerca de {hours}h {minutes:02d}min"
 
 
-def eta_from_progress(started_monotonic: float, percent: int) -> str:
-    if percent >= 100:
-        return "concluindo..."
-    if percent < 8:
-        return "estimando..."
-    elapsed = time.monotonic() - started_monotonic
-    if elapsed < 15:
-        return "estimando..."
-    remaining = elapsed * ((100 - percent) / max(1, percent))
-    return format_eta(remaining)
+def eta_text_for_job(job: dict, now: datetime) -> str:
+    """Coluna Estimativa da fila (U1.4): tempo RESTANTE legivel, so para
+    job Rodando com estimativa gravada — Concluido/Falha/Pendente ficam
+    vazios (um "estimando…" eterno neles seria mentira). O relay grava
+    estimated_finish_at em isoformat NAIVE LOCAL; formatos tz-aware sao
+    convertidos por tolerancia (mesma postura do format_job_time)."""
+    if str(job.get("status") or "") != "Rodando":
+        return ""
+    raw = str(job.get("estimated_finish_at") or "").strip()
+    if not raw:
+        return ""
+    try:
+        alvo = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    if alvo.tzinfo is not None:
+        alvo = alvo.astimezone().replace(tzinfo=None)
+    return format_eta((alvo - now).total_seconds())
 
 
 def safe_project_folder_name(name: str) -> str:
@@ -3697,6 +3705,10 @@ if QT_IMPORT_ERROR is None:
             from .project_store import jobs_path
             from .utils import read_json
 
+            if not self.isVisible():
+                # Blindagem p/ uso nao-modal futuro: timer vivo com janela
+                # oculta nao deve reler o disco a cada 2 s.
+                return
             try:
                 payload = read_json(jobs_path(self._paths))
             except Exception:
@@ -3716,7 +3728,9 @@ if QT_IMPORT_ERROR is None:
                     job.get("stage", ""),
                     f"{job.get('progress', 0)}%",
                     format_job_time(job.get("started_at", "")),
-                    format_job_time(job.get("estimated_finish_at", "")),
+                    # U1.4: tempo RESTANTE ("cerca de 3min"), nao o horario
+                    # absoluto de termino — que exigia aritmetica do usuario.
+                    eta_text_for_job(job, datetime.now()),
                     format_job_time(job.get("finished_at", "")),
                     job.get("last_error", ""),
                 ]
