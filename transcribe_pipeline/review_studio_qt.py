@@ -5361,88 +5361,102 @@ if QT_IMPORT_ERROR is None:
             return button
 
         def _build_menus(self) -> None:
-            # --- Arquivo: I/O (projeto e transcricao aberta) ---
-            arquivo_menu = self.menuBar().addMenu("Arquivo")
-            arquivo_menu.addAction(self.new_project_action)
-            arquivo_menu.addAction(self.open_project_action)
-            recent_menu = arquivo_menu.addMenu("Projetos recentes")
+            # Estrutura da reforma (Programa R, dossie RD aprovado
+            # 2026-08-31): 6 menus — Projeto / Editar / Entrevista /
+            # Analisar / Ferramentas / Ajuda. O menu e o CATALOGO
+            # completo; o lugar primario de cada comando e contextual.
+            # Rotulos seguem os atuais ate a R3 consolidar as familias
+            # (exportar x3, trio de falantes, orfas).
+
+            # --- Projeto: ciclo de vida e resultados do projeto ---
+            projeto_menu = self.menuBar().addMenu("Projeto")
+            projeto_menu.addAction(self.new_project_action)
+            projeto_menu.addAction(self.open_project_action)
+            recent_menu = projeto_menu.addMenu("Projetos recentes")
             from . import recent_projects
             for rp in recent_projects.load_recent()[:5]:
                 recent_menu.addAction(str(rp), lambda p=rp: self._open_project_path(p))
             if self.context is not None:
                 recent_menu.addSeparator()
                 recent_menu.addAction(str(self.context.paths.project_root), self.refresh_interviews)
-            arquivo_menu.addSeparator()
-            add_media_menu = arquivo_menu.addMenu("Adicionar mídia")
+            projeto_menu.addSeparator()
+            add_media_menu = projeto_menu.addMenu("Adicionar mídia")
             add_media_menu.addAction(self.add_files_action)
             add_media_menu.addAction(self.add_folder_action)
-            arquivo_menu.addAction(self.reload_list_action)
-            arquivo_menu.addSeparator()
-            arquivo_menu.addAction(self.open_transcript_action)
-            arquivo_menu.addAction(self.save_action)
-            arquivo_menu.addAction(self.close_open_file_action)
-            arquivo_menu.addSeparator()
-            arquivo_menu.addAction(self.generate_files_action)
-            arquivo_menu.addAction(self.export_current_action)
-            arquivo_menu.addAction(self.export_selected_action)
-            arquivo_menu.addSeparator()
-            arquivo_menu.addAction(self.open_project_folder_action)
-            arquivo_menu.addAction(self.open_export_folder_action)
-            arquivo_menu.addSeparator()
-            arquivo_menu.addAction(self.exit_action)
+            projeto_menu.addAction(self.reload_list_action)
+            projeto_menu.addSeparator()
+            projeto_menu.addAction(self.generate_files_action)
+            # As duas variantes somem na R3 (Exportar unico com escopo).
+            projeto_menu.addAction(self.export_current_action)
+            projeto_menu.addAction(self.export_selected_action)
+            projeto_menu.addSeparator()
+            projeto_menu.addAction(self.open_project_folder_action)
+            projeto_menu.addAction(self.open_export_folder_action)
+            projeto_menu.addSeparator()
+            projeto_menu.addAction(self.exit_action)
 
-            # --- Editar: lista e edicao ---
+            # --- Editar: desfazer/refazer e busca no aberto ---
             editar_menu = self.menuBar().addMenu("Editar")
             editar_menu.addAction(self.undo_action)
             editar_menu.addAction(self.redo_action)
             editar_menu.addSeparator()
-            editar_menu.addAction(self.apply_metadata_action)
-            editar_menu.addAction(self.rename_interview_action)
-            editar_menu.addAction(self.move_up_action)
-            editar_menu.addAction(self.move_down_action)
-            editar_menu.addSeparator()
             editar_menu.addAction(self.find_action)
-            editar_menu.addAction(self.project_search_action)
-            editar_menu.addAction(self.explore_action)
-            editar_menu.addSeparator()
-            editar_menu.addAction(self.delete_transcription_action)
-            editar_menu.addAction(self.trash_selected_action)
-            editar_menu.addAction(self.trash_undo_action)
-            editar_menu.addAction(self.trash_redo_action)
 
-            # --- Transcrever: pipeline e configuracao ---
-            transcrever_menu = self.menuBar().addMenu("Transcrever")
-            transcrever_menu.addAction(self.transcribe_action)
-            transcrever_menu.addAction(self.transcribe_current_action)
-            transcrever_menu.addAction(self.retranscribe_current_action)
-            transcrever_menu.addAction(self.transcribe_pending_action)
-            transcrever_menu.addSeparator()
-            transcrever_menu.addAction(self.diarize_action)
-            transcrever_menu.addAction(self.improve_speakers_action)
-            transcrever_menu.addAction(self.name_voices_action)
-            transcrever_menu.addAction(self.voice_prompt_action)
-            transcrever_menu.addAction(self.render_action)
-            transcrever_menu.addSeparator()
-            transcrever_menu.addAction(self.summarize_action)
-            transcrever_menu.addAction(self.glossario_action)
-            transcrever_menu.addAction(self.spelling_action)
-            transcrever_menu.addSeparator()
-            transcrever_menu.addAction(self.qc_action)
-            transcrever_menu.addAction(self.queue_action)
-            transcrever_menu.addAction(self.refresh_library_action)
-            transcrever_menu.addSeparator()
-            transcrever_menu.addAction(self.engine_settings_action)
-            transcrever_menu.addAction(self.model_manager_action)
+            # --- Entrevista: tudo sobre a entrevista (abrir, transcrever,
+            # falantes, propriedades, lista, destrutivas) ---
+            entrevista_menu = self.menuBar().addMenu("Entrevista")
+            entrevista_menu.addAction(self.open_transcript_action)
+            entrevista_menu.addAction(self.save_action)
+            entrevista_menu.addAction(self.close_open_file_action)
+            entrevista_menu.addSeparator()
+            entrevista_menu.addAction(self.transcribe_action)
+            entrevista_menu.addAction(self.transcribe_current_action)
+            entrevista_menu.addAction(self.retranscribe_current_action)
+            entrevista_menu.addAction(self.transcribe_pending_action)
+            entrevista_menu.addSeparator()
+            entrevista_menu.addAction(self.name_voices_action)
+            entrevista_menu.addAction(self.diarize_action)
+            entrevista_menu.addAction(self.improve_speakers_action)
+            entrevista_menu.addAction(self.render_action)
+            entrevista_menu.addSeparator()
+            entrevista_menu.addAction(self.apply_metadata_action)
+            entrevista_menu.addAction(self.rename_interview_action)
+            entrevista_menu.addAction(self.move_up_action)
+            entrevista_menu.addAction(self.move_down_action)
+            entrevista_menu.addSeparator()
+            entrevista_menu.addAction(self.delete_transcription_action)
+            entrevista_menu.addAction(self.trash_selected_action)
+            entrevista_menu.addAction(self.trash_undo_action)
+            entrevista_menu.addAction(self.trash_redo_action)
+
+            # --- Analisar: busca no projeto e ✨ AI assistiva ---
+            analisar_menu = self.menuBar().addMenu("Analisar")
+            analisar_menu.addAction(self.project_search_action)
+            analisar_menu.addAction(self.explore_action)
+            analisar_menu.addSeparator()
+            analisar_menu.addAction(self.summarize_action)
+            analisar_menu.addAction(self.glossario_action)
+            analisar_menu.addAction(self.spelling_action)
+
+            # --- Ferramentas: fila, verificacao, motor e modelos ---
+            ferramentas_menu = self.menuBar().addMenu("Ferramentas")
+            ferramentas_menu.addAction(self.queue_action)
+            ferramentas_menu.addAction(self.qc_action)
+            ferramentas_menu.addAction(self.refresh_library_action)
+            ferramentas_menu.addSeparator()
+            ferramentas_menu.addAction(self.engine_settings_action)
+            ferramentas_menu.addAction(self.model_manager_action)
             from . import install_tools as _install_tools
             if not _install_tools.is_frozen():
                 # Canal uv/PyPI (v0.2): aceleracao NVIDIA e um extra opcional
                 # instalado por fora (o app fechado); o bundle legado usa o
                 # fluxo antigo do cuda_pack.
-                transcrever_menu.addAction(
+                ferramentas_menu.addAction(
                     "Instalar aceleração NVIDIA (CUDA)...", self.show_cuda_uv_install_dialog
                 )
-            transcrever_menu.addSeparator()
-            transcrever_menu.addAction(self.cancel_job_action)
+            ferramentas_menu.addSeparator()
+            ferramentas_menu.addAction(self.voice_prompt_action)
+            # Cancelar saiu do menu: mora na statusbar, junto do progresso.
 
             # --- Ajuda ---
             ajuda_menu = self.menuBar().addMenu("Ajuda")

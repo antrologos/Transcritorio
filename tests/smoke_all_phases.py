@@ -101,8 +101,10 @@ for menu_act in win.menuBar().actions():
         menu_items[menu_act.text()] = [
             a.text() for a in submenu.actions() if a.text() and not a.isSeparator()
         ]
-assert list(menu_items.keys()) == ["Arquivo", "Editar", "Transcrever", "Ajuda"]
-check(f"1.2 4 menus exatos: {list(menu_items.keys())}")
+# Programa R (R1): os 6 menus da reforma aprovada no dossie RD.
+assert list(menu_items.keys()) == [
+    "Projeto", "Editar", "Entrevista", "Analisar", "Ferramentas", "Ajuda"]
+check(f"1.2 6 menus exatos: {list(menu_items.keys())}")
 
 # Atalhos criticos
 all_sc = set()
@@ -126,21 +128,21 @@ missing = required - all_sc
 assert not missing, f"atalhos faltando: {missing}"
 check(f"1.3 11 atalhos essenciais presentes")
 
-# Itens renomeados (F2)
-editar = menu_items["Editar"]
-assert "Limpar transcricao gerada..." in editar
-assert "Enviar para a Lixeira…" in editar
-check("1.4 Editar: Limpar transcricao gerada + Enviar para Lixeira (F2)")
+# Itens em suas casas novas (R1): destrutivas no menu Entrevista
+entrevista = menu_items["Entrevista"]
+assert "Limpar transcricao gerada..." in entrevista
+assert "Enviar para a Lixeira…" in entrevista
+check("1.4 Entrevista: Limpar transcricao gerada + Enviar para a Lixeira")
 
-# F3: Abrir pasta Resultados
-assert "Abrir pasta Resultados" in menu_items["Arquivo"]
-check("1.5 Arquivo: Abrir pasta Resultados (F3)")
+# F3: Abrir pasta Resultados (menu Projeto)
+assert "Abrir pasta Resultados" in menu_items["Projeto"]
+check("1.5 Projeto: Abrir pasta Resultados (F3)")
 
-# F4: Gerenciar modelos
-assert "Gerenciar modelos…" in menu_items["Transcrever"]
-assert "Configurar modelos..." not in menu_items["Transcrever"]
-assert "Status dos modelos" not in menu_items["Transcrever"]
-check("1.6 Transcrever: Gerenciar modelos... (F4 fundiu)")
+# F4: Gerenciar modelos (menu Ferramentas)
+assert "Gerenciar modelos…" in menu_items["Ferramentas"]
+assert "Configurar modelos..." not in menu_items["Ferramentas"]
+assert "Status dos modelos" not in menu_items["Ferramentas"]
+check("1.6 Ferramentas: Gerenciar modelos… (F4 fundiu)")
 
 
 # ==== PASSO 2: Projeto carregado + actions desabilitadas sem selecao (F1+F4) ====
@@ -275,15 +277,16 @@ mm_dialog.close()
 app.processEvents()
 # Re-ler menus apos close do dialog
 menu_titles_after = [a.text() for a in win.menuBar().actions()]
-assert menu_titles_after == ["Arquivo", "Editar", "Transcrever", "Ajuda"], menu_titles_after
-# Buscar items de Transcrever novamente (sem cache)
-transcrever_items_after: list[str] = []
+assert menu_titles_after == [
+    "Projeto", "Editar", "Entrevista", "Analisar", "Ferramentas", "Ajuda"], menu_titles_after
+# Buscar items de Ferramentas novamente (sem cache)
+ferramentas_items_after: list[str] = []
 for menu_act in win.menuBar().actions():
     submenu = menu_act.menu()
-    if submenu and menu_act.text() == "Transcrever":
-        transcrever_items_after = [a.text() for a in submenu.actions() if a.text() and not a.isSeparator()]
+    if submenu and menu_act.text() == "Ferramentas":
+        ferramentas_items_after = [a.text() for a in submenu.actions() if a.text() and not a.isSeparator()]
         break
-assert "Gerenciar modelos…" in transcrever_items_after
+assert "Gerenciar modelos…" in ferramentas_items_after
 check("7.1 menu intacto apos fechar ModelManager")
 
 

@@ -62,7 +62,8 @@ def check(label: str) -> None:
 header("FASE 1 - MENUS")
 
 menus = [a.text() for a in win.menuBar().actions()]
-assert menus == ["Arquivo", "Editar", "Transcrever", "Ajuda"], menus
+assert menus == ["Projeto", "Editar", "Entrevista", "Analisar",
+                 "Ferramentas", "Ajuda"], menus
 check("1.1 4 top-level: " + " / ".join(menus))
 
 # Reunir todos os shortcuts declarados (action.shortcut) dos menus
@@ -104,12 +105,12 @@ for menu_act in win.menuBar().actions():
         a.text() for a in submenu.actions() if a.text() and not a.isSeparator()
     ]
 
-assert "Limpar transcricao gerada..." in menu_items_by_title["Editar"], menu_items_by_title["Editar"]
-assert "Enviar para a Lixeira…" in menu_items_by_title["Editar"]
-check("1.4 Editar contem 'Limpar transcricao gerada...' e 'Enviar para Lixeira...'")
+assert "Limpar transcricao gerada..." in menu_items_by_title["Entrevista"], menu_items_by_title["Entrevista"]
+assert "Enviar para a Lixeira…" in menu_items_by_title["Entrevista"]
+check("1.4 Entrevista contem 'Limpar transcricao gerada...' e 'Enviar para a Lixeira…'")
 
-assert "Abrir pasta Resultados" in menu_items_by_title["Arquivo"], menu_items_by_title["Arquivo"]
-check("1.5 Arquivo contem 'Abrir pasta Resultados'")
+assert "Abrir pasta Resultados" in menu_items_by_title["Projeto"], menu_items_by_title["Projeto"]
+check("1.5 Projeto contem 'Abrir pasta Resultados'")
 
 assert "Fluxo de trabalho" in menu_items_by_title["Ajuda"], menu_items_by_title["Ajuda"]
 check("1.6 Ajuda contem 'Fluxo de trabalho'")

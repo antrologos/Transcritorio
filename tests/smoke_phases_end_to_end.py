@@ -81,7 +81,8 @@ try:
     win = rsq.ReviewStudioWindow(project_root=None)
     menubar = win.menuBar()
     menus = [a.text().replace("&", "") for a in menubar.actions()]
-    expected = ["Arquivo", "Editar", "Transcrever", "Ajuda"]
+    expected = ["Projeto", "Editar", "Entrevista", "Analisar",
+                "Ferramentas", "Ajuda"]
     if menus == expected:
         ok(f"4 menus exatos: {menus}")
     else:
