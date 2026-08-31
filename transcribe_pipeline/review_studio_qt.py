@@ -5019,17 +5019,16 @@ if QT_IMPORT_ERROR is None:
             )
             self.add_files_action.triggered.connect(self.add_audio_files)
 
-            self.save_project_action = QAction("Salvar projeto", self)
-            self.save_project_action.setToolTip("Atualizar o arquivo de projeto e os metadados.")
-            self.save_project_action.triggered.connect(self.save_project_metadata)
+            # R3: as acoes orfas "Salvar projeto", "Comecar", "Configurar
+            # modelos..." e "Status dos modelos" foram removidas — nunca
+            # tiveram casa em menu/botao (salvamento de projeto e
+            # automatico; o empty-state e o comecar; o gerenciador de
+            # modelos absorveu configuracao e status).
 
             self.open_project_folder_action = QAction("Abrir pasta do projeto", self)
             self.open_project_folder_action.setToolTip("Abrir a pasta do projeto no Explorador de Arquivos.\nDesativado sem projeto aberto.")
             self.open_project_folder_action.triggered.connect(self.open_project_folder)
 
-            self.startup_action = QAction("Comecar", self)
-            self.startup_action.setToolTip("Mostrar opcoes iniciais do projeto.")
-            self.startup_action.triggered.connect(self.show_startup_dialog)
 
             self.exit_action = QAction("Sair", self)
             self.exit_action.setToolTip("Fechar o Transcritório.")
@@ -5047,13 +5046,7 @@ if QT_IMPORT_ERROR is None:
             self.engine_settings_action.setToolTip("Escolher GPU/CPU, modelo, precisao e batch.")
             self.engine_settings_action.triggered.connect(self.configure_engine)
 
-            self.model_setup_action = QAction("Configurar modelos...", self)
-            self.model_setup_action.setToolTip("Baixar e verificar modelos locais com o token Hugging Face do usuario.")
-            self.model_setup_action.triggered.connect(self.show_model_setup)
 
-            self.model_status_action = QAction("Status dos modelos", self)
-            self.model_status_action.setToolTip("Mostrar quais modelos locais ja foram baixados.")
-            self.model_status_action.triggered.connect(self.show_model_status)
 
             self.model_manager_action = QAction("Gerenciar modelos…", self)
             self.model_manager_action.setToolTip("Ver tamanho em disco, remover modelos, trocar token HF, baixar outros.")
@@ -5889,9 +5882,6 @@ if QT_IMPORT_ERROR is None:
                 self._open_project_path(dialog.selected_recent)
             else:
                 self.refresh_interviews()
-
-        def show_model_status(self) -> None:
-            QMessageBox.information(self, "Status dos modelos", app_service.models_status_text())
 
         def show_model_manager(self) -> None:
             dialog = ModelManagerDialog(lambda: self.context, self)
@@ -8448,14 +8438,10 @@ if QT_IMPORT_ERROR is None:
             self._set_action(self.open_project_action, not busy, reason_busy)
             self._set_action(self.add_folder_action, not busy and has_project, reason_busy if busy else reason_project)
             self._set_action(self.add_files_action, not busy and has_project, reason_busy if busy else reason_project)
-            self._set_action(self.save_project_action, not busy and has_project, reason_busy if busy else reason_project)
             self._set_action(self.open_project_folder_action, not busy and has_project, reason_busy if busy else reason_project)
-            self.startup_action.setEnabled(not busy)
             self.exit_action.setEnabled(True)
             self.apply_metadata_action.setEnabled(not busy and has_project and has_table_selection)
             self.queue_action.setEnabled(has_project)
-            self._set_action(self.model_setup_action, not busy, reason_busy)
-            self.model_status_action.setEnabled(True)
             self._set_action(self.engine_settings_action, not busy and has_project, reason_busy if busy else reason_project)
             self._set_action(self.refresh_library_action, not busy and has_project, reason_busy if busy else reason_project)
             self._set_action(self.reload_list_action, not busy and has_project, reason_busy if busy else reason_project)

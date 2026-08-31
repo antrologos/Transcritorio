@@ -85,12 +85,9 @@ acoes_janela: dict[str, QAction] = {
     if isinstance(obj, QAction)
 }
 
-# Orfas historicas (inventario 2026-08-31). Esta lista SO PODE ENCOLHER —
-# a R3 as remove; qualquer acao NOVA sem casa e defeito imediato.
-ORFAS_CONHECIDAS = {
-    "save_project_action", "startup_action",
-    "model_setup_action", "model_status_action",
-}
+# Orfas historicas: a R3-c1 (2026-08-31) removeu as 4 do inventario.
+# Lista VAZIA e o estado final — acao sem casa e defeito imediato.
+ORFAS_CONHECIDAS: set[str] = set()
 
 orfas = {nome for nome, act in acoes_janela.items() if id(act) not in com_casa}
 inesperadas = orfas - ORFAS_CONHECIDAS

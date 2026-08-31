@@ -31,7 +31,7 @@ ENFORCING = True  # ligado no fim da R0 (2026-08-31)
 # violacoes DELAS sao toleradas ate la. Esta lista SO ENCOLHE — cada
 # familia consolidada na R3 remove suas entradas no mesmo commit.
 EXCECOES_R3 = {
-    "model_setup_action", "export_selected_action", "export_current_action",
+    "export_selected_action", "export_current_action",
     "delete_transcription_action", "name_voices_action",
     "improve_speakers_action", "render_action",
 }
