@@ -22,6 +22,12 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# Estado da MAQUINA fora do teste: sem isto, cada rodada gravava
+# projetos tmp na lista real de Projetos recentes do usuario.
+import os as _os_iso
+import tempfile as _tf_iso
+_os_iso.environ["TRANSCRITORIO_HOME"] = _tf_iso.mkdtemp()
+
 from PySide6.QtWidgets import QApplication, QPushButton, QMessageBox, QDialog
 from PySide6.QtCore import Qt
 
