@@ -2643,15 +2643,17 @@ if QT_IMPORT_ERROR is None:
             self._window = window
             self.setWindowTitle("✨ Revisar grafias de nomes")
             self.setMinimumSize(760, 520)
-            self._checks: list[tuple[QCheckBox, dict[str, Any]]] = []
+            self._checks: list[tuple[QCheckBox, dict[str, Any], QLineEdit]] = []
 
             layout = QVBoxLayout(self)
             intro = QLabel(
                 "A AI encontrou nomes escritos de formas diferentes. Marque só as "
                 "ocorrências que são erro de transcrição — cada uma é decidida "
                 "separadamente, porque a mesma palavra pode ser um nome legítimo "
-                "em outro trecho.\nO áudio e a transcrição original não são "
-                "alterados; Ctrl+Z desfaz na entrevista aberta."
+                "em outro trecho. A forma corrigida é uma sugestão: você pode "
+                "digitar a grafia certa no campo de cada nome.\nO áudio e a "
+                "transcrição original não são alterados; Ctrl+Z desfaz na "
+                "entrevista aberta."
             )
             intro.setWordWrap(True)
             intro.setStyleSheet(_style_muted())
@@ -2661,8 +2663,22 @@ if QT_IMPORT_ERROR is None:
             container_layout = QVBoxLayout(container)
             container_layout.setContentsMargins(0, 0, 0, 0)
             for grupo in grupos:
-                box = QGroupBox(f"\"{grupo['variante']}\"  →  {grupo['canonico']}")
+                box = QGroupBox(f"\"{grupo['variante']}\"")
                 box_layout = QVBoxLayout(box)
+                # Sugestao EDITAVEL (teste real 2026-08-31: a AI sugeriu
+                # "UEG" onde o certo era "UERJ" e nao havia como corrigir a
+                # sugestao — so aceitar ou desistir).
+                alvo_row = QHBoxLayout()
+                alvo_row.addWidget(QLabel("Corrigir para:"))
+                alvo_edit = QLineEdit(str(grupo["canonico"]))
+                alvo_edit.setPlaceholderText(str(grupo["canonico"]))
+                alvo_edit.setToolTip(
+                    "Sugestão da AI — edite se a grafia certa for outra.\n"
+                    "Vazio volta para a sugestão.")
+                alvo_edit.setMaximumWidth(320)
+                alvo_row.addWidget(alvo_edit)
+                alvo_row.addStretch(1)
+                box_layout.addLayout(alvo_row)
                 ocorrencias = grupo["ocorrencias"]
                 todas = QCheckBox(f"marcar as {len(ocorrencias)} ocorrência(s)")
                 box_layout.addWidget(todas)
@@ -2671,7 +2687,7 @@ if QT_IMPORT_ERROR is None:
                     row = QHBoxLayout()
                     check = QCheckBox()
                     grupo_checks.append(check)
-                    self._checks.append((check, ocorrencia))
+                    self._checks.append((check, ocorrencia, alvo_edit))
                     row.addWidget(check)
                     rotulo = QPushButton(
                         f"{ocorrencia['interview_id']} • {format_clock(ocorrencia['start'])} • "
@@ -2703,7 +2719,7 @@ if QT_IMPORT_ERROR is None:
             buttons.accepted.connect(self.accept)
             buttons.rejected.connect(self.reject)
             layout.addWidget(buttons)
-            for check, _ocorrencia in self._checks:
+            for check, _ocorrencia, _edit in self._checks:
                 check.toggled.connect(self._update_count)
             self._update_count()
 
@@ -2714,7 +2730,13 @@ if QT_IMPORT_ERROR is None:
                 if not total else f"{total} ocorrência(s) serão corrigidas.")
 
         def selected(self) -> list[dict[str, Any]]:
-            return [ocorrencia for check, ocorrencia in self._checks if check.isChecked()]
+            # A forma corrigida sai do campo do grupo (editavel); vazio
+            # volta para a sugestao original da AI.
+            return [
+                {**ocorrencia,
+                 "canonico": edit.text().strip() or str(ocorrencia["canonico"])}
+                for check, ocorrencia, edit in self._checks if check.isChecked()
+            ]
 
 
     class SpeakerNamingDialog(QDialog):
@@ -11134,14 +11156,54 @@ if QT_IMPORT_ERROR is None:
                 return
             if not self.save_current_turn():
                 return
+            # Tres estados HONESTOS (teste real 2026-08-31: "nada a
+            # corrigir" saia sem a analise nunca ter rodado — o usuario
+            # concluiu que estava tudo certo): nunca analisado -> oferecer
+            # analisar AGORA; analise defasada (entrevistas transcritas
+            # depois) -> oferecer re-analisar; em dia -> verdade.
+            from . import search as _search
+            glossario = _gl.load_glossary(self.context.paths)
+            transcritas = [
+                r["interview_id"] for r in self.context.rows
+                if _search.source_path_for(self.context.paths, r["interview_id"]) is not None
+            ]
+            if not glossario:
+                answer = QMessageBox.question(
+                    self, "Analisar os nomes primeiro",
+                    "As entrevistas ainda não foram analisadas — a revisão de "
+                    "grafias parte do glossário de nomes, que ainda não "
+                    "existe neste projeto.\n\nAnalisar agora? (✨ AI local; ao "
+                    "terminar, o aviso na aba Documentos traz o botão "
+                    "\"Revisar grafias…\".)")
+                if answer == QMessageBox.StandardButton.Yes:
+                    self.run_glossario_job()
+                return
+            defasadas = _gl.glossary_coverage_gap(glossario, transcritas)
+            if defasadas:
+                n = len(defasadas)
+                texto = (
+                    f"{n} entrevistas foram transcritas depois da última "
+                    "análise de nomes e ainda não entraram no glossário."
+                    if n > 1 else
+                    "1 entrevista foi transcrita depois da última análise "
+                    "de nomes e ainda não entrou no glossário.")
+                answer = QMessageBox.question(
+                    self, "Analisar as novas também?",
+                    texto + "\n\nAnalisar de novo agora? (Ao terminar, o "
+                    "aviso na aba Documentos traz o botão \"Revisar "
+                    "grafias…\". Responda Não para revisar só o que já foi "
+                    "analisado.)")
+                if answer == QMessageBox.StandardButton.Yes:
+                    self.run_glossario_job()
+                    return
             pendentes = _gl.pending_variants(self.context.paths)
             if not pendentes:
                 QMessageBox.information(
                     self, "Nada a revisar",
-                    "Nenhuma variação de grafia foi encontrada.\n\n"
-                    "Gere o glossário primeiro (menu Analisar) — e, para "
-                    "melhorar a detecção, declare os nomes corretos na seção "
-                    "\"## Nomes conhecidos\" do contexto da pesquisa.")
+                    "Os nomes já analisados não têm variações de grafia a "
+                    "conferir.\n\nPara melhorar a detecção, declare os nomes "
+                    "corretos na seção \"## Nomes conhecidos\" do contexto "
+                    "da pesquisa e gere o glossário de novo (menu Analisar).")
                 return
             ids = [r["interview_id"] for r in self.context.rows]
             grupos = []

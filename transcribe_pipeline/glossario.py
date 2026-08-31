@@ -489,6 +489,22 @@ def apply_corrections(paths: Paths, decisoes: list[dict[str, Any]]) -> dict[str,
     return {"blocos": blocos, "ocorrencias": ocorrencias, "arquivos": arquivos}
 
 
+def glossary_coverage_gap(
+    glossary: dict[str, Any], transcritas: list[str],
+) -> list[str]:
+    """Entrevistas transcritas que a ultima analise NAO leu (pura).
+
+    Glossario sem o campo interview_ids (gerado antes de 2026-08-31):
+    cobertura desconhecida — devolve [] para nao acusar defasagem falsa
+    (sem retro-compat pre-lancamento; a proxima analise grava o campo).
+    """
+    cobertas = glossary.get("interview_ids")
+    if not isinstance(cobertas, list):
+        return []
+    conhecidas = {str(item) for item in cobertas}
+    return [iid for iid in transcritas if iid not in conhecidas]
+
+
 def pending_variants(paths: Paths) -> list[dict[str, Any]]:
     """[{canonico, tipo, variante, total}] do glossario gravado."""
     pendentes = []
@@ -630,6 +646,11 @@ def run_glossario(
     research_context.write_template_if_missing(paths)
     known = research_context.known_names(research_context.load_research_context(paths))
     glossary = build_glossary(payload.get("mencoes") or [], known)
+    # Cobertura da varredura (2026-08-31): quais entrevistas ESTA analise
+    # leu. Permite distinguir "glossario em dia" de "ha entrevistas
+    # transcritas depois da ultima analise" (o dialogo de grafias dizia
+    # "nada a corrigir" sem nunca ter analisado — beco visto em teste real).
+    glossary["interview_ids"] = [t["interview_id"] for t in targets]
     target = glossary_path(paths)
     target.parent.mkdir(parents=True, exist_ok=True)
     write_json(target, glossary)
