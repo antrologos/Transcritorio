@@ -406,6 +406,65 @@ def diar_offer_candidates(
     return out
 
 
+def props_metadata_updates(
+    atual: dict[str, Any],
+    form: dict[str, Any],
+    tocados: set[str],
+) -> dict[str, str]:
+    """Diff do form da aba Propriedades -> updates MINIMOS (R4).
+
+    Nunca write-back integral: outros fluxos gravam speakers_confirmed
+    no MESMO CSV entre a leitura e o salvar — so os campos que o usuario
+    TOCOU entram, e mesmo eles so quando diferem do atual. Paridade de
+    chaves com MetadataDialog.updates()/SpeakerCountDialog (exact grava
+    o trio count=min=max; range normaliza low/high; auto esvazia o
+    trio). Rotulos vazios NUNCA limpam (esvaziar o campo por acidente
+    nao pode descartar rotulos — limpar de fato e gesto do dialogo).
+
+    form: language, speaker_mode, speaker_count, min_speakers,
+    max_speakers, speaker_labels ("A|B"), context_text, use_context.
+    tocados: {"language", "falantes", "rotulos", "contexto"}.
+    """
+    updates: dict[str, str] = {}
+    if "language" in tocados:
+        lingua = str(form.get("language") or "")
+        if lingua != str(atual.get("language") or ""):
+            updates["language"] = lingua
+    if "falantes" in tocados:
+        modo = str(form.get("speaker_mode") or "")
+        if modo == "exact":
+            n = str(int(form.get("speaker_count") or 0) or "")
+            trio = {"speaker_count": n, "min_speakers": n, "max_speakers": n}
+        elif modo == "range":
+            low = int(form.get("min_speakers") or 0)
+            high = int(form.get("max_speakers") or 0)
+            if high < low:
+                low, high = high, low
+            trio = {"speaker_count": "", "min_speakers": str(low),
+                    "max_speakers": str(high)}
+        else:
+            trio = {"speaker_count": "", "min_speakers": "", "max_speakers": ""}
+        mudou = modo != str(atual.get("speaker_mode") or "") or any(
+            str(atual.get(chave) or "") != valor for chave, valor in trio.items())
+        if modo and mudou:
+            updates["speaker_mode"] = modo
+            updates.update(trio)
+    if "rotulos" in tocados:
+        rotulos = str(form.get("speaker_labels") or "").strip()
+        if rotulos and rotulos != str(atual.get("speaker_labels") or ""):
+            updates["speaker_labels"] = rotulos
+    if "contexto" in tocados:
+        contexto = str(form.get("context_text") or "").strip()
+        usa = bool(form.get("use_context")) and bool(contexto)
+        atual_ctx = str(atual.get("context_text") or "")
+        atual_usa = str(atual.get("use_context_as_prompt") or "") == "true"
+        if contexto != atual_ctx or usa != atual_usa:
+            updates["context_mode"] = "custom" if contexto else "empty"
+            updates["context_text"] = contexto
+            updates["use_context_as_prompt"] = "true" if usa else "false"
+    return updates
+
+
 def parse_timecode(value: str) -> float:
     cleaned = value.strip().replace(",", ".")
     if not cleaned:
@@ -6987,6 +7046,11 @@ if QT_IMPORT_ERROR is None:
                 self.interview_table.setVisible(True)
             self._update_add_media_emphasis(has_rows)
             self._update_diar_offer_banner()
+            # R4: aba Propriedades visivel acompanha o estado novo (o
+            # metodo preserva o form quando ha edicao nao salva).
+            if (getattr(self, "_props_tab", None) is not None
+                    and self.review_tabs.currentWidget() is self._props_tab):
+                self._refresh_props_panel()
             self._apply_interview_filter()
             self.update_action_states()
 
@@ -7407,7 +7471,10 @@ if QT_IMPORT_ERROR is None:
             open_folder_in_explorer(self.context.paths.project_root)
 
         def apply_metadata_to_selected(self) -> None:
-            ids = self.selected_interview_ids()
+            # R4: effective_target_ids (regra Explorer) no lugar de
+            # checked-only — a acao habilitava por um criterio e o handler
+            # exigia outro, e o clique com selecao visual so repreendia.
+            ids = self.effective_target_ids()
             if not ids:
                 QMessageBox.information(self, "Selecione arquivos", "Selecione um ou mais arquivos do projeto.")
                 return
@@ -7418,6 +7485,12 @@ if QT_IMPORT_ERROR is None:
             if not updates:
                 QMessageBox.information(self, "Nada para aplicar", "Marque pelo menos um campo para alterar.")
                 return
+            self._apply_metadata_updates(ids, updates)
+            self.progress_label.setText(f"Propriedades atualizadas em {len(ids)} arquivo(s).")
+
+        def _apply_metadata_updates(self, ids: list[str], updates: dict[str, str]) -> None:
+            """Persistencia + side-effects compartilhados entre o dialogo de
+            lote e o salvar da aba Propriedades (R4)."""
             if "speaker_labels" in updates:
                 # Rotulos escolhidos explicitamente contam como confirmacao
                 # humana das vozes (plano D2.5, item 9).
@@ -7428,7 +7501,6 @@ if QT_IMPORT_ERROR is None:
                 updates["speaker_setup"] = "true"
             self.context = app_service.update_file_metadata(self.context, ids, updates)
             self.refresh_interviews()
-            self.progress_label.setText(f"Propriedades atualizadas em {len(ids)} arquivo(s).")
             if "speaker_labels" in updates:
                 self._offer_rerender_after_label_change(ids)
 
@@ -10509,10 +10581,13 @@ if QT_IMPORT_ERROR is None:
 
         # ---- aba Propriedades (R2) ----------------------------------------
         def _build_props_panel(self) -> QWidget:
-            """Propriedades da entrevista aberta (leitura + ponte de edicao).
+            """Propriedades da entrevista aberta (R4: edicao inline).
 
-            Absorcao completa do MetadataDialog (edicao inline) fica para o
-            polimento da R4; o dialogo segue para edicao em lote."""
+            Os 6 campos informativos seguem QLabels; lingua, falantes,
+            rotulos e contexto sao EDITAVEIS aqui, com salvar explicito
+            (auto-apply e inviavel: gravar rotulos implica confirmar
+            vozes, e a oferta de remontagem abre dialogo). O
+            MetadataDialog sobrevive como porta do LOTE."""
             self._props_tab = QWidget()
             raiz = QVBoxLayout(self._props_tab)
             raiz.setContentsMargins(ui_tokens.SP_3, ui_tokens.SP_3,
@@ -10534,10 +10609,6 @@ if QT_IMPORT_ERROR is None:
                 ("formato", "Formato"),
                 ("duracao", "Duração"),
                 ("situacao", "Situação"),
-                ("lingua", "Língua"),
-                ("falantes", "Falantes esperados"),
-                ("papeis", "Rótulos dos falantes"),
-                ("contexto", "Contexto"),
             ]
             for linha, (chave, rotulo) in enumerate(campos):
                 nome = QLabel(rotulo + ":")
@@ -10549,8 +10620,88 @@ if QT_IMPORT_ERROR is None:
                 grid.addWidget(nome, linha, 0, Qt.AlignmentFlag.AlignTop)
                 grid.addWidget(valor, linha, 1)
                 self._props_values[chave] = valor
+
+            def _nome(texto: str, linha: int) -> None:
+                rotulo = QLabel(texto)
+                rotulo.setStyleSheet(f"color: {ui_tokens.TEXT_MUTED};")
+                grid.addWidget(rotulo, linha, 0, Qt.AlignmentFlag.AlignTop)
+
+            base = len(campos)
+            self._props_dirty_fields: set[str] = set()
+            self._props_loaded_iid: str | None = None
+            # Lingua: item "Padrão do projeto" (data "") permite voltar ao
+            # default global — e e o estado de arquivo nunca configurado.
+            _nome("Língua:", base)
+            self._props_lang_combo = QComboBox()
+            self._props_lang_combo.addItem("Padrão do projeto", "")
+            from . import model_manager as _mm_lang
+            _ordenados = sorted(_mm_lang.ALIGN_LANGUAGES.items(),
+                                key=lambda kv: (kv[0] != "pt", kv[1]["label"]))
+            self._props_lang_combo.addItem(_ordenados[0][1]["label"], "pt")
+            self._props_lang_combo.addItem("Automático", "auto")
+            for _code, _spec in _ordenados[1:]:
+                self._props_lang_combo.addItem(str(_spec["label"]), _code)
+            self._props_lang_combo.currentIndexChanged.connect(
+                lambda _i: self._touch_props("language"))
+            grid.addWidget(self._props_lang_combo, base, 1)
+            # Falantes: modo + spins (mesma semantica do dialogo de lote).
+            _nome("Falantes esperados:", base + 1)
+            falantes_row = QHBoxLayout()
+            self._props_mode_combo = QComboBox()
+            for value, label in [("exact", "Número exato"),
+                                 ("auto", "Automático"),
+                                 ("range", "Intervalo")]:
+                self._props_mode_combo.addItem(label, value)
+            self._props_count_spin = QSpinBox()
+            self._props_count_spin.setRange(1, 20)
+            self._props_count_spin.setValue(2)
+            self._props_min_spin = QSpinBox()
+            self._props_min_spin.setRange(1, 20)
+            self._props_min_spin.setValue(2)
+            self._props_max_spin = QSpinBox()
+            self._props_max_spin.setRange(1, 20)
+            self._props_max_spin.setValue(4)
+            for w in (self._props_mode_combo, self._props_count_spin,
+                      self._props_min_spin, self._props_max_spin):
+                falantes_row.addWidget(w)
+            falantes_row.addStretch(1)
+            self._props_mode_combo.currentIndexChanged.connect(
+                lambda _i: (self._touch_props("falantes"),
+                            self._sync_props_speaker_widgets()))
+            for spin in (self._props_count_spin, self._props_min_spin,
+                         self._props_max_spin):
+                spin.valueChanged.connect(lambda _v: self._touch_props("falantes"))
+            falantes_w = QWidget()
+            falantes_w.setLayout(falantes_row)
+            grid.addWidget(falantes_w, base + 1, 1)
+            # Rotulos e contexto.
+            _nome("Rótulos dos falantes:", base + 2)
+            self._props_labels_edit = QLineEdit()
+            self._props_labels_edit.setPlaceholderText("Entrevistador | Entrevistado")
+            self._props_labels_edit.textEdited.connect(
+                lambda _t: self._touch_props("rotulos"))
+            grid.addWidget(self._props_labels_edit, base + 2, 1)
+            _nome("Contexto:", base + 3)
+            self._props_context_edit = QTextEdit()
+            self._props_context_edit.setPlaceholderText(
+                "Use poucas frases com nomes, termos e assunto.")
+            self._props_context_edit.setMaximumHeight(90)
+            self._props_context_edit.textChanged.connect(
+                lambda: self._touch_props("contexto"))
+            grid.addWidget(self._props_context_edit, base + 3, 1)
+            self._props_use_context = QCheckBox(
+                "Usar este contexto como auxílio na transcrição")
+            self._props_use_context.toggled.connect(
+                lambda _c: self._touch_props("contexto"))
+            grid.addWidget(self._props_use_context, base + 4, 1)
             raiz.addWidget(self._props_grid_widget)
             rodape = QHBoxLayout()
+            self._props_save_button = QPushButton("Salvar propriedades")
+            self._props_save_button.setEnabled(False)
+            self._props_save_button.setToolTip(
+                "Grava apenas o que você alterou nesta aba.")
+            self._props_save_button.clicked.connect(self._save_props_from_tab)
+            rodape.addWidget(self._props_save_button)
             rodape.addWidget(self.action_button(self.apply_metadata_action))
             dica = QLabel("Para editar várias entrevistas de uma vez, "
                           "selecione-as na lista.")
@@ -10561,6 +10712,53 @@ if QT_IMPORT_ERROR is None:
             raiz.addStretch(1)
             return self._props_tab
 
+        def _touch_props(self, campo: str) -> None:
+            """Gesto do usuario num campo editavel da aba (os populates
+            programaticos rodam com blockSignals e nao chegam aqui)."""
+            self._props_dirty_fields.add(campo)
+            busy = bool(self.worker and self.worker.isRunning())
+            self._props_save_button.setEnabled(not busy)
+
+        def _sync_props_speaker_widgets(self) -> None:
+            modo = str(self._props_mode_combo.currentData())
+            self._props_count_spin.setVisible(modo == "exact")
+            self._props_min_spin.setVisible(modo == "range")
+            self._props_max_spin.setVisible(modo == "range")
+
+        def _save_props_from_tab(self) -> None:
+            iid = self.current_interview_id
+            if not iid or self.context is None:
+                return
+            if self.worker and self.worker.isRunning():
+                QMessageBox.information(
+                    self, "Tarefa em andamento",
+                    "Aguarde a tarefa atual terminar para salvar as propriedades.")
+                return
+            form = {
+                "language": str(self._props_lang_combo.currentData() or ""),
+                "speaker_mode": str(self._props_mode_combo.currentData() or ""),
+                "speaker_count": self._props_count_spin.value(),
+                "min_speakers": self._props_min_spin.value(),
+                "max_speakers": self._props_max_spin.value(),
+                "speaker_labels": "|".join(
+                    parte.strip() for parte in
+                    self._props_labels_edit.text().replace(",", "|").split("|")
+                    if parte.strip()),
+                "context_text": self._props_context_edit.toPlainText(),
+                "use_context": self._props_use_context.isChecked(),
+            }
+            atual = self.context.metadata.get(iid, {})
+            updates = props_metadata_updates(
+                atual, form, set(self._props_dirty_fields))
+            self._props_dirty_fields.clear()
+            self._props_save_button.setEnabled(False)
+            if not updates:
+                self.progress_label.setText("Nada mudou nas propriedades.")
+                return
+            self._apply_metadata_updates([iid], updates)
+            self.progress_label.setText("Propriedades salvas.")
+            self._refresh_props_panel()
+
         def _refresh_props_panel(self) -> None:
             if getattr(self, "_props_values", None) is None:
                 return
@@ -10570,9 +10768,11 @@ if QT_IMPORT_ERROR is None:
             self._props_empty.setVisible(not tem)
             self._props_grid_widget.setVisible(tem)
             if not tem:
+                self._props_loaded_iid = None
+                self._props_dirty_fields.clear()
+                self._props_save_button.setEnabled(False)
                 return
             metadata = self.context.metadata.get(iid, {})
-            mostra = project_store.metadata_display(metadata)
             job = self.context.jobs.get(iid, {})
             origem = str(getattr(status, "source_path", "") or "")
             if origem:
@@ -10588,13 +10788,52 @@ if QT_IMPORT_ERROR is None:
                 "duracao": format_clock(float(status.duration_sec)
                                         if status.duration_sec else 0),
                 "situacao": self.friendly_state(status, job),
-                "lingua": mostra.get("language") or "—",
-                "falantes": mostra.get("speakers") or "—",
-                "papeis": mostra.get("speaker_labels") or "—",
-                "contexto": mostra.get("context") or "—",
             }
             for chave, valor in valores.items():
                 self._props_values[chave].setText(str(valor) or "—")
+            # Form editavel: NAO sobrescrever o que o usuario esta digitando
+            # (refresh roda de ~15 lugares, inclusive fim de worker). Trocar
+            # de entrevista descarta o form nao salvo — com aviso.
+            if self._props_dirty_fields and self._props_loaded_iid == iid:
+                return
+            if self._props_dirty_fields and self._props_loaded_iid:
+                self.progress_label.setText(
+                    "As propriedades editadas de "
+                    f"\"{self._props_loaded_iid}\" não foram salvas.")
+            self._props_dirty_fields.clear()
+            self._props_save_button.setEnabled(False)
+            self._props_loaded_iid = iid
+            widgets = (self._props_lang_combo, self._props_mode_combo,
+                       self._props_count_spin, self._props_min_spin,
+                       self._props_max_spin, self._props_labels_edit,
+                       self._props_context_edit, self._props_use_context)
+            for w in widgets:
+                w.blockSignals(True)
+            try:
+                lingua = str(metadata.get("language") or "")
+                indice = self._props_lang_combo.findData(lingua)
+                self._props_lang_combo.setCurrentIndex(max(0, indice))
+                modo = str(metadata.get("speaker_mode") or "") or "exact"
+                indice = self._props_mode_combo.findData(modo)
+                self._props_mode_combo.setCurrentIndex(max(0, indice))
+                self._props_count_spin.setValue(
+                    int(metadata.get("speaker_count") or 2))
+                self._props_min_spin.setValue(
+                    int(metadata.get("min_speakers") or 2))
+                self._props_max_spin.setValue(
+                    int(metadata.get("max_speakers") or 4))
+                self._props_labels_edit.setText(
+                    str(metadata.get("speaker_labels") or "").replace("|", " | "))
+                self._props_context_edit.setPlainText(
+                    str(metadata.get("context_text") or ""))
+                self._props_use_context.setChecked(
+                    str(metadata.get("use_context_as_prompt") or "") == "true")
+            except (TypeError, ValueError):
+                pass  # metadado ilegivel: form fica no default
+            finally:
+                for w in widgets:
+                    w.blockSignals(False)
+            self._sync_props_speaker_widgets()
 
         def _show_path_in_folder(self, caminho: str) -> None:
             if sys.platform == "win32":
