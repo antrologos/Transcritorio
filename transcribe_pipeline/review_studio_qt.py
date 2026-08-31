@@ -5096,8 +5096,8 @@ if QT_IMPORT_ERROR is None:
             # selecionados..." morreram — eram tres rotulos para a MESMA
             # funcao (o escopo sempre foi escolhido dentro do dialogo).
 
-            self.delete_transcription_action = QAction("Limpar transcricao gerada...", self)
-            self.delete_transcription_action.setToolTip("Apagar apenas os arquivos de transcricao gerados. O audio original e mantido no projeto.")
+            self.delete_transcription_action = QAction("Apagar transcrição… (a gravação fica)", self)
+            self.delete_transcription_action.setToolTip("Apaga apenas os arquivos de transcrição gerados. A gravação original fica no projeto.")
             self.delete_transcription_action.triggered.connect(self.delete_selected_transcriptions)
 
             self.rename_interview_action = QAction("Renomear rótulo…", self)
@@ -5157,14 +5157,15 @@ if QT_IMPORT_ERROR is None:
             self.diarize_action.setToolTip("Reprocessar a identificação de falantes.\nMarque ☑ ao menos um arquivo na lista (ou abra um).")
             self.diarize_action.triggered.connect(self.run_diarization_job)
 
-            self.improve_speakers_action = QAction("Melhorar falantes deste arquivo", self)
+            self.improve_speakers_action = QAction("Refazer separação de falantes…", self)
             self.improve_speakers_action.setToolTip(
-                "Refaz a identificacao de falantes deste arquivo e recria a transcricao editavel DO ZERO.\n"
-                "As edicoes manuais sao descartadas (uma copia de seguranca fica na pasta backups)."
+                "Refaz a separação de vozes e recria a transcrição do zero.\n"
+                "Suas edições serão descartadas — guardamos uma cópia em "
+                "Documentos › Versões anteriores."
             )
             self.improve_speakers_action.triggered.connect(self.improve_speakers_current_file)
 
-            self.name_voices_action = QAction("Identificar vozes (De quem é esta voz?)...", self)
+            self.name_voices_action = QAction("Dar nome às vozes…", self)
             self.name_voices_action.setToolTip("Ouvir uma amostra de cada voz da transcrição aberta e dar nome aos falantes.\nAbra uma transcrição primeiro.")
             self.name_voices_action.triggered.connect(self.open_voice_naming_dialog)
 
@@ -6569,7 +6570,7 @@ if QT_IMPORT_ERROR is None:
             banner_label = QLabel("🔊 As vozes desta transcrição ainda não foram confirmadas.")
             banner_label.setWordWrap(True)
             banner_layout.addWidget(banner_label, 1)
-            self.voice_banner_button = QPushButton("Identificar vozes")
+            self.voice_banner_button = QPushButton("Dar nome às vozes…")
             self.voice_banner_button.clicked.connect(self._on_banner_identify_clicked)
             banner_layout.addWidget(self.voice_banner_button)
             banner_dismiss = QPushButton("Não perguntar neste projeto")
@@ -8772,7 +8773,7 @@ if QT_IMPORT_ERROR is None:
                 msg = f"Limpar a transcrição gerada de {n} arquivos?"
             box = QMessageBox(self)
             box.setIcon(QMessageBox.Icon.Question)
-            box.setWindowTitle("Limpar transcricao gerada")
+            box.setWindowTitle("Apagar transcrição")
             box.setText(msg)
             box.setInformativeText(
                 "Os arquivos gerados (transcrição bruta, identificação de "
@@ -10197,7 +10198,8 @@ if QT_IMPORT_ERROR is None:
 
         def improve_speakers_current_file(self, *_args: Any) -> None:
             if not self.current_interview_id:
-                QMessageBox.information(self, "Abra um arquivo", "Abra uma transcricao antes de melhorar os falantes.")
+                QMessageBox.information(self, "Abra uma entrevista",
+                                        "Abra uma transcrição antes de refazer a separação de falantes.")
                 return
             if not self.save_current_turn(force=True):
                 return
@@ -10205,14 +10207,17 @@ if QT_IMPORT_ERROR is None:
                                             retry=self.improve_speakers_current_file):
                 return
             interview_id = self.current_interview_id
+            # Destrutiva nomeia o alvo (guia verbal, regra 7) e usa a
+            # frase-contrato padronizada (regra 6).
+            meta = (self.context.metadata.get(interview_id) or {}) if self.context else {}
+            nome = str(meta.get("title") or "").strip() or interview_id
             answer = QMessageBox.question(
                 self,
-                "Melhorar falantes deste arquivo",
-                "Esta acao refaz a identificacao de falantes e recria a transcricao "
-                "editavel deste arquivo DO ZERO.\n\n"
-                "As edicoes manuais serao descartadas da transcricao editavel. "
-                "Uma copia de seguranca da versao atual fica guardada em:\n"
-                "Transcricoes\\05_transcripts_review\\edits\\backups\n\nContinuar?",
+                "Refazer separação de falantes",
+                f"Refazer a separação de vozes de \"{nome}\"?\n\n"
+                "A transcrição é recriada do zero. Suas edições serão "
+                "descartadas — guardamos uma cópia em Documentos › "
+                "Versões anteriores.",
             )
             if answer != QMessageBox.StandardButton.Yes:
                 return

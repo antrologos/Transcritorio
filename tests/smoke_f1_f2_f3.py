@@ -111,9 +111,9 @@ for menu_act in win.menuBar().actions():
         a.text() for a in submenu.actions() if a.text() and not a.isSeparator()
     ]
 
-assert "Limpar transcricao gerada..." in menu_items_by_title["Entrevista"], menu_items_by_title["Entrevista"]
+assert "Apagar transcrição… (a gravação fica)" in menu_items_by_title["Entrevista"], menu_items_by_title["Entrevista"]
 assert "Enviar para a Lixeira…" in menu_items_by_title["Entrevista"]
-check("1.4 Entrevista contem 'Limpar transcricao gerada...' e 'Enviar para a Lixeira…'")
+check("1.4 Entrevista contem 'Apagar transcrição…' e 'Enviar para a Lixeira…'")
 
 assert "Abrir pasta Resultados" in menu_items_by_title["Projeto"], menu_items_by_title["Projeto"]
 check("1.5 Projeto contem 'Abrir pasta Resultados'")
@@ -124,7 +124,7 @@ check("1.6 Ajuda contem 'Fluxo de trabalho'")
 # ==== FASE 2 ====
 header("FASE 2 - SAVE/EXPORT UX")
 
-assert win.delete_transcription_action.text() == "Limpar transcricao gerada..."
+assert win.delete_transcription_action.text() == "Apagar transcrição… (a gravação fica)"
 assert win.trash_selected_action.text() == "Enviar para a Lixeira…"
 check("2.1 Actions renomeadas")
 

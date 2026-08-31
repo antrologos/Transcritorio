@@ -134,11 +134,11 @@ missing = required - all_sc
 assert not missing, f"atalhos faltando: {missing}"
 check(f"1.3 11 atalhos essenciais presentes")
 
-# Itens em suas casas novas (R1): destrutivas no menu Entrevista
+# Itens em suas casas novas (R1) + nomes da R3
 entrevista = menu_items["Entrevista"]
-assert "Limpar transcricao gerada..." in entrevista
+assert "Apagar transcrição… (a gravação fica)" in entrevista
 assert "Enviar para a Lixeira…" in entrevista
-check("1.4 Entrevista: Limpar transcricao gerada + Enviar para a Lixeira")
+check("1.4 Entrevista: Apagar transcrição + Enviar para a Lixeira")
 
 # F3: Abrir pasta Resultados (menu Projeto)
 assert "Abrir pasta Resultados" in menu_items["Projeto"]
