@@ -6461,6 +6461,7 @@ if QT_IMPORT_ERROR is None:
                 self._show_path_in_folder)
             self.docs_panel.action_requested.connect(self._docs_action)
             self.review_tabs.addTab(self.docs_panel, "Documentos")
+            self.review_tabs.addTab(self._build_props_panel(), "Propriedades")
             self.review_tabs.currentChanged.connect(self._on_review_tab_changed)
             layout.addWidget(self.review_tabs, stretch=1)
 
@@ -10351,6 +10352,98 @@ if QT_IMPORT_ERROR is None:
             if getattr(self, "docs_panel", None) is not None and \
                     self.review_tabs.currentWidget() is self.docs_panel:
                 self._refresh_docs_panel()
+            if getattr(self, "_props_tab", None) is not None and \
+                    self.review_tabs.currentWidget() is self._props_tab:
+                self._refresh_props_panel()
+
+        # ---- aba Propriedades (R2) ----------------------------------------
+        def _build_props_panel(self) -> QWidget:
+            """Propriedades da entrevista aberta (leitura + ponte de edicao).
+
+            Absorcao completa do MetadataDialog (edicao inline) fica para o
+            polimento da R4; o dialogo segue para edicao em lote."""
+            self._props_tab = QWidget()
+            raiz = QVBoxLayout(self._props_tab)
+            raiz.setContentsMargins(ui_tokens.SP_3, ui_tokens.SP_3,
+                                    ui_tokens.SP_3, ui_tokens.SP_3)
+            self._props_empty = QLabel(
+                "Abra uma entrevista para ver as propriedades dela.")
+            self._props_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._props_empty.setStyleSheet(
+                f"color: {ui_tokens.TEXT_MUTED}; font-size: {ui_tokens.FONT_TITLE}px;")
+            raiz.addWidget(self._props_empty)
+            self._props_grid_widget = QWidget()
+            grid = QGridLayout(self._props_grid_widget)
+            grid.setColumnStretch(1, 1)
+            self._props_values: dict[str, QLabel] = {}
+            campos = [
+                ("rotulo", "Rótulo"),
+                ("id", "Identificador"),
+                ("arquivo", "Gravação original"),
+                ("formato", "Formato"),
+                ("duracao", "Duração"),
+                ("situacao", "Situação"),
+                ("lingua", "Língua"),
+                ("falantes", "Falantes esperados"),
+                ("papeis", "Rótulos dos falantes"),
+                ("contexto", "Contexto"),
+            ]
+            for linha, (chave, rotulo) in enumerate(campos):
+                nome = QLabel(rotulo + ":")
+                nome.setStyleSheet(f"color: {ui_tokens.TEXT_MUTED};")
+                valor = QLabel("—")
+                valor.setWordWrap(True)
+                valor.setTextInteractionFlags(
+                    Qt.TextInteractionFlag.TextSelectableByMouse)
+                grid.addWidget(nome, linha, 0, Qt.AlignmentFlag.AlignTop)
+                grid.addWidget(valor, linha, 1)
+                self._props_values[chave] = valor
+            raiz.addWidget(self._props_grid_widget)
+            rodape = QHBoxLayout()
+            rodape.addWidget(self.action_button(self.apply_metadata_action))
+            dica = QLabel("Para editar várias entrevistas de uma vez, "
+                          "selecione-as na lista.")
+            dica.setStyleSheet(f"color: {ui_tokens.TEXT_MUTED};")
+            rodape.addWidget(dica)
+            rodape.addStretch(1)
+            raiz.addLayout(rodape)
+            raiz.addStretch(1)
+            return self._props_tab
+
+        def _refresh_props_panel(self) -> None:
+            if getattr(self, "_props_values", None) is None:
+                return
+            iid = self.current_interview_id
+            status = self.status_by_interview_id(iid) if iid else None
+            tem = bool(iid and status is not None and self.context is not None)
+            self._props_empty.setVisible(not tem)
+            self._props_grid_widget.setVisible(tem)
+            if not tem:
+                return
+            metadata = self.context.metadata.get(iid, {})
+            mostra = project_store.metadata_display(metadata)
+            job = self.context.jobs.get(iid, {})
+            origem = str(getattr(status, "source_path", "") or "")
+            if origem:
+                existe = (self.context.paths.project_root / origem).exists() \
+                    or Path(origem).exists()
+                if not existe:
+                    origem += "  (gravação não encontrada)"
+            valores = {
+                "rotulo": str(metadata.get("title") or "").strip() or iid,
+                "id": iid,
+                "arquivo": origem or "—",
+                "formato": media_format_label(status),
+                "duracao": format_clock(float(status.duration_sec)
+                                        if status.duration_sec else 0),
+                "situacao": self.friendly_state(status, job),
+                "lingua": mostra.get("language") or "—",
+                "falantes": mostra.get("speakers") or "—",
+                "papeis": mostra.get("speaker_labels") or "—",
+                "contexto": mostra.get("context") or "—",
+            }
+            for chave, valor in valores.items():
+                self._props_values[chave].setText(str(valor) or "—")
 
         def _show_path_in_folder(self, caminho: str) -> None:
             if sys.platform == "win32":
