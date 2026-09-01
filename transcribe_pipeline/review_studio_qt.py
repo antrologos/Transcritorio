@@ -438,6 +438,54 @@ def media_splitter_sizes(
     return [video, audio, tabela, editor]
 
 
+def choose_split_time(
+    turn_start: float,
+    turn_end: float,
+    edit_cursor: float | None,
+    edit_cursor_from_click: bool,
+    player_seconds: float | None,
+    player_playing: bool,
+    words: list[dict[str, Any]],
+    text: str,
+    split_char: int,
+) -> tuple[float, str]:
+    """Tempo da fronteira ao dividir um bloco (pura — gate no toy).
+
+    O texto SEMPRE divide no cursor de texto; esta funcao escolhe o tempo
+    coerente com essa promessa. Prioridade: clique deliberado na onda >
+    palavra sob o cursor de texto > player pausado dentro do bloco >
+    interpolacao linear. Candidato fora do intervalo aberto
+    (turn_start, turn_end) cai para a regra seguinte — a posicao do
+    player durante reproducao ativa NUNCA decide (era a causa de
+    fronteiras incoerentes com o texto).
+    """
+    from . import words as words_mod
+
+    if (
+        edit_cursor_from_click
+        and edit_cursor is not None
+        and turn_start < float(edit_cursor) < turn_end
+    ):
+        return float(edit_cursor), "tempo definido pelo clique na onda sonora"
+    word_time, word_exact = words_mod.word_time_for_char(words, text, split_char)
+    if word_time is not None and turn_start < float(word_time) < turn_end:
+        return float(word_time), (
+            "tempo exato da palavra sob o cursor" if word_exact
+            else "tempo aproximado pela palavra mais próxima")
+    if (
+        not player_playing
+        and player_seconds is not None
+        and turn_start < float(player_seconds) < turn_end
+    ):
+        return float(player_seconds), "tempo definido pela posição do player (pausado)"
+    text_length = max(1, len(text))
+    ratio = max(0.01, min(0.99, split_char / text_length))
+    return (
+        turn_start + ((turn_end - turn_start) * ratio),
+        "tempo estimado pela posição do cursor no texto",
+    )
+
+
 def diar_offer_candidates(
     statuses: list[Any],
     *,
@@ -1016,6 +1064,10 @@ if QT_IMPORT_ERROR is None:
             self.duration = 0.0
             self.position = 0.0
             self.edit_cursor: float | None = None
+            # So um clique DIRETO na onda marca True; seeks programaticos
+            # (selecionar bloco, duplo clique em palavra) deixam False —
+            # o "Dividir bloco" honra o cursor apenas quando deliberado.
+            self.edit_cursor_from_click = False
             self.selected_range: tuple[float, float] | None = None
             self.active_range: tuple[float, float] | None = None
             self.zoom = 1.0
@@ -1041,6 +1093,7 @@ if QT_IMPORT_ERROR is None:
             self.duration = duration
             self.position = 0.0
             self.edit_cursor = None
+            self.edit_cursor_from_click = False
             self.selected_range = None
             self.active_range = None
             self.zoom = 1.0
@@ -1066,11 +1119,13 @@ if QT_IMPORT_ERROR is None:
                     self.center_on(seconds)
             self.update()
 
-        def set_edit_cursor(self, seconds: float | None) -> None:
+        def set_edit_cursor(self, seconds: float | None, *, from_click: bool = False) -> None:
             if seconds is None or self.duration <= 0:
                 self.edit_cursor = None
+                self.edit_cursor_from_click = False
             else:
                 self.edit_cursor = max(0.0, min(self.duration, float(seconds)))
+                self.edit_cursor_from_click = bool(from_click)
             self.update()
 
         def set_selected_range(self, start: float | None, end: float | None) -> None:
@@ -1293,8 +1348,10 @@ if QT_IMPORT_ERROR is None:
                 if not self._drag_moved:
                     fraction = max(0.0, min(1.0, event.position().x() / max(1, self.width())))
                     seconds = self.visible_start + (fraction * self.visible_duration())
-                    self.set_edit_cursor(seconds)
+                    # Emitir ANTES: o seek re-seta o cursor programaticamente
+                    # (seek_waveform) e apagaria a marca de clique deliberado.
                     self.seek_requested.emit(seconds)
+                    self.set_edit_cursor(seconds, from_click=True)
                 self._drag_start_x = None
                 self._drag_moved = False
                 self.setCursor(Qt.CursorShape.OpenHandCursor)
@@ -9068,34 +9125,21 @@ if QT_IMPORT_ERROR is None:
             current_turn = self.turns[current_index]
             turn_start = float(current_turn.get("start", 0) or 0)
             turn_end = float(current_turn.get("end", turn_start) or turn_start)
+            stripped = self.text_edit.toPlainText().strip()
             cursor_pos = self.text_edit.textCursor().position()
-            split_char = review_store.choose_split_char(self.text_edit.toPlainText().strip(), cursor_pos)
-            player_time = self.player.position() / 1000 if self.player.position() else None
-            edit_cursor = self.waveform_widget.edit_cursor
-            if edit_cursor is not None and turn_start < edit_cursor < turn_end:
-                split_time = edit_cursor
-                split_note = "tempo definido pelo cursor de edição na onda sonora"
-            elif player_time is not None and turn_start < player_time < turn_end:
-                split_time = player_time
-                split_note = "tempo definido pela posição do player"
-            else:
-                # Fase 3: a palavra sob o cursor de texto da o tempo exato;
-                # a interpolacao linear vira ultimo recurso (sem palavras).
-                from . import words as words_mod
-                stripped = self.text_edit.toPlainText().strip()
-                word_time, word_exact = words_mod.word_time_for_char(
-                    words_mod.words_in_range(self.word_index, turn_start, turn_end),
-                    stripped, split_char)
-                if word_time is not None and turn_start < word_time < turn_end:
-                    split_time = float(word_time)
-                    split_note = (
-                        "tempo exato da palavra sob o cursor" if word_exact
-                        else "tempo aproximado pela palavra mais próxima")
-                else:
-                    text_length = max(1, len(stripped))
-                    ratio = max(0.01, min(0.99, split_char / text_length))
-                    split_time = turn_start + ((turn_end - turn_start) * ratio)
-                    split_note = "tempo estimado pela posição do cursor no texto"
+            split_char = review_store.choose_split_char(stripped, cursor_pos)
+            from . import words as words_mod
+            split_time, split_note = choose_split_time(
+                turn_start,
+                turn_end,
+                self.waveform_widget.edit_cursor,
+                bool(getattr(self.waveform_widget, "edit_cursor_from_click", False)),
+                self.player.position() / 1000 if self.player.position() else None,
+                self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState,
+                words_mod.words_in_range(self.word_index, turn_start, turn_end),
+                stripped,
+                split_char,
+            )
             try:
                 new_id = review_store.split_turn(self.review, self.current_turn_id, split_time=split_time, split_char=split_char)
                 app_service.save_review(self.context, self.current_interview_id, self.review)

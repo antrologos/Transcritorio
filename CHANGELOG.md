@@ -1,5 +1,18 @@
 # Changelog
 
+## Não lançado
+
+- **Dividir bloco: o tempo da fronteira agora segue o cursor de texto.**
+  Antes, a posição do player (que durante a reprodução está sempre dentro
+  do bloco tocando — e ainda avançava enquanto o diálogo de confirmação
+  estava aberto) ou um cursor antigo na onda sonora decidiam o tempo da
+  divisão, produzindo fronteiras incoerentes com o texto: o destaque que
+  acompanha o play trocava de bloco em momentos que não correspondiam à
+  divisão feita. Nova ordem: clique deliberado na onda sonora > palavra
+  sob o cursor de texto (tempos por palavra) > player pausado dentro do
+  bloco > estimativa pela posição no texto. A barra de status continua
+  dizendo qual regra valeu.
+
 ## v0.2.1 — 2026-09-01
 
 Correções da checagem geral pós-lançamento (auditoria de 48 achados;
