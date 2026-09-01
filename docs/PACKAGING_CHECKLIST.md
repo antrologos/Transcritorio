@@ -16,8 +16,9 @@ v0.1.1 shippou sem ffmpeg em Mac e Linux (usuarios tinham que rodar
 - Execucao manual do `release.yml` (workflow_dispatch) — um push de tag
   `v*.*.*` hoje dispara o `publish.yml` (PyPI), nao o `release.yml`
   (ver regra 10 em `CLAUDE.md`)
-- Re-tag destrutivo (usar apenas se release anterior nunca foi baixada
-  publicamente — ver `memory/feedback_version_bumps.md`)
+- Re-tag destrutivo (usar apenas se a release anterior nunca foi baixada
+  publicamente — regra do projeto: versao so "conta" quando alguem a
+  baixou; antes disso, re-taggear a mesma versao e aceitavel)
 
 ## Dependencias de runtime bundled por plataforma
 

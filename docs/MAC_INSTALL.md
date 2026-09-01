@@ -20,7 +20,7 @@
 
    Em **Apple Silicon** (M1/M2/M3/M4), prefira o extra `[mac]`, que habilita a
    transcrição com aceleração Metal (MLX) — um selo `Motor: MLX (Metal)`
-   aparece no cabeçalho do projeto:
+   aparece na barra de status (parte inferior da janela):
 
    ```sh
    uv tool install "transcritorio[mac]"
@@ -52,9 +52,10 @@ Gatekeeper (sem Apple Developer ID pago) que inviabilizava o canal anterior.
 
 - O token da Hugging Face (apenas para separação de falantes) é guardado no
   Keychain do macOS.
-- Primeira execução baixa os modelos (~5 GB só transcrição; ~7 GB com
-  separação de falantes; +1,6 GB do modelo MLX na primeira transcrição em
-  Apple Silicon); depois tudo roda offline.
+- Primeira execução baixa os modelos do perfil escolhido (~1 GB só
+  transcrição; ~2,5 GB com separação de falantes e tempos por palavra;
+  +1,6 GB do modelo MLX na primeira transcrição em Apple Silicon);
+  depois tudo roda offline.
 - Detalhes da aceleração Metal: [`MLX_WHISPER_MACOS.md`](MLX_WHISPER_MACOS.md).
 
 ## Canal legado (descontinuado)

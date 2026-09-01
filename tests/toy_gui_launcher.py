@@ -46,19 +46,29 @@ QLocalServer.removeServer(key)
 # ---- R4: identidade da instalacao + aviso de build antigo ---------------
 ident = gui_launcher._instance_identity()
 assert ident and "+" in ident, ident
-print(f"PASS: identidade da instalacao ({ident})")
+# CONGELADA (auditoria 2026-09-01): upgrade em disco nao muda quem roda
+assert gui_launcher._instance_identity() is ident
+print(f"PASS: identidade congelada do processo ({ident})")
 
-# Server LEGADO (escuta mas nunca le nem responde): probe True e on_stale
-# CHAMADO — a travessia real de upgrade, com a janela antiga aberta que
-# fecha o socket sem ler. Sem on_stale (default), nada acontece.
+# Decisao pura do aviso: pre-protocolo = fechou SEM responder; timeout
+# com socket ainda conectado = janela ocupada abrindo (falso positivo
+# que a auditoria pegou) -> NUNCA avisar.
+assert gui_launcher._stale_decision(b"", False) is True      # fechou sem ler
+assert gui_launcher._stale_decision(b"", True) is False      # ocupada abrindo
+assert gui_launcher._stale_decision(b"0.2.0+dev", True) is False   # respondeu
+assert gui_launcher._stale_decision(b"  ", False) is True    # ruido em branco
+print("PASS: _stale_decision (pre-protocolo vs startup ocupado)")
+
+# Server que ESCUTA mas nao processa eventos (como uma janela ocupada
+# abrindo): probe True e on_stale NAO dispara — o socket segue conectado.
 avisos: list[bool] = []
 key2 = f"TranscritorioToyLauncher2-{os.getpid()}"
 QLocalServer.removeServer(key2)
 server2 = QLocalServer()
 assert server2.listen(key2), server2.errorString()
 assert gui_launcher._request_activate(key2, on_stale=lambda: avisos.append(True)) is True
-assert avisos == [True], "server sem resposta deveria disparar on_stale"
-print("PASS: server pre-protocolo -> on_stale na 2a instancia")
+assert avisos == [], "timeout com socket conectado NAO pode virar aviso"
+print("PASS: janela ocupada abrindo nao gera falso aviso")
 
 # O payload novo chega inteiro ao server (formato "activate <identidade>")
 # mesmo com o cliente ja desconectado (named pipes preservam os bytes).

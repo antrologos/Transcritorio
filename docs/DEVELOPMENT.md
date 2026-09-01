@@ -69,7 +69,7 @@ python -m transcribe_pipeline.cli models verify
 unset TRANSCRITORIO_MODEL_DOWNLOAD_TOKEN
 ```
 
-Pela GUI: **Configurações → Configurar modelos...** (wizard em português).
+Pela GUI: **Ferramentas → Gerenciar modelos…** (em português).
 
 Segurança de tokens: nunca comite, nunca grave em logs. Detalhes em
 [`docs/SEGURANCA_SEGREDOS.md`](SEGURANCA_SEGREDOS.md).

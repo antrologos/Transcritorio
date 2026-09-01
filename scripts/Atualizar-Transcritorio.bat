@@ -20,6 +20,15 @@ for /f "delims=" %%i in ('where uv 2^>nul') do if not defined UV_EXE set "UV_EXE
 if not defined UV_EXE if exist "%LOCALAPPDATA%\Microsoft\WinGet\Links\uv.exe" set "UV_EXE=%LOCALAPPDATA%\Microsoft\WinGet\Links\uv.exe"
 if not defined UV_EXE goto ERRO_UV
 
+rem O Transcritório foi mesmo instalado nesta máquina?
+"%UV_EXE%" tool list 2>nul | findstr /b /c:"transcritorio " >nul
+if errorlevel 1 goto ERRO_UV
+
+echo  IMPORTANTE: se o Transcritório estiver aberto agora, feche a janela
+echo  dele antes de continuar (uma janela aberta impede a atualização).
+echo.
+pause
+echo.
 echo  Procurando e instalando a versão mais nova...
 echo.
 "%UV_EXE%" tool upgrade transcritorio
@@ -39,10 +48,12 @@ goto FIM
 
 :ERRO_REDE
 echo.
-echo  [!] A atualização falhou (rede?). Em redes de universidade/empresa,
-echo      peça à TI para liberar pypi.org e files.pythonhosted.org — ou
-echo      tente numa rede doméstica. Nada foi quebrado: a versão atual
-echo      continua funcionando.
+echo  [!] A atualização falhou. Causas comuns:
+echo      - O Transcritório ainda está ABERTO: feche a janela dele e rode
+echo        este atualizador de novo.
+echo      - Rede de universidade/empresa: peça à TI para liberar pypi.org
+echo        e files.pythonhosted.org — ou tente numa rede doméstica.
+echo      Nada foi quebrado: a versão atual continua funcionando.
 :FIM
 echo.
 pause

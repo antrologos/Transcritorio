@@ -46,8 +46,6 @@ uv tool install --reinstall "transcritorio[cuda]" \
   --index https://download.pytorch.org/whl/cu128 --index-strategy unsafe-best-match
 ```
 
-(No beta, troque `"transcritorio[cuda]"` por `"transcritorio[cuda] @ <URL do wheel>"`.)
-
 ## Manutenção
 
 - **Atualizar:** `uv tool upgrade transcritorio`
@@ -59,8 +57,9 @@ uv tool install --reinstall "transcritorio[cuda]" \
 - O token da Hugging Face (apenas para separação de falantes) é guardado no
   Secret Service do desktop (GNOME Keyring/KWallet); em servidores sem
   desktop, um fallback criptografado local é usado automaticamente.
-- Primeira execução baixa os modelos (~5 GB só transcrição; ~7 GB com
-  separação de falantes); depois tudo roda offline.
+- Primeira execução baixa os modelos do perfil escolhido (~1 GB só
+  transcrição; ~2,5 GB com separação de falantes e tempos por palavra);
+  depois tudo roda offline.
 - Wayland/X11: a interface usa Qt 6 (PySide6); em caso de problema de
   renderização, tente `QT_QPA_PLATFORM=xcb transcritorio`.
 

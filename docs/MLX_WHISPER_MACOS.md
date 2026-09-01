@@ -13,15 +13,17 @@ uv tool install "transcritorio[mac]"
 ```
 
 Ao abrir o app num Mac com Apple Silicon, a aceleracao MPS e detectada
-automaticamente e o caminho MLX e usado (selo `Motor: MLX (Metal)` no
-cabecalho do projeto). Sem o extra, o app funciona normalmente em CPU.
+automaticamente e o caminho MLX e usado (selo `Motor: MLX (Metal)` na
+barra de status, parte inferior da janela). Sem o extra, o app funciona
+normalmente em CPU.
 (O `.dmg` legado foi descontinuado — ver `LEGACY_STANDALONE.md`.)
 
-> **Confirmar que a aceleracao esta ativa**: abra o Transcritorio, va em
-> *Preferencias → Sobre* (ou equivalente) e verifique que o backend
-> aparece como `mlx-whisper`. Alternativamente, transcreva uma entrevista
-> curta e observe no log: deve aparecer `Carregando modelo MLX
-> mlx-community/whisper-large-v3-mlx...`.
+> **Confirmar que a aceleracao esta ativa**: olhe o selo `Motor:` na
+> barra de status (embaixo) — deve dizer `MLX (Metal)`; o selo e
+> clicavel e abre a configuracao de transcricao. Alternativamente,
+> transcreva uma entrevista curta e observe no log a linha
+> `Carregando modelo MLX mlx-community/whisper-large-v3-turbo...`
+> (o repositorio MLX correspondente a variante configurada).
 
 ### Requisitos
 

@@ -46,20 +46,41 @@ def _splash_pixmap():
     return pixmap
 
 
-def _instance_identity() -> str:
-    """Identidade desta instalacao para o protocolo de instancia unica.
+_IDENTITY_CACHE: str | None = None
 
-    __version__ do modulo e hardcoded (0.1.8) e __build__ fica "dev" no
-    canal uv/PyPI — sozinhos nao distinguem releases. A versao REAL do
-    wheel instalado (importlib.metadata) + __build__ (local-<sha> nos
-    wheels locais, timestamp no frozen legado) cobre todos os canais."""
-    from . import __build__, __version__
-    try:
-        from importlib.metadata import version
-        pkg = version("transcritorio")
-    except Exception:  # noqa: BLE001 - rodando da fonte sem instalacao
-        pkg = __version__
-    return f"{pkg}+{__build__}"
+
+def _instance_identity() -> str:
+    """Identidade DESTE PROCESSO para o protocolo de instancia unica.
+
+    A versao vem do wheel instalado (importlib.metadata — __version__
+    pode divergir e __build__ fica "dev" no canal uv/PyPI) + __build__
+    (local-<sha> nos wheels locais, timestamp no frozen legado).
+    CONGELADA na primeira chamada (auditoria 2026-09-01): apos um
+    `uv tool upgrade`, o disco ja tem a versao NOVA, e uma janela
+    antiga que recomputasse a cada ping se declararia identica ao
+    processo novo — anulando o aviso exatamente no cenario que o
+    motivou. A identidade descreve quem esta RODANDO, nao o disco."""
+    global _IDENTITY_CACHE
+    if _IDENTITY_CACHE is None:
+        from . import __build__, __version__
+        try:
+            from importlib.metadata import version
+            pkg = version("transcritorio")
+        except Exception:  # noqa: BLE001 - rodando da fonte sem instalacao
+            pkg = __version__
+        _IDENTITY_CACHE = f"{pkg}+{__build__}"
+    return _IDENTITY_CACHE
+
+
+def _stale_decision(resposta: bytes, still_connected: bool) -> bool:
+    """True = a janela aberta e de um build pre-protocolo (pura).
+
+    Servidor pre-protocolo ACEITA e FECHA sem ler nem responder: o
+    cliente ve o socket desconectado sem resposta. Timeout com o
+    socket AINDA conectado significa janela ocupada (ex.: abrindo,
+    imports pesados) — nao e prova de versao antiga; avisar ai era um
+    falso positivo (auditoria 2026-09-01)."""
+    return not resposta.strip() and not still_connected
 
 
 def _warn_stale_window() -> None:
@@ -103,10 +124,12 @@ def _request_activate(key: str = _SINGLE_INSTANCE_KEY, on_stale=None) -> bool:
     probe.flush()
     probe.waitForBytesWritten(300)
     resposta = b""
-    if probe.waitForReadyRead(500):
+    if probe.waitForReadyRead(1500):
         resposta = bytes(probe.readAll())
+    still_connected = (
+        probe.state() == QLocalSocket.LocalSocketState.ConnectedState)
     probe.disconnectFromServer()
-    if on_stale is not None and not resposta.strip():
+    if on_stale is not None and _stale_decision(resposta, still_connected):
         on_stale()
     return True
 

@@ -1,9 +1,53 @@
 # Changelog
 
+## v0.2.1 — 2026-09-01
+
+Correções da checagem geral pós-lançamento (auditoria de 48 achados;
+26 confirmados e corrigidos).
+
+- **Aba Propriedades mais defensiva ao trocar de entrevista**: um guard
+  extra recusa salvar propriedades se a entrevista carregada no painel
+  não é mais a selecionada (re-sincroniza e avisa na barra de status), e
+  o botão Salvar volta a habilitar corretamente após edições não salvas.
+- **Janela "Sobre" reconhece a instalação oficial**: instalado via
+  uv/PyPI mostra "Instalação oficial (uv/PyPI)" com a versão real do
+  pacote; rodando do código-fonte mostra "Versão de desenvolvimento".
+- **Aviso de instância única neutro**: quando outra janela de versão
+  diferente está aberta, o aviso diz apenas "versão diferente" (sem
+  presumir qual é a mais nova) e não dispara mais durante a abertura
+  normal de uma janela ocupada.
+- **Revisão de grafias e glossário sem duplicatas**: entrevistas
+  transcritas em duplicidade na lista não geram mais itens repetidos.
+- **Instalador .bat mais robusto**: detecta o FFmpeg recém-instalado
+  mesmo antes de reabrir o terminal (estende o PATH da sessão), avisa
+  para fechar o aplicativo antes de atualizar e explica melhor os erros
+  de rede.
+- **Ícone multi-resolução**: o .ico agora traz 7 tamanhos (16–256 px) —
+  antes só um, o que deixava o ícone serrilhado na barra de tarefas.
+- **Números medidos nesta máquina, em todos os materiais**: TAGARELA em
+  CPU publicado como faixa 13–25× o tempo real (era "~25×"); perfil
+  Completo ~20 GB de disco (análise AI soma ~10 GB); 15 outros idiomas
+  com tempos por palavra (16 pacotes de alinhamento, incluindo o
+  português); grupos focais "bem até 6–8 falantes". README, docs, site
+  e FAQ alinhados aos mesmos números.
+- Textos que apontavam para a interface antiga corrigidos (selo do
+  Motor na barra de status; "Ferramentas → Gerenciar modelos…").
+
 ## v0.2.0 — 2026-08-31
 
 Primeira versão publicada no PyPI — `uv tool install transcritorio` é o
 canal oficial daqui em diante.
+
+> **Nomes que mudaram durante o desenvolvimento da 0.2** (os bullets
+> mais antigos desta seção citam os rótulos da época): *Reprocessar
+> falantes* e *Atualizar transcrição editável* saíram da interface (a
+> remontagem é automática; a separação pendente vira o botão *Separar
+> falantes agora* na lista, e o refazer por entrevista é *Entrevista →
+> Refazer separação de falantes…*); *Melhorar falantes deste arquivo* →
+> *Refazer separação de falantes…*; *Gerar resumo com temas* →
+> *✨ Resumir a entrevista com AI*; *Instalar modelos…* /
+> *Configurar modelos…* → *Ferramentas → Gerenciar modelos…*; o selo
+> Modelo/Motor saiu do cabeçalho e vive na barra de status (embaixo).
 
 **Mudança de canal de distribuição**: o standalone (Setup.exe/.dmg/AppImage)
 foi descontinuado — antivírus/SmartScreen bloqueavam a instalação sem
@@ -126,7 +170,8 @@ oficial passa a ser **PyPI + uv** (`uv tool install transcritorio`); ver
   transcrição só para português (2,5 GB, baixável pelo gerenciador),
   com pontuação, capitalização e tempos por palavra nativos (dispensa o
   alinhador). Fala espontânea é o forte do modelo (treinado em corpora
-  de entrevista). Roda inteiramente na CPU a ~13× tempo real. Marcado
+  de entrevista). Roda inteiramente na CPU a 13–25× tempo real
+  (conforme o áudio; medições de 2026-08-28 e 2026-08-31). Marcado
   experimental até a comparação lado a lado com o Whisper large-v3 nos
   áudios de gabarito; só transcreve português (outros idiomas no lote
   são bloqueados com aviso antes do job).
@@ -328,7 +373,7 @@ oficial passa a ser **PyPI + uv** (`uv tool install transcritorio`); ver
   reconstruídos automaticamente no próximo "Preparar".
 - Busca nas transcrições (fase 2.3): **Ctrl+F** filtra os blocos do
   arquivo aberto em tempo real (barra estilo navegador, ‹ › navegam, Esc
-  fecha); **Ctrl+Shift+F** (ou Editar → Buscar nas transcrições) abre a
+  fecha); **Ctrl+Shift+F** (ou Analisar → Buscar palavras…) abre a
   busca do projeto inteiro com duas seções — "Resultados exatos" e
   "Trechos com sentido parecido" (encoder multilíngue local pequeno, roda
   em CPU, sem GPU e sem conta) — e clique no resultado abre a entrevista

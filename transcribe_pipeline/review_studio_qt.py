@@ -3709,7 +3709,7 @@ if QT_IMPORT_ERROR is None:
 
             layout.addWidget(advanced_group)
 
-            hint = QLabel("Batch controla quantos trechos o Whisper processa por vez. Aumentar pode acelerar em GPU com memoria sobrando; reduzir evita falta de memoria. Para computador sem GPU NVIDIA, use CPU com int8 ou float32. Você pode alternar entre CUDA e CPU aqui a qualquer momento — o selo \"Motor\" no topo da janela mostra o que está em uso e abre esta tela.")
+            hint = QLabel("Batch controla quantos trechos o Whisper processa por vez. Aumentar pode acelerar em GPU com memoria sobrando; reduzir evita falta de memoria. Para computador sem GPU NVIDIA, use CPU com int8 ou float32. Você pode alternar entre CUDA e CPU aqui a qualquer momento — o selo \"Motor\" na barra de status (parte inferior da janela) mostra o que está em uso e abre esta tela.")
             hint.setStyleSheet(_style_muted())
             hint.setWordWrap(True)
             layout.addWidget(hint)
@@ -5784,12 +5784,27 @@ if QT_IMPORT_ERROR is None:
             )
 
         def show_about(self) -> None:
-            from . import __version__, __build__
-            build_info = f"Build: {__build__}" if __build__ != "dev" else "Versão de desenvolvimento (fonte)"
+            from . import __build__, __version__
+            # No canal oficial (uv/PyPI) o wheel publica __build__ == "dev";
+            # rotular a release como "versão de desenvolvimento" era
+            # factualmente errado (auditoria 2026-09-01). Instalado em
+            # site-packages = release; fora dele = rodando da fonte.
+            versao = __version__
+            if __build__ != "dev":
+                build_info = f"Build: {__build__}"
+            elif "site-packages" in str(Path(__file__).resolve()):
+                try:
+                    from importlib.metadata import version as _pkg_version
+                    versao = _pkg_version("transcritorio")
+                except Exception:  # noqa: BLE001
+                    pass
+                build_info = "Instalação oficial (uv/PyPI)"
+            else:
+                build_info = "Versão de desenvolvimento (fonte)"
             QMessageBox.information(
                 self,
                 f"Sobre {APP_NAME}",
-                f"{APP_NAME} v{__version__}\n\n{build_info}\n\nCréditos: {APP_CREDITS}\n\nTranscrição local com WhisperX e pyannote.",
+                f"{APP_NAME} v{versao}\n\n{build_info}\n\nCréditos: {APP_CREDITS}\n\nTranscrição local com WhisperX e pyannote.",
             )
 
         def show_documentation(self) -> None:
@@ -10039,7 +10054,7 @@ if QT_IMPORT_ERROR is None:
                     f"por palavra (idioma: {', '.join(avisos_idioma)}).\n\n"
                     "O texto e os tempos por bloco saem normalmente. Idiomas "
                     "com pacote de alinhamento podem ser escolhidos no Motor "
-                    "(link \"Modelo\"/\"Motor\" no topo).")
+                    "(link \"Modelo\"/\"Motor\" na barra de status, embaixo).")
             # Tri-state "auto" (2026-08-31): decidir UMA vez por lote, no
             # momento do job. Auto resolvido para "sem falantes" (modelo
             # nao instalado) avisa com todas as letras — antes o lote saia
@@ -10853,6 +10868,18 @@ if QT_IMPORT_ERROR is None:
             iid = self.current_interview_id
             if not iid or self.context is None:
                 return
+            if self._props_loaded_iid != iid:
+                # Defesa em profundidade (auditoria 2026-09-01): o form na
+                # tela pertence a OUTRA entrevista (a cascata de refresh do
+                # open_review normalmente impede isso, mas gravar o form de
+                # A nos metadados de B seria corrupcao silenciosa — recusar
+                # e re-sincronizar e sempre seguro).
+                self._props_dirty_fields.clear()
+                self._refresh_props_panel()
+                self.progress_label.setText(
+                    "As propriedades na tela estavam desatualizadas — "
+                    "recarregadas. Confira e salve de novo.")
+                return
             if self.worker and self.worker.isRunning():
                 QMessageBox.information(
                     self, "Tarefa em andamento",
@@ -10919,6 +10946,11 @@ if QT_IMPORT_ERROR is None:
             # (refresh roda de ~15 lugares, inclusive fim de worker). Trocar
             # de entrevista descarta o form nao salvo — com aviso.
             if self._props_dirty_fields and self._props_loaded_iid == iid:
+                # Fim de job com edicao pendente: reavaliar o Salvar (o
+                # _touch_props o desabilita com worker ativo e nada o
+                # reabilitava depois — auditoria 2026-09-01).
+                self._props_save_button.setEnabled(
+                    not (self.worker and self.worker.isRunning()))
                 return
             if self._props_dirty_fields and self._props_loaded_iid:
                 self.progress_label.setText(
@@ -11237,10 +11269,10 @@ if QT_IMPORT_ERROR is None:
                 QMessageBox.information(self, "Abra um projeto", "Abra um projeto para montar o glossario.")
                 return
             from . import search as _search
-            transcritas = [
+            transcritas = list(dict.fromkeys(
                 r["interview_id"] for r in self.context.rows
                 if _search.source_path_for(self.context.paths, r["interview_id"]) is not None
-            ]
+            ))
             if not transcritas:
                 QMessageBox.information(
                     self, "Nenhuma transcrição",
@@ -11308,10 +11340,13 @@ if QT_IMPORT_ERROR is None:
             # depois) -> oferecer re-analisar; em dia -> verdade.
             from . import search as _search
             glossario = _gl.load_glossary(self.context.paths)
-            transcritas = [
+            # dict.fromkeys: linhas duplicadas do manifesto (mesmo id com
+            # selected=false) inflavam a contagem de "defasadas" (auditoria
+            # 2026-09-01; 4 duplicatas reais no acervo Infocitizen).
+            transcritas = list(dict.fromkeys(
                 r["interview_id"] for r in self.context.rows
                 if _search.source_path_for(self.context.paths, r["interview_id"]) is not None
-            ]
+            ))
             if not glossario:
                 answer = QMessageBox.question(
                     self, "Analisar os nomes primeiro",
@@ -11790,8 +11825,13 @@ def main(splash: Any = None, single_instance_server: Any = None) -> int:
         # frente (gui_launcher ja barrou o processo novo). Desde a R4 o
         # ping carrega a identidade da instalacao ("activate <ver>+<build>")
         # e o servidor responde a propria: se o processo novo e de um wheel
-        # MAIS NOVO que esta janela, avisar aqui — o usuario clicou no
+        # DIFERENTE desta janela, avisar aqui — o usuario clicou no
         # icone esperando a versao recem-instalada e recebeu a antiga.
+        # Congelar a identidade DESTE processo agora: apos um upgrade em
+        # disco, recomputa-la no ping devolveria a versao nova e anularia
+        # o aviso (auditoria 2026-09-01).
+        from .gui_launcher import _instance_identity as _frozen_identity
+        _frozen_identity()
         def _on_second_instance_ping() -> None:
             payload = b""
             try:
@@ -11820,12 +11860,16 @@ def main(splash: Any = None, single_instance_server: Any = None) -> int:
                     if (outra and outra != _instance_identity()
                             and not getattr(window, "_stale_build_warned", False)):
                         window._stale_build_warned = True  # 1x por sessao
+                        # Texto sem direcao: a divergencia tambem ocorre num
+                        # downgrade — afirmar "mais nova" seria chute
+                        # (auditoria 2026-09-01).
                         QTimer.singleShot(0, lambda: QMessageBox.information(
                             window,
-                            "Versão mais nova instalada",
-                            "Uma versão mais nova do Transcritório foi "
-                            "instalada neste computador.\n\nFeche esta janela "
-                            "e abra o aplicativo de novo para usá-la."))
+                            "Outra versão instalada",
+                            "Uma versão diferente do Transcritório foi "
+                            "instalada neste computador.\n\nEsta janela ainda "
+                            "roda a versão anterior à troca — feche-a e abra "
+                            "o aplicativo de novo para usar a instalada."))
             except Exception:  # noqa: BLE001 - payload legado/parcial
                 pass
         single_instance_server.newConnection.connect(_on_second_instance_ping)
