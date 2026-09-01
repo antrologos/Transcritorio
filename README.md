@@ -68,7 +68,7 @@ Guia: [`docs/LINUX_INSTALL.md`](docs/LINUX_INSTALL.md)
 ### O que você consegue fazer
 
 - **Importar** áudios e vídeos (MP3, WAV, M4A, MP4 e outros) — arraste para a janela, um arquivo ou uma pasta inteira.
-- **Transcrever** em português brasileiro com alta acurácia (90–96% em áudios limpos), com **dois motores locais**: Whisper (o padrão, nas variantes small a large-v3-turbo, escolhidas conforme a sua máquina) e o **Parakeet pt-BR "TAGARELA"** (experimental, muito rápido em CPU). Ao transcrever, o app pergunta quantas pessoas falam — entrevista a dois ou **grupo focal** (funciona bem até 6–8 participantes). Gravações em **15 outros idiomas** também transcrevem com tempos por palavra (16 pacotes de alinhamento, incluindo o português).
+- **Transcrever** em português brasileiro com alta acurácia (90–96% em áudios limpos), com **dois motores locais**: Whisper (nas variantes small a large-v3-turbo; o padrão em máquinas com GPU) e o **Parakeet pt-BR "TAGARELA"** (experimental; **o padrão em máquinas sem placa de vídeo** — 1 h de áudio em poucos minutos, só no processador). Ao transcrever, o app pergunta quantas pessoas falam — entrevista a dois ou **grupo focal** (funciona bem até 6–8 participantes). Gravações em **15 outros idiomas** também transcrevem com tempos por palavra (16 pacotes de alinhamento, incluindo o português).
 - **Separar falantes** automaticamente — e nomeá-los ouvindo amostras: o diálogo **"De quem é esta voz?"** toca trechos de cada voz para você dizer quem é. Vozes recorrentes do projeto (ex.: a sua) passam a ser **reconhecidas automaticamente**. Uma **verificação acústica** confere cada troca de falante e marca com 🔍 as trocas duvidosas, no ponto exato do áudio.
 - **Revisar no Estúdio** com player sincronizado, forma de onda interativa, cores por falante e edição por bloco — o duplo clique numa palavra leva o áudio até ela. Painéis ajustáveis: recolha o vídeo, amplie os blocos, trabalhe do seu jeito.
 - **Analisar com AI local** (✨ nada sai do seu computador): **resumo com índice temático** de cada entrevista, **glossário de nomes** do projeto com **revisão de grafias** (a AI encontra "Joao/João/Jono" e você decide, ocorrência por ocorrência, com a grafia certa editável), e **"Perguntar às entrevistas"** — uma pergunta em português, respondida com citações dos trechos.
@@ -84,18 +84,19 @@ tempos em CPU de 8 núcleos — em 4 núcleos, conte aproximadamente o dobro):
 
 | Perfil | O que faz | Máquina | Disco | 1 h de áudio |
 |---|---|---|---|---|
-| **Essencial** | Só transcrever (modelo `small`) | 2+ núcleos, 4 GB RAM | ~3,5 GB | ~1 h (CPU) |
-| **Padrão** | + separar falantes + tempos por palavra | 4+ núcleos, 8 GB RAM | ~5 GB | ~1–1,5 h (CPU) |
+| **Essencial** | Só transcrever (TAGARELA + `small`) | 2+ núcleos, 4 GB RAM | ~6 GB | poucos minutos (TAGARELA) |
+| **Padrão** | + separar falantes + tempos por palavra | 4+ núcleos, 8 GB RAM | ~7,5 GB | ~1 h (a separação de falantes domina) |
 | **Padrão + GPU** | idem, com aceleração NVIDIA (`large-v3-turbo`) | GPU NVIDIA 4 GB+ VRAM | ~10 GB | ~5–10 min |
 | **Completo** | + análise com AI local (resumo, glossário, perguntar) | GPU NVIDIA 6 GB+ VRAM, 16 GB RAM | ~20 GB | ~5–10 min |
 
-> **Máquina modesta, pressa grande?** O motor experimental **Parakeet
-> pt-BR (TAGARELA)** transcreve de **13× a 25× mais rápido que o tempo
-> real em CPU** (1 h de áudio em poucos minutos, sem placa de vídeo;
-> a velocidade varia com o áudio) — escolha-o clicando no selo
-> **Modelo** da barra inferior (ou em **Ferramentas → Configurar
-> transcrição…**). Por ser experimental, revise com um pouco mais de
-> atenção.
+> **Máquina sem placa de vídeo?** Desde a v0.2.2 o motor **Parakeet
+> pt-BR (TAGARELA)** é o padrão nessas máquinas: transcreve de **13× a
+> 25× mais rápido que o tempo real em CPU** (1 h de áudio em poucos
+> minutos; a velocidade varia com o áudio), com tempos por palavra
+> nativos. É experimental e só transcreve português — o Whisper `small`
+> acompanha como reserva para outros idiomas. Quem instalou antes recebe
+> a oferta de troca ao transcrever; também dá para trocar clicando no
+> selo **Modelo** da barra inferior.
 
 ### Primeiros passos
 
@@ -105,9 +106,9 @@ tempos em CPU de 8 núcleos — em 4 núcleos, conte aproximadamente o dobro):
 
 **3. Adicione os áudios ou vídeos.** Clique em **Adicionar mídia…** (ou arraste arquivos para a janela). Ao transcrever, o app pergunta quantas pessoas falam (entrevista, grupo focal, número exato ou automático) — e **Editar propriedades…** permite ajustar por arquivo depois (idioma, falantes, rótulos).
 
-**4. Clique em Transcrever e revise.** O botão **Transcrever** faz o fluxo completo: prepara o áudio, transcreve, separa os falantes e monta o texto editável. Ao final, o diálogo **"De quem é esta voz?"** toca uma amostra de cada voz para você nomeá-las — os nomes valem para a transcrição inteira. Tempos realistas para 1 hora de entrevista (ver a tabela de perfis acima): **~5–10 min** com GPU NVIDIA ou Apple Silicon, **~1–1,5 h** em notebook sem GPU (o dobro em máquina de 4 núcleos) — ou **poucos minutos mesmo sem GPU** com o motor experimental TAGARELA. Depois, dê duplo clique na entrevista para abrir a transcrição, ouvir o áudio sincronizado com o texto, ajustar trechos com a forma de onda e exportar. Guia visual completo no [site do projeto](https://antrologos.github.io/Transcritorio/pt/#how).
+**4. Clique em Transcrever e revise.** O botão **Transcrever** faz o fluxo completo: prepara o áudio, transcreve, separa os falantes e monta o texto editável. Ao final, o diálogo **"De quem é esta voz?"** toca uma amostra de cada voz para você nomeá-las — os nomes valem para a transcrição inteira. Tempos realistas para 1 hora de entrevista (ver a tabela de perfis acima): **~5–10 min** com GPU NVIDIA ou Apple Silicon; **poucos minutos mesmo sem GPU** com o motor TAGARELA (o padrão nessas máquinas) — ou **~1–1,5 h** se optar pelo Whisper em CPU (o dobro em máquina de 4 núcleos). Depois, dê duplo clique na entrevista para abrir a transcrição, ouvir o áudio sincronizado com o texto, ajustar trechos com a forma de onda e exportar. Guia visual completo no [site do projeto](https://antrologos.github.io/Transcritorio/pt/#how).
 
-> **Modelos de IA no primeiro uso:** o Transcritório baixa os modelos do perfil escolhido uma única vez (~1 GB só para transcrever; ~2,5 GB com identificação de falantes e tempos por palavra; ~3 GB com o modelo grande para GPU); depois roda offline. A **identificação de falantes é opcional**: quem quer apenas transcrever não precisa de cadastro algum. Quem a ativa é orientado pelo assistente a criar uma conta gratuita na [Hugging Face](https://huggingface.co/), aceitar os termos do modelo pyannote e colar um *token* de leitura — tudo em português, e dá para ativar depois sem repetir as transcrições.
+> **Modelos de IA no primeiro uso:** o Transcritório baixa os modelos do perfil escolhido uma única vez (~3,5 GB só para transcrever em máquina sem GPU — TAGARELA + small; ~5 GB somando identificação de falantes e tempos por palavra; ~3 GB só o modelo grande para GPU); depois roda offline. A **identificação de falantes é opcional**: quem quer apenas transcrever não precisa de cadastro algum. Quem a ativa é orientado pelo assistente a criar uma conta gratuita na [Hugging Face](https://huggingface.co/), aceitar os termos do modelo pyannote e colar um *token* de leitura — tudo em português, e dá para ativar depois sem repetir as transcrições.
 
 ### Privacidade e ética
 

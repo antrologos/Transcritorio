@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 from array import array
 from copy import deepcopy
 from datetime import datetime, timedelta
@@ -484,6 +484,34 @@ def choose_split_time(
         turn_start + ((turn_end - turn_start) * ratio),
         "tempo estimado pela posição do cursor no texto",
     )
+
+
+def parakeet_cpu_offer_due(
+    device: str,
+    engine: str | None,
+    langs: Iterable[str],
+    declined: bool,
+    platform: str | None = None,
+) -> bool:
+    """Oferecer o TAGARELA quando o Whisper vai rodar em CPU (pura).
+
+    Padrao para maquinas sem GPU desde 2026-09-01 (beta testers em CPU
+    viam a barra "travar" na fase silenciosa de alinhamento). So oferece
+    quando: device efetivo e cpu, o motor atual e Whisper, o lote e todo
+    em portugues (o TAGARELA so transcreve pt) e o usuario nunca recusou
+    em definitivo. Nunca no Mac (o Whisper la tem a rota rapida
+    Metal/MLX, mesmo com device coeragido para cpu). "Transcrever
+    novamente" e escolha explicita — o chamador nem consulta esta
+    funcao nesse caso.
+    """
+    if (platform or sys.platform) == "darwin":
+        return False
+    if declined or device != "cpu":
+        return False
+    if engine == "parakeet_onnx":
+        return False
+    restantes = {str(lang).strip() for lang in langs if str(lang).strip()} - {"pt"}
+    return not restantes
 
 
 def diar_offer_candidates(
@@ -3965,10 +3993,10 @@ if QT_IMPORT_ERROR is None:
             # levaria horas por entrevista).
             from . import capabilities as _caps
             try:
-                default_variant = _caps.recommended_asr_variant(_caps.hardware_snapshot())
+                default_variants = list(_caps.recommended_asr_variants(_caps.hardware_snapshot()))
             except Exception:  # noqa: BLE001 - sonda nunca impede o wizard
-                default_variant = model_manager.DEFAULT_ASR_VARIANT
-            self.selected_asr_variants: list[str] = [default_variant]
+                default_variants = [model_manager.DEFAULT_ASR_VARIANT]
+            self.selected_asr_variants: list[str] = default_variants
             self.setWindowTitle(f"{APP_NAME} — Configuração inicial")
             self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
             self.setFixedWidth(680)
@@ -4069,8 +4097,9 @@ if QT_IMPORT_ERROR is None:
             layout = QVBoxLayout(page)
             hardware = caps.hardware_snapshot()
             recomendado = caps.recommended_profile(hardware)
-            variante = caps.recommended_asr_variant(hardware)
-            tamanhos = caps.model_sizes_from_registry(variante)
+            variantes = caps.recommended_asr_variants(hardware)
+            variante = variantes[0]
+            tamanhos = caps.model_sizes_from_registry(variantes)
             em_cache = caps.cached_model_keys(variante)
             detectado = QLabel(f"Este computador tem: {caps.describe_hardware(hardware)}.")
             detectado.setWordWrap(True)
@@ -4140,7 +4169,8 @@ if QT_IMPORT_ERROR is None:
             self._ai_download_group.setVisible(False)  # so com Completo marcado
             layout.addWidget(self._ai_download_group)
             from . import model_manager as _mm
-            variante_label = str(_mm.ASR_VARIANTS.get(variante, {}).get("label", variante))
+            variante_label = " + ".join(
+                str(_mm.ASR_VARIANTS.get(v, {}).get("label", v)) for v in variantes)
             rodape = QLabel(
                 f"Os tamanhos acima são estimativas com o modelo de transcrição "
                 f"recomendado para esta máquina ({variante_label}); na próxima etapa "
@@ -4387,7 +4417,11 @@ if QT_IMPORT_ERROR is None:
             # A recomendacao acompanha a MAQUINA, nao um default fixo: em
             # CPU, um modelo grande leva horas por entrevista (feedback do
             # 1o teste real da pagina de perfis, 2026-08-30).
-            self._recommended_key = caps.recommended_asr_variant(caps.hardware_snapshot())
+            _recs = caps.recommended_asr_variants(caps.hardware_snapshot())
+            self._recommended_key = _recs[0]
+            # Em CPU a recomendacao e dupla: TAGARELA (primario) + small
+            # como reserva para outros idiomas (decisao 2026-09-01).
+            self._recommended_keys = tuple(_recs)
             layout = QVBoxLayout(self)
             intro = QLabel(
                 "O modelo recomendado para esta máquina já vem marcado.\n\n"
@@ -4405,16 +4439,21 @@ if QT_IMPORT_ERROR is None:
             # O recomendado da maquina aparece sempre no grupo de cima,
             # mesmo quando e um modelo pequeno (maquinas de CPU).
             top_keys = list(self.RECOMMENDED)
-            other_keys = [k for k in self.OTHERS if k != self._recommended_key]
-            if self._recommended_key not in top_keys:
-                top_keys.append(self._recommended_key)
+            other_keys = [k for k in self.OTHERS if k not in self._recommended_keys]
+            for _rec in self._recommended_keys:
+                if _rec not in top_keys:
+                    top_keys.append(_rec)
 
             def _make_checkbox(key: str) -> QCheckBox:
                 info = self._model_manager.ASR_VARIANTS[key]
-                suffix = ("  ★ Recomendado para esta máquina"
-                          if key == self._recommended_key else "")
+                if key == self._recommended_key:
+                    suffix = "  ★ Recomendado para esta máquina"
+                elif key in self._recommended_keys:
+                    suffix = "  ★ Recomendado como reserva (outros idiomas)"
+                else:
+                    suffix = ""
                 cb = QCheckBox(f"{info['label']}  ({self._fmt(info['estimated_gb'])}){suffix}")
-                cb.setChecked(key == self._recommended_key)
+                cb.setChecked(key in self._recommended_keys)
                 cb.setToolTip(info["desc"])
                 cb.stateChanged.connect(self._on_changed)
                 self._checkboxes[key] = cb
@@ -5995,6 +6034,60 @@ if QT_IMPORT_ERROR is None:
             if box.clickedButton() is instalar:
                 dlg = ModelManagerDialog(lambda: self.context, self)
                 dlg._install_onnx_gpu_env()
+
+        def _maybe_offer_parakeet_cpu(self, motor_spec: dict, langs: set[str]) -> bool:
+            """Oferta única do TAGARELA quando o Whisper vai rodar em CPU.
+
+            Retorna True se o usuário trocou o motor do projeto (config já
+            gravada; o chamador recalcula motor_key). Não bloqueia: qualquer
+            resposta transcreve. Espelha o padrão da oferta de GPU acima.
+            É o caminho de migração com consentimento para quem instalou
+            antes de o TAGARELA virar o padrão de máquinas sem GPU."""
+            if getattr(self, "_parakeet_cpu_prompted", False):
+                return False
+            if not self.context:
+                return False
+            from . import runtime as _runtime
+            flag = _runtime.app_data_dir() / "parakeet_cpu_offer_dismissed.flag"
+            device = _runtime.resolve_device(
+                str(self.context.config.get("asr_device") or "auto"))[0]
+            if not parakeet_cpu_offer_due(
+                    device, motor_spec.get("engine"), langs, flag.exists()):
+                return False
+            self._parakeet_cpu_prompted = True
+            box = QMessageBox(self)
+            box.setWindowTitle("Usar o motor rápido deste computador?")
+            box.setIcon(QMessageBox.Icon.Question)
+            box.setText(
+                "Sem placa de vídeo, o Whisper leva cerca do tempo do próprio "
+                "áudio para transcrever, e a barra pode parecer parada na "
+                "marcação dos tempos por palavra.\n\n"
+                "O motor Parakeet pt-BR (TAGARELA, experimental) transcreve "
+                "1 hora de gravação em poucos minutos neste computador, com "
+                "tempos por palavra — mas só transcreve português.\n\n"
+                "Usar o TAGARELA nesta e nas próximas transcrições deste "
+                "projeto?")
+            usar = box.addButton("Usar o TAGARELA", QMessageBox.ButtonRole.AcceptRole)
+            box.addButton("Agora não", QMessageBox.ButtonRole.RejectRole)
+            nunca = box.addButton("Não perguntar de novo", QMessageBox.ButtonRole.DestructiveRole)
+            box.exec()
+            if box.clickedButton() is nunca:
+                try:
+                    flag.parent.mkdir(parents=True, exist_ok=True)
+                    flag.write_text("dismissed", encoding="utf-8")
+                except OSError:
+                    pass
+                return False
+            if box.clickedButton() is not usar:
+                return False
+            try:
+                self.context = app_service.update_engine_config(
+                    self.context, {"asr_model": "parakeet-pt"})
+            except Exception as exc:  # noqa: BLE001
+                QMessageBox.warning(self, "Não foi possível trocar o motor",
+                                    sanitize_message(str(exc)))
+                return False
+            return True
 
         def _maybe_offer_cuda_install(self) -> None:
             """Se Windows + NVIDIA detectada + bundle sem torch_cuda + flag
@@ -10068,6 +10161,13 @@ if QT_IMPORT_ERROR is None:
             motor_key = asr_model or str((self.context.config.get("asr_model")
                                           if self.context else "") or "")
             motor_spec = _mm_motor.ASR_VARIANTS.get(motor_key) or {}
+            # Oferta única (2026-09-01): Whisper em CPU + lote em pt →
+            # oferecer o TAGARELA (padrão de máquinas sem GPU). Só no fluxo
+            # normal — "Transcrever novamente" é escolha explícita.
+            if asr_model is None and self._maybe_offer_parakeet_cpu(
+                    motor_spec, set(langs_lote) | set(avisos_idioma)):
+                motor_key = "parakeet-pt"
+                motor_spec = _mm_motor.ASR_VARIANTS.get(motor_key) or {}
             if motor_spec.get("engine") == "parakeet_onnx":
                 fora_pt = sorted((set(langs_lote) | set(avisos_idioma)) - {"pt"})
                 if fora_pt:

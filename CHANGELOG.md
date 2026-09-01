@@ -1,6 +1,22 @@
 # Changelog
 
-## Não lançado
+## v0.2.2 — 2026-09-01
+
+- **TAGARELA vira o motor padrão em máquinas sem placa de vídeo**
+  (Windows/Linux; decisão motivada por beta testers travados no Whisper
+  em CPU). O assistente de primeiro uso agora recomenda o Parakeet
+  pt-BR "TAGARELA" (13–25× o tempo real em CPU, tempos por palavra
+  nativos) com o Whisper `small` de reserva para outros idiomas
+  (~3,5 GB no perfil Essencial). Quem já estava instalado recebe UMA
+  oferta de troca ao clicar Transcrever em CPU — qualquer resposta
+  segue transcrevendo, e a recusa é lembrada. No Mac nada muda (lá o
+  Whisper já tem a rota rápida Metal/MLX). Com GPU NVIDIA, o padrão
+  segue `large-v3-turbo`.
+- **A barra não "trava mais aos 43%"** (na percepção): na fase
+  silenciosa de marcação dos tempos por palavra em CPU, a barra agora
+  diz o que está acontecendo ("pode demorar; a barra fica parada, mas o
+  trabalho continua") — e as mensagens não falam mais em "GPU" numa
+  máquina sem placa.
 
 - **Instalador .bat acha o uv mesmo quando o winget não cria o atalho**
   (caso real de beta tester): em algumas máquinas o pacote portable fica

@@ -190,8 +190,8 @@ def run_whisperx(
         if config.get("pyannote_metrics_enabled") is not None:
             os.environ["PYANNOTE_METRICS_ENABLED"] = str(config["pyannote_metrics_enabled"])
 
-        tracker = WhisperXProgressTracker(row["interview_id"], progress_callback)
-        tracker.emit({"event": "asr_progress", "progress": 1, "message": "Carregando modelo de IA na GPU..."})
+        tracker = WhisperXProgressTracker(row["interview_id"], progress_callback, device=device)
+        tracker.emit({"event": "asr_progress", "progress": 1, "message": tracker.idle_message})
         result = run_command_stream(command, cwd=paths.project_root, on_output=tracker.feed, should_cancel=should_cancel)
         cancelled = should_cancel is not None and should_cancel()
         tracker.emit({"event": "asr_done", "progress": 100 if result.returncode == 0 else tracker.last_percent, "message": "WhisperX finalizado."})
@@ -229,9 +229,16 @@ def run_whisperx(
 
 
 class WhisperXProgressTracker:
-    def __init__(self, interview_id: str, callback: ProgressCallback | None) -> None:
+    def __init__(self, interview_id: str, callback: ProgressCallback | None,
+                 device: str = "cuda") -> None:
         self.interview_id = interview_id
         self.callback = callback
+        self.device = device
+        # Mensagem honesta por device: dizer "GPU" numa maquina sem placa
+        # confundia (caso real de beta tester em CPU, 2026-09-01).
+        self.idle_message = ("Carregando modelo de IA na GPU..."
+                             if device == "cuda"
+                             else "Carregando o modelo de IA no processador...")
         self.tail = ""
         self.last_percent = 1
         self.last_message_at = 0.0
@@ -256,7 +263,14 @@ class WhisperXProgressTracker:
             if self.last_percent < 90 and creep_elapsed >= 2.0:
                 self.last_percent = min(90, self.last_percent + 1)
                 self._creep_start = now
-            message = self.current_message() or "Carregando modelo de IA na GPU..."
+            message = self.current_message() or self.idle_message
+            if self.device != "cuda" and self.last_percent >= 90:
+                # Fase silenciosa (alinhamento) em CPU: a barra estaciona no
+                # teto do creep e o tester le como "travou aos 43%". Dizer o
+                # que esta acontecendo em vez de repetir o texto antigo.
+                message = ("Marcando os tempos por palavra — sem placa de "
+                           "vídeo esta etapa pode demorar; a barra fica "
+                           "parada, mas o trabalho continua.")
             self.last_message_at = now
             self.emit({"event": "asr_progress", "progress": self.last_percent, "message": message})
 

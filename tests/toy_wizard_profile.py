@@ -49,13 +49,22 @@ assert chaves == {"asr_tiny"}, chaves
 print("PASS: get_required_models por perfil")
 
 # --- recomendacao de MODELO acompanha a maquina (pura) ---
-assert caps.recommended_asr_variant(caps.parse_fake_hardware("gpu24")) == "large-v3-turbo"
-assert caps.recommended_asr_variant(caps.parse_fake_hardware("cpu")) == "small"
-# 2026-08-30: "minimo" tambem recomenda small — o base virou demonstracao
-# (qualidade insuficiente para trabalho) e saiu do assistente.
-assert caps.recommended_asr_variant(caps.parse_fake_hardware("minimo")) == "small"
-assert caps.recommended_asr_variant(caps.parse_fake_hardware("gpu2")) == "small"
-print("PASS: recommended_asr_variant")
+# 2026-09-01: sem GPU util a recomendacao e DUPLA — TAGARELA primario
+# (13-25x tempo real em CPU, tempos por palavra nativos) + small de
+# reserva para outros idiomas. GPU segue so com o turbo; Mac segue
+# small (rota Metal/MLX do Whisper). Plataforma explicita nas puras.
+assert caps.recommended_asr_variants(caps.parse_fake_hardware("gpu24"), platform="win32") == ("large-v3-turbo",)
+assert caps.recommended_asr_variants(caps.parse_fake_hardware("cpu"), platform="win32") == ("parakeet-pt", "small")
+assert caps.recommended_asr_variants(caps.parse_fake_hardware("minimo"), platform="linux") == ("parakeet-pt", "small")
+assert caps.recommended_asr_variants(caps.parse_fake_hardware("gpu2"), platform="win32") == ("parakeet-pt", "small")
+assert caps.recommended_asr_variants(caps.parse_fake_hardware("cpu"), platform="darwin") == ("small",)
+# model_sizes_from_registry soma o @asr quando recebe a dupla
+assert caps.model_sizes_from_registry(("parakeet-pt", "small"))["@asr"] == 3.45
+assert caps.model_sizes_from_registry("small")["@asr"] == 0.9
+# O que o SISTEMA desta maquina recomenda (vale para o wizard abaixo)
+ESPERADOS = list(caps.recommended_asr_variants(caps.parse_fake_hardware("cpu")))
+PRIMARIO = ESPERADOS[0]
+print("PASS: recommended_asr_variants")
 
 # --- assistente em maquina de CPU: recomenda Padrao, marca sem impor ---
 wizard = FirstRunWizard()
@@ -93,27 +102,35 @@ assert select_page.FIXED_GB == 0.0
 wizard._profile_radios["padrao"].setChecked(True)
 assert select_page.FIXED_GB > 1.0
 
-# em CPU o modelo pre-marcado e o small, NAO o turbo — e so ele
+# em maquina sem GPU vem pre-marcada a recomendacao da PLATAFORMA
+# (win/linux: TAGARELA primario + small reserva; mac: so o small)
 marcados = select_page.selected_asr_variants()
-assert marcados == ["small"], marcados
-assert "Recomendado para esta máquina" in select_page._checkboxes["small"].text()
+assert marcados == ESPERADOS, (marcados, ESPERADOS)
+assert "Recomendado para esta máquina" in select_page._checkboxes[PRIMARIO].text()
+if len(ESPERADOS) > 1:
+    assert "reserva" in select_page._checkboxes["small"].text()
 assert "Recomendado" not in select_page._checkboxes["large-v3-turbo"].text()
-assert wizard.selected_asr_variants == ["small"]
+assert wizard.selected_asr_variants == ESPERADOS
 # tiny/base sao DEMONSTRACAO (decisao 2026-08-30): fora do assistente
 assert "tiny" not in select_page._checkboxes, "tiny voltou ao assistente"
 assert "base" not in select_page._checkboxes, "base voltou ao assistente"
-# marcar um segundo modelo NAO desmarca o primeiro, e o rotulo enumera
+# marcar mais um modelo NAO desmarca os anteriores, e o rotulo enumera
 select_page._checkboxes["medium"].setChecked(True)
-assert set(select_page.selected_asr_variants()) == {"small", "medium"}
-assert "2 modelos" in select_page.total_label.text()
+assert set(select_page.selected_asr_variants()) == set(ESPERADOS) | {"medium"}
+assert f"{len(ESPERADOS) + 1} modelos" in select_page.total_label.text()
 select_page._checkboxes["medium"].setChecked(False)
-assert "Será baixado" in select_page.total_label.text()
+if len(ESPERADOS) > 1:
+    assert f"{len(ESPERADOS)} modelos" in select_page.total_label.text()
+else:
+    assert "Será baixado" in select_page.total_label.text()
 
 # a pagina de perfis declara com qual modelo estimou os tamanhos
 pagina_perfil = wizard.page(FirstRunWizard.PAGE_PROFILE)
 rotulos = [w.text() for w in pagina_perfil.findChildren(type(wizard._profile_warning))]
 assert any("estimativas com o modelo" in t for t in rotulos), rotulos
-assert any("small" in t for t in rotulos), "a estimativa nao cita o modelo recomendado"
+if len(ESPERADOS) > 1:
+    assert any("TAGARELA" in t for t in rotulos), "a estimativa nao cita o motor primario"
+assert any("small" in t for t in rotulos), "a estimativa nao cita o small"
 
 # pagina de download tem o botao de cancelar (oculto ate comecar)
 download_page = wizard.page(FirstRunWizard.PAGE_DOWNLOAD)
@@ -129,8 +146,8 @@ assert app_settings.alignment_default() is False
 # Tri-state 2026-08-31: o perfil Essencial NAO congela mais "sem
 # falantes" — grava "auto" (separa quando o modelo for instalado).
 assert app_settings.diarize_default() == "auto"
-# o modelo escolhido vira default da maquina (projetos novos herdam)
-assert app_settings.asr_model_default() == "small", app_settings.asr_model_default()
+# o motor PRIMARIO vira default da maquina (projetos novos herdam)
+assert app_settings.asr_model_default() == PRIMARIO, app_settings.asr_model_default()
 print("PASS: perfil persistido por maquina")
 
 # --- ModelSetupDialog: token so quando ha modelo restrito pendente ---

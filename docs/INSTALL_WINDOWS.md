@@ -59,12 +59,13 @@ O programa abre pela primeira vez e cria o atalho **Transcritório** na
 **4. Siga o assistente de primeiro uso.** Ele baixa os modelos de IA
 (uma vez só) e pergunta se você quer a **identificação de falantes**:
 
-- **Não (apenas transcrever):** nenhum cadastro é necessário. ~1 GB de
-  modelos (perfil Essencial).
+- **Não (apenas transcrever):** nenhum cadastro é necessário. ~3,5 GB
+  de modelos (perfil Essencial: em máquina sem placa de vídeo, o motor
+  rápido TAGARELA + o Whisper small de reserva).
 - **Sim (separar falantes):** o assistente orienta a criar uma conta
-  gratuita na Hugging Face e colar um token. ~2,5 GB de modelos
-  (perfil Padrão; ~3 GB com o modelo grande para GPU). Dá para ativar
-  depois, sem repetir as transcrições.
+  gratuita na Hugging Face e colar um token. ~5 GB de modelos
+  (perfil Padrão em CPU; ~3 GB só o modelo grande para GPU). Dá para
+  ativar depois, sem repetir as transcrições.
 
 ## Aceleração NVIDIA (opcional)
 

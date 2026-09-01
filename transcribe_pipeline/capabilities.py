@@ -21,8 +21,9 @@ ou rede.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Iterable
 
 ASR_MODEL_TOKEN = "@asr"  # resolvido para a variante escolhida no projeto
 ALIGN_MODEL_TOKEN = "@align"  # resolvido para o pacote do IDIOMA configurado (etapa 4)
@@ -240,19 +241,30 @@ def capability_status(
     return "pronta", "", 0.0
 
 
-def recommended_asr_variant(hw: Hardware) -> str:
-    """Variante do Whisper recomendada para a maquina (pura).
+def recommended_asr_variants(hw: Hardware, platform: str | None = None) -> tuple[str, ...]:
+    """Variantes recomendadas para a maquina, a primaria primeiro (pura).
 
-    Em GPU o turbo e o melhor custo-beneficio. Em CPU, modelos grandes
-    levam horas por entrevista: small equilibra qualidade e tempo — e e
-    o PISO recomendavel em qualquer maquina (2026-08-30: tiny/base
-    viraram demonstracao; ~20-30% de erro nao e trabalho real). O aviso
-    de lentidao em maquina apertada vem do cpu_speed_warning.
-    Sugestao, nunca imposicao.
+    Em GPU o turbo e o melhor custo-beneficio. Sem placa util, o Whisper
+    roda ~1x o tempo do audio e a marcacao de tempos por palavra e mais
+    lenta ainda (beta testers em CPU viam a barra "travar" nessa fase):
+    o TAGARELA (parakeet-pt) transcreve 13-25x o tempo real em CPU com
+    tempos por palavra nativos e vira o PADRAO em maquinas sem GPU
+    (decisao do usuario 2026-09-01); o small acompanha como reserva para
+    outros idiomas — o TAGARELA so transcreve portugues. No Mac o
+    Whisper ja tem a rota rapida Metal/MLX (has_gpu so enxerga NVIDIA):
+    la a recomendacao segue como sempre foi. Sugestao, nunca imposicao.
     """
+    plataforma = platform or sys.platform
+    if plataforma == "darwin":
+        return ("small",)
     if hw.has_gpu and (hw.vram_gb is None or hw.vram_gb >= 4.0):
-        return "large-v3-turbo"
-    return "small"
+        return ("large-v3-turbo",)
+    return ("parakeet-pt", "small")
+
+
+def recommended_asr_variant(hw: Hardware) -> str:
+    """Variante PRIMARIA recomendada (pura); ver recommended_asr_variants."""
+    return recommended_asr_variants(hw)[0]
 
 
 def recommended_profile(hw: Hardware) -> str:
@@ -305,10 +317,13 @@ def cpu_speed_warning(hw: Hardware) -> str:
             "levar várias horas — prefira o modelo menor.")
 
 
-def model_sizes_from_registry(asr_variant: str | None = None,
+def model_sizes_from_registry(asr_variant: str | Iterable[str] | None = None,
                               align_language: str | None = None) -> dict[str, float]:
     """{chave do modelo: GB} a partir do registro (I/O leve, sem rede).
 
+    asr_variant aceita uma variante ou uma sequencia (recomendacao
+    plural do wizard): o token @asr vira a SOMA dos tamanhos — em CPU o
+    Essencial baixa TAGARELA + small.
     align_language (etapa 4): resolve o @align para o idioma configurado
     do projeto; sem pacote (auto/idioma exotico) o tamanho e 0.0 — nao
     ha download que habilite tempos por palavra nesse caso."""
@@ -317,9 +332,13 @@ def model_sizes_from_registry(asr_variant: str | None = None,
     tamanhos: dict[str, float] = {}
     for asset in model_manager._FIXED_MODELS + model_manager._OPTIONAL_MODELS:
         tamanhos[asset.key] = float(asset.estimated_gb)
-    variante = asr_variant or model_manager.DEFAULT_ASR_VARIANT
-    info: dict[str, Any] = model_manager.ASR_VARIANTS.get(variante, {})
-    tamanhos[ASR_MODEL_TOKEN] = float(info.get("estimated_gb", 0.0))
+    if asr_variant is None or isinstance(asr_variant, str):
+        variantes: tuple[str, ...] = (asr_variant or model_manager.DEFAULT_ASR_VARIANT,)
+    else:
+        variantes = tuple(asr_variant) or (model_manager.DEFAULT_ASR_VARIANT,)
+    tamanhos[ASR_MODEL_TOKEN] = round(sum(
+        float((model_manager.ASR_VARIANTS.get(v) or {}).get("estimated_gb", 0.0))
+        for v in variantes), 2)
     idioma = model_manager.normalize_language(align_language) or "pt"
     if model_manager.align_language_supported(idioma):
         tamanhos[ALIGN_MODEL_TOKEN] = float(
