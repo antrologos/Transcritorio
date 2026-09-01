@@ -15,9 +15,18 @@ echo    Atualizador do Transcritório
 echo  =============================================
 echo.
 
+rem O winget às vezes não cria o atalho em Links (App Installer antigo,
+rem política de link simbólico): procurar também dentro do próprio pacote.
 set "UV_EXE="
 for /f "delims=" %%i in ('where uv 2^>nul') do if not defined UV_EXE set "UV_EXE=%%i"
 if not defined UV_EXE if exist "%LOCALAPPDATA%\Microsoft\WinGet\Links\uv.exe" set "UV_EXE=%LOCALAPPDATA%\Microsoft\WinGet\Links\uv.exe"
+if not defined UV_EXE (
+    for /d %%D in ("%LOCALAPPDATA%\Microsoft\WinGet\Packages\astral-sh.uv*") do (
+        for /f "delims=" %%i in ('dir /s /b "%%D\uv.exe" 2^>nul') do if not defined UV_EXE set "UV_EXE=%%i"
+    )
+)
+if not defined UV_EXE if exist "%USERPROFILE%\.local\bin\uv.exe" set "UV_EXE=%USERPROFILE%\.local\bin\uv.exe"
+if not defined UV_EXE if exist "%ProgramFiles%\WinGet\Links\uv.exe" set "UV_EXE=%ProgramFiles%\WinGet\Links\uv.exe"
 if not defined UV_EXE goto ERRO_UV
 
 rem O Transcritório foi mesmo instalado nesta máquina?

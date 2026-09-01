@@ -92,6 +92,19 @@ https://www.gyan.dev/ffmpeg/builds/ (adicione a pasta `bin` ao PATH).
 **"uv não é reconhecido" no passo 3** — feche e reabra o Prompt de
 Comando (o PATH só atualiza em janelas novas).
 
+**"transcritorio não é reconhecido" logo após instalar** — mesmo motivo,
+com uma pegadinha: se o Windows Terminal já estava aberto, *abas novas
+herdam o ambiente antigo* — é preciso fechar TODAS as janelas do
+terminal e abrir uma nova. O aplicativo em si já está instalado: dá
+para abri-lo direto pelo caminho completo, sem esperar o PATH:
+
+```bat
+%APPDATA%\uv\tools\transcritorio\Scripts\transcritorio.exe
+```
+
+(no primeiro uso ele cria o atalho "Transcritório" na área de trabalho,
+e daí em diante é só clicar nele).
+
 **Rede institucional com proxy** — o download do PyPI pode ser bloqueado.
 Peça ao setor de TI para liberar `pypi.org`, `files.pythonhosted.org`,
 `astral.sh` e `huggingface.co`, ou instale em uma rede doméstica.

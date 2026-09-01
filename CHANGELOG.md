@@ -2,6 +2,16 @@
 
 ## Não lançado
 
+- **Instalador .bat acha o uv mesmo quando o winget não cria o atalho**
+  (caso real de beta tester): em algumas máquinas o pacote portable fica
+  só dentro de `WinGet\Packages\astral-sh.uv*` — a busca agora varre o
+  pacote, o instalador oficial da Astral (`.local\bin`) e o escopo de
+  máquina, e o passo 1 só diz "concluído" depois de confirmar o
+  executável. O erro passou a apontar a causa mais comum (App Installer
+  desatualizado, com o link da Microsoft Store). Guia ganhou o caso
+  "transcritorio não é reconhecido" com terminal já aberto (abas novas
+  herdam o PATH antigo; fechar todas as janelas do terminal resolve).
+
 - **Dividir bloco: o tempo da fronteira agora segue o cursor de texto.**
   Antes, a posição do player (que durante a reprodução está sempre dentro
   do bloco tocando — e ainda avançava enquanto o diálogo de confirmação

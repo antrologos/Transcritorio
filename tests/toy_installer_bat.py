@@ -27,8 +27,14 @@ for caminho in (INSTALAR, ATUALIZAR):
     assert texto.startswith("@echo off"), caminho.name
     assert "chcp 65001" in texto, f"{caminho.name}: sem chcp (acentos)"
     assert "pause" in texto, f"{caminho.name}: janela fecharia sem ler"
-    # Fallback do uv fora do PATH da sessao
+    # Fallback do uv fora do PATH da sessao — cascata completa (2026-09-01:
+    # beta tester real com winget que instala mas NAO cria o link em Links;
+    # o exe fica so dentro de Packages\astral-sh.uv*, as vezes em subpasta)
     assert r"%LOCALAPPDATA%\Microsoft\WinGet\Links\uv.exe" in texto, caminho.name
+    assert r"%LOCALAPPDATA%\Microsoft\WinGet\Packages\astral-sh.uv" in texto, (
+        f"{caminho.name}: sem varredura do pacote portable")
+    assert r"%USERPROFILE%\.local\bin\uv.exe" in texto, (
+        f"{caminho.name}: sem fallback do instalador oficial da Astral")
     # ---- checklist de seguranca ----
     assert "http://" not in texto, f"{caminho.name}: http sem criptografia"
     baixo = texto.lower()

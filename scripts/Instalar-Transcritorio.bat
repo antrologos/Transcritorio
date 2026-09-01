@@ -36,6 +36,21 @@ rem    (nao checamos o errorlevel do winget: "ja instalado" tambem sai
 rem     com codigo diferente de zero; a prova real e o executavel existir)
 echo  [1/3] Instalando o uv (gerenciador, assinado pela Astral)...
 winget install -e --id astral-sh.uv --accept-source-agreements --accept-package-agreements --disable-interactivity >nul 2>nul
+rem    Localizar o uv SEM depender do PATH desta janela (recém-instalado
+rem    só entra no PATH de janelas novas). O winget às vezes NÃO cria o
+rem    atalho em Links (App Installer antigo, política de link simbólico):
+rem    procurar também dentro do próprio pacote e nos locais alternativos.
+set "UV_EXE="
+for /f "delims=" %%i in ('where uv 2^>nul') do if not defined UV_EXE set "UV_EXE=%%i"
+if not defined UV_EXE if exist "%LOCALAPPDATA%\Microsoft\WinGet\Links\uv.exe" set "UV_EXE=%LOCALAPPDATA%\Microsoft\WinGet\Links\uv.exe"
+if not defined UV_EXE (
+    for /d %%D in ("%LOCALAPPDATA%\Microsoft\WinGet\Packages\astral-sh.uv*") do (
+        for /f "delims=" %%i in ('dir /s /b "%%D\uv.exe" 2^>nul') do if not defined UV_EXE set "UV_EXE=%%i"
+    )
+)
+if not defined UV_EXE if exist "%USERPROFILE%\.local\bin\uv.exe" set "UV_EXE=%USERPROFILE%\.local\bin\uv.exe"
+if not defined UV_EXE if exist "%ProgramFiles%\WinGet\Links\uv.exe" set "UV_EXE=%ProgramFiles%\WinGet\Links\uv.exe"
+if not defined UV_EXE goto ERRO_UV
 echo         concluído.
 
 rem -- 2) FFmpeg: leitura dos arquivos de áudio e vídeo ------------------------
@@ -56,13 +71,6 @@ if defined FFMPEG_OK (
     echo             rode este instalador de novo; o aplicativo também avisa
     echo             e orienta se ele faltar.
 )
-
-rem -- Localizar o uv SEM depender do PATH desta janela (recém-instalado
-rem    ainda não aparece aqui; o winget guarda um atalho fixo em Links) -------
-set "UV_EXE="
-for /f "delims=" %%i in ('where uv 2^>nul') do if not defined UV_EXE set "UV_EXE=%%i"
-if not defined UV_EXE if exist "%LOCALAPPDATA%\Microsoft\WinGet\Links\uv.exe" set "UV_EXE=%LOCALAPPDATA%\Microsoft\WinGet\Links\uv.exe"
-if not defined UV_EXE goto ERRO_UV
 
 rem -- 3) O Transcritório em si (do PyPI; atualiza se já estiver instalado) ---
 "%UV_EXE%" tool list 2>nul | findstr /b /c:"transcritorio " >nul
@@ -116,7 +124,12 @@ goto FIM_ERRO
 :ERRO_UV
 echo.
 echo  [!] O uv não foi encontrado depois da instalação.
-echo      Feche esta janela, abra de novo o instalador e tente outra vez.
+echo      Causa mais comum: o "App Installer" do Windows (que fornece o
+echo      winget) está desatualizado e não instala pacotes deste tipo.
+echo      Abra a Microsoft Store, procure "App Installer", atualize
+echo      (é gratuito e oficial da Microsoft) e rode este instalador de
+echo      novo: https://apps.microsoft.com/detail/9NBLGGH4NNS1
+echo.
 echo      Se repetir, siga o guia passo a passo:
 echo      https://github.com/antrologos/Transcritorio/blob/main/docs/INSTALL_WINDOWS.md
 goto FIM_ERRO
