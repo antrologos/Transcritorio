@@ -57,7 +57,12 @@ for caminho in (INSTALAR, ATUALIZAR):
 texto = INSTALAR.read_text(encoding="utf-8")
 assert "winget install -e --id astral-sh.uv" in texto
 assert "winget install -e --id Gyan.FFmpeg" in texto
-assert "tool install transcritorio" in texto
+# Python FIXO (2026-09-02, beta tester com Python 3.14 na maquina: o uv
+# escolhia o mais novo e o torchcodec nao tem wheel cp314 — o teto
+# requires-python <3.14 do pacote NAO bastou para o uv trocar de
+# interpretador). 3.12 e o Python do lock/CI/maquina de referencia.
+assert "tool install --python 3.12 transcritorio" in texto
+assert "tool install transcritorio" not in texto, "install sem --python voltou"
 assert "tool upgrade transcritorio" in texto  # idempotente: ja instalado -> upgrade
 assert "SEM_WINGET" in texto and "ERRO_REDE" in texto
 assert "files.pythonhosted.org" in texto  # mensagem de proxy/TI

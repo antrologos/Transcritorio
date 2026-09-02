@@ -2,6 +2,12 @@
 
 ## Não lançado
 
+- **Python fixo em 3.12 em todos os comandos de instalação** (instalador
+  .bat, README, guias, site e os comandos de Reparar/aceleração NVIDIA do
+  app). Caso real de beta tester: o `uv` escolhia o Python mais novo da
+  máquina (3.14) e o `torchcodec` ainda não tem pacote para ele — o teto
+  `<3.14` do pacote não faz o `uv` trocar de interpretador sozinho. Com
+  `--python 3.12`, o `uv` baixa o Python oficial certo se não houver.
 - **Instalador .bat blindado contra falhas de rede** (caso real de beta
   tester: a causa do erro rolava para fora da tela). Tempo limite de
   download ampliado para conexões lentas (`UV_HTTP_TIMEOUT=600`), segunda

@@ -15,7 +15,7 @@
 2. Instale o Transcritório:
 
    ```sh
-   uv tool install transcritorio
+   uv tool install --python 3.12 transcritorio
    ```
 
    Em **Apple Silicon** (M1/M2/M3/M4), prefira o extra `[mac]`, que habilita a
@@ -23,7 +23,7 @@
    aparece na barra de status (parte inferior da janela):
 
    ```sh
-   uv tool install "transcritorio[mac]"
+   uv tool install --python 3.12 "transcritorio[mac]"
    ```
 
    > **Aviso honesto:** este canal ainda não teve teste de campo no macOS —

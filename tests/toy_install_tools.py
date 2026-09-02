@@ -25,19 +25,23 @@ with tempfile.TemporaryDirectory() as tmp:
     # sem as flags, uv instalaria torch CPU e a aceleracao nunca ativaria
     # (bug pego na validacao real de 2026-08-23).
     CUDA_FLAGS = " --index https://download.pytorch.org/whl/cu128 --index-strategy unsafe-best-match"
+    # Python FIXO em 3.12 (2026-09-02): ao (re)criar o ambiente o uv pegava
+    # o Python mais novo da maquina (3.14, sem wheel do torchcodec) — o teto
+    # requires-python do pacote nao o faz trocar de interpretador.
+    PY = "--python 3.12"
     assert install_tools.upgrade_command() == "uv tool upgrade transcritorio"
-    assert install_tools.repair_command(cuda=False) == 'uv tool install --reinstall "transcritorio"'
-    assert install_tools.repair_command(cuda=True) == 'uv tool install --reinstall "transcritorio[cuda]"' + CUDA_FLAGS
-    assert install_tools.cuda_install_command() == 'uv tool install --reinstall "transcritorio[cuda]"' + CUDA_FLAGS
+    assert install_tools.repair_command(cuda=False) == f'uv tool install --reinstall {PY} "transcritorio"'
+    assert install_tools.repair_command(cuda=True) == f'uv tool install --reinstall {PY} "transcritorio[cuda]"' + CUDA_FLAGS
+    assert install_tools.cuda_install_command() == f'uv tool install --reinstall {PY} "transcritorio[cuda]"' + CUDA_FLAGS
     assert "[cuda]" not in install_tools.repair_command(cuda=False)
-    print("PASS: comandos uv corretos (cuda sempre com indice cu128)")
+    print("PASS: comandos uv corretos (cuda sempre com indice cu128; python fixo)")
 
     # Flag cuda persiste e o default do reparo o segue
     assert install_tools.cuda_extra_installed() is False
-    assert install_tools.repair_command() == 'uv tool install --reinstall "transcritorio"'
+    assert install_tools.repair_command() == f'uv tool install --reinstall {PY} "transcritorio"'
     install_tools.mark_cuda_extra_installed(True)
     assert install_tools.cuda_extra_installed() is True
-    assert install_tools.repair_command().startswith('uv tool install --reinstall "transcritorio[cuda]"')
+    assert install_tools.repair_command().startswith(f'uv tool install --reinstall {PY} "transcritorio[cuda]"')
     assert CUDA_FLAGS in install_tools.repair_command()
     print("PASS: flag cuda_extra_installed persiste e muda o reparo")
 

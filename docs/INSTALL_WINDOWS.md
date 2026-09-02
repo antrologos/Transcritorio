@@ -44,7 +44,7 @@ pressione Enter após cada um, aguardando terminar:
 ```bat
 winget install astral-sh.uv
 winget install Gyan.FFmpeg
-uv tool install transcritorio
+uv tool install --python 3.12 transcritorio
 ```
 
 - O 1º instala o `uv` (gerenciador). O 2º instala o FFmpeg (leitura de
@@ -141,9 +141,13 @@ uv tool install --python 3.12 --python-preference only-system transcritorio
 Em máquina gerenciada pela instituição, pode ser preciso pedir uma exceção
 à TI (cite a licença MIT e o repositório público).
 
-**"No solution found... torchcodec... cp314"** — versão antiga do pacote
-sem teto de Python (corrigido desde a v0.2.0); se aparecer,
-acrescente `--python 3.12` logo após `uv tool install`.
+**"No solution found... torchcodec... cp314"** — o `uv` escolheu o
+Python mais novo do computador (3.14) e uma dependência ainda não tem
+pacote para ele — o teto de versão do Transcritório não faz o `uv`
+trocar de interpretador sozinho. Por isso todos os comandos deste guia
+(e o instalador de um clique) fixam `--python 3.12`: o `uv` baixa o
+Python 3.12 oficial se não houver nenhum. Se você rodou sem esse
+trecho, repita o comando com ele.
 
 **Diagnóstico para pedir ajuda** — Prompt de Comando:
 `transcritorio-cli self-test` — copie a saída e cole em uma

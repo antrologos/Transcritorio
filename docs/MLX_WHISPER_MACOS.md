@@ -9,7 +9,7 @@ mais rapido** que CPU puro em Apple Silicon.
 Instale com o extra `[mac]` para habilitar a aceleracao Metal:
 
 ```sh
-uv tool install "transcritorio[mac]"
+uv tool install --python 3.12 "transcritorio[mac]"
 ```
 
 Ao abrir o app num Mac com Apple Silicon, a aceleracao MPS e detectada

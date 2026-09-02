@@ -29,7 +29,7 @@ Ele faz sozinho os três comandos abaixo, mostra o progresso e abre o programa n
 ```bat
 winget install astral-sh.uv
 winget install Gyan.FFmpeg
-uv tool install transcritorio
+uv tool install --python 3.12 transcritorio
 ```
 
 Feche e reabra o Prompt, digite `transcritorio` e pressione Enter. O programa abre e cria o atalho **Transcritório** na área de trabalho — a partir daí, é só clicar nele.
@@ -40,17 +40,17 @@ Guia detalhado com solução de problemas: [`docs/INSTALL_WINDOWS.md`](docs/INST
 
 ```sh
 brew install uv ffmpeg
-uv tool install transcritorio
+uv tool install --python 3.12 transcritorio
 ```
 
-Em Apple Silicon (M1/M2/M3/M4), use `uv tool install "transcritorio[mac]"` para transcrever com aceleração Metal. Sem Gatekeeper: não há app para "autorizar". Guia: [`docs/MAC_INSTALL.md`](docs/MAC_INSTALL.md)
+Em Apple Silicon (M1/M2/M3/M4), use `uv tool install --python 3.12 "transcritorio[mac]"` para transcrever com aceleração Metal. Sem Gatekeeper: não há app para "autorizar". Guia: [`docs/MAC_INSTALL.md`](docs/MAC_INSTALL.md)
 
 **Linux (beta)** — no terminal:
 
 ```sh
 curl -LsSf https://astral.sh/uv/install.sh | sh
 sudo apt install ffmpeg   # ou o gerenciador da sua distribuição
-uv tool install transcritorio
+uv tool install --python 3.12 transcritorio
 ```
 
 Guia: [`docs/LINUX_INSTALL.md`](docs/LINUX_INSTALL.md)
@@ -179,8 +179,8 @@ docs/                   documentação completa
 | Plataforma | Estado | Notas |
 |---|---|---|
 | Windows 10/11 | Suportada | CPU por padrão; aceleração NVIDIA opcional pelo extra `[cuda]` (menu do app). |
-| Linux x64 | Beta | Mesmo canal `uv tool install transcritorio`; CPU. |
-| macOS (Apple Silicon) | Beta | `uv tool install "transcritorio[mac]"` habilita a aceleração Metal (MLX). |
+| Linux x64 | Beta | Mesmo canal `uv tool install --python 3.12 transcritorio`; CPU. |
+| macOS (Apple Silicon) | Beta | `uv tool install --python 3.12 "transcritorio[mac]"` habilita a aceleração Metal (MLX). |
 
 As versões em instalador (.exe/.dmg/AppImage) foram descontinuadas — ver [`docs/LEGACY_STANDALONE.md`](docs/LEGACY_STANDALONE.md).
 

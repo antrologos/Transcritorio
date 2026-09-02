@@ -46,13 +46,20 @@ def find_uv() -> str | None:
     return shutil.which("uv")
 
 
+# Python FIXO (2026-09-02): o uv escolhe o Python mais novo da maquina ao
+# (re)criar o ambiente e o torchcodec ainda nao tem wheel para o 3.14 —
+# caso real de beta tester; o teto requires-python do pacote NAO faz o uv
+# trocar de interpretador. 3.12 e o Python do lock/CI/maquina de referencia.
+_PYTHON_FLAG = "--python 3.12"
+
+
 def repair_command(cuda: bool | None = None) -> str:
     """Comando que reconstroi o ambiente do app (nao toca projetos/modelos)."""
     if cuda is None:
         cuda = cuda_extra_installed()
     if cuda:
-        return f'uv tool install --reinstall "{PACKAGE_NAME}[cuda]"{_CUDA_INDEX_FLAGS}'
-    return f'uv tool install --reinstall "{PACKAGE_NAME}"'
+        return f'uv tool install --reinstall {_PYTHON_FLAG} "{PACKAGE_NAME}[cuda]"{_CUDA_INDEX_FLAGS}'
+    return f'uv tool install --reinstall {_PYTHON_FLAG} "{PACKAGE_NAME}"'
 
 
 def upgrade_command() -> str:
@@ -60,7 +67,7 @@ def upgrade_command() -> str:
 
 
 def cuda_install_command() -> str:
-    return f'uv tool install --reinstall "{PACKAGE_NAME}[cuda]"{_CUDA_INDEX_FLAGS}'
+    return f'uv tool install --reinstall {_PYTHON_FLAG} "{PACKAGE_NAME}[cuda]"{_CUDA_INDEX_FLAGS}'
 
 
 def cuda_extra_installed() -> bool:

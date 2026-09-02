@@ -80,6 +80,9 @@ rem    ela grava um registro, cujas últimas linhas aparecem no erro
 rem    (caso real de beta tester: a causa rolava para fora da tela).
 set "UV_HTTP_TIMEOUT=600"
 set "LOG=%TEMP%\Transcritorio-instalador.log"
+rem    Python FIXO em 3.12 na instalação: o uv escolhia o Python mais novo
+rem    da máquina e o torchcodec ainda não tem pacote para o 3.14 — caso
+rem    real de beta tester. O uv baixa o 3.12 oficial se não houver nenhum.
 "%UV_EXE%" tool list 2>nul | findstr /b /c:"transcritorio " >nul
 if not errorlevel 1 (
     set "UV_CMD=tool upgrade transcritorio"
@@ -87,7 +90,7 @@ if not errorlevel 1 (
     echo         ^(se o Transcritório estiver ABERTO agora, feche-o antes:
     echo          uma janela aberta impede a troca dos arquivos^)
 ) else (
-    set "UV_CMD=tool install transcritorio"
+    set "UV_CMD=tool install --python 3.12 transcritorio"
     echo  [3/3] Baixando o Transcritório e as dependências ^(PyPI^)...
 )
 "%UV_EXE%" %UV_CMD%

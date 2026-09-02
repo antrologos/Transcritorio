@@ -20,7 +20,7 @@
 2. Feche e abra o terminal de novo (para o `uv` entrar no PATH) e instale:
 
    ```sh
-   uv tool install transcritorio
+   uv tool install --python 3.12 transcritorio
    ```
 
    > **Aviso honesto:** este canal ainda não teve teste de campo no Linux —
@@ -41,7 +41,7 @@ Com placa NVIDIA e driver instalado, o mesmo comando do Windows habilita a
 aceleração CUDA (download de ~2,5 GB):
 
 ```sh
-uv tool install --reinstall "transcritorio[cuda]" \
+uv tool install --reinstall --python 3.12 "transcritorio[cuda]" \
   --with torch==2.8.0+cu128 --with torchaudio==2.8.0+cu128 --with torchvision==0.23.0+cu128 \
   --index https://download.pytorch.org/whl/cu128 --index-strategy unsafe-best-match
 ```
