@@ -73,17 +73,32 @@ if defined FFMPEG_OK (
 )
 
 rem -- 3) O Transcritório em si (do PyPI; atualiza se já estiver instalado) ---
+rem    Conexão lenta estourava o tempo limite do uv em arquivos grandes
+rem    (~200 MB): 10 min por arquivo. E como o uv guarda o que já baixou,
+rem    uma 2ª tentativa é barata e resolve a maioria das falhas de rede —
+rem    ela grava um registro, cujas últimas linhas aparecem no erro
+rem    (caso real de beta tester: a causa rolava para fora da tela).
+set "UV_HTTP_TIMEOUT=600"
+set "LOG=%TEMP%\Transcritorio-instalador.log"
 "%UV_EXE%" tool list 2>nul | findstr /b /c:"transcritorio " >nul
 if not errorlevel 1 (
+    set "UV_CMD=tool upgrade transcritorio"
     echo  [3/3] O Transcritório já está instalado — atualizando...
     echo         ^(se o Transcritório estiver ABERTO agora, feche-o antes:
     echo          uma janela aberta impede a troca dos arquivos^)
-    "%UV_EXE%" tool upgrade transcritorio
 ) else (
+    set "UV_CMD=tool install transcritorio"
     echo  [3/3] Baixando o Transcritório e as dependências ^(PyPI^)...
-    "%UV_EXE%" tool install transcritorio
 )
+"%UV_EXE%" %UV_CMD%
+if not errorlevel 1 goto INSTALADO
+echo.
+echo  A primeira tentativa falhou ^(falhas de rede são comuns^). Tentando
+echo  de novo — desta vez sem barra de progresso, gravando o registro em:
+echo      %LOG%
+"%UV_EXE%" %UV_CMD% > "%LOG%" 2>&1
 if errorlevel 1 goto ERRO_REDE
+:INSTALADO
 
 rem -- Abrir o aplicativo (o 1º uso cria o atalho na área de trabalho) --------
 rem    O PATH desta janela é anterior ao winget: estender a sessão para o
@@ -136,12 +151,27 @@ goto FIM_ERRO
 
 :ERRO_REDE
 echo.
-echo  [!] O download ou a instalação do Transcritório falhou. Causas comuns:
+echo  [!] O download ou a instalação do Transcritório falhou.
+if exist "%LOG%" (
+    echo      Últimas linhas do registro ^(a causa costuma estar aqui^):
+    echo      ----------------------------------------------------------
+    powershell -NoProfile -Command "Get-Content -LiteralPath '%LOG%' -Tail 12 -Encoding UTF8"
+    echo      ----------------------------------------------------------
+    echo      Registro completo: %LOG%
+    echo      Mande esse arquivo ^(ou uma foto desta tela^) para quem lhe
+    echo      passou o instalador — é o que permite descobrir a causa.
+    echo.
+)
+echo      Causas comuns:
+echo      - Rede de universidade/empresa bloqueando downloads: peça à TI
+echo        para liberar pypi.org, files.pythonhosted.org, github.com e
+echo        astral.sh — ou tente em casa / no hotspot do celular.
+echo      - Conexão lenta: rode este instalador de novo ^(ele continua de
+echo        onde parou, não recomeça do zero^).
+echo      - Pouco espaço em disco: são necessários ~4 GB livres.
 echo      - O Transcritório estava ABERTO durante uma atualização: feche a
 echo        janela dele e rode este instalador de novo.
-echo      - Rede de universidade/empresa: peça à TI para liberar
-echo        pypi.org, files.pythonhosted.org, astral.sh e huggingface.co
-echo        — ou tente numa rede doméstica. Guia completo:
+echo      Guia completo:
 echo      https://github.com/antrologos/Transcritorio/blob/main/docs/INSTALL_WINDOWS.md
 goto FIM_ERRO
 

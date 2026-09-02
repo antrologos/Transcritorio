@@ -40,8 +40,19 @@ pause
 echo.
 echo  Procurando e instalando a versão mais nova...
 echo.
+rem Mesma blindagem do instalador: tempo limite maior para conexão lenta
+rem e uma 2ª tentativa com registro (o uv retoma do que já baixou).
+set "UV_HTTP_TIMEOUT=600"
+set "LOG=%TEMP%\Transcritorio-atualizador.log"
 "%UV_EXE%" tool upgrade transcritorio
+if not errorlevel 1 goto ATUALIZADO
+echo.
+echo  A primeira tentativa falhou ^(falhas de rede são comuns^). Tentando
+echo  de novo — desta vez sem barra de progresso, gravando o registro em:
+echo      %LOG%
+"%UV_EXE%" tool upgrade transcritorio > "%LOG%" 2>&1
 if errorlevel 1 goto ERRO_REDE
+:ATUALIZADO
 
 echo.
 echo  Pronto! Na próxima vez que abrir, o Transcritório já é o novo.
@@ -57,11 +68,22 @@ goto FIM
 
 :ERRO_REDE
 echo.
-echo  [!] A atualização falhou. Causas comuns:
+echo  [!] A atualização falhou.
+if exist "%LOG%" (
+    echo      Últimas linhas do registro ^(a causa costuma estar aqui^):
+    echo      ----------------------------------------------------------
+    powershell -NoProfile -Command "Get-Content -LiteralPath '%LOG%' -Tail 12 -Encoding UTF8"
+    echo      ----------------------------------------------------------
+    echo      Registro completo: %LOG%
+    echo.
+)
+echo      Causas comuns:
 echo      - O Transcritório ainda está ABERTO: feche a janela dele e rode
 echo        este atualizador de novo.
-echo      - Rede de universidade/empresa: peça à TI para liberar pypi.org
-echo        e files.pythonhosted.org — ou tente numa rede doméstica.
+echo      - Rede de universidade/empresa bloqueando downloads: peça à TI
+echo        para liberar pypi.org, files.pythonhosted.org e github.com —
+echo        ou tente em casa / no hotspot do celular.
+echo      - Conexão lenta: rode de novo ^(continua de onde parou^).
 echo      Nada foi quebrado: a versão atual continua funcionando.
 :FIM
 echo.

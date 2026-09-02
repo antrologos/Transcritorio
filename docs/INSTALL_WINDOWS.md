@@ -106,9 +106,20 @@ para abri-lo direto pelo caminho completo, sem esperar o PATH:
 (no primeiro uso ele cria o atalho "Transcritório" na área de trabalho,
 e daí em diante é só clicar nele).
 
-**Rede institucional com proxy** — o download do PyPI pode ser bloqueado.
-Peça ao setor de TI para liberar `pypi.org`, `files.pythonhosted.org`,
-`astral.sh` e `huggingface.co`, ou instale em uma rede doméstica.
+**"O download ou a instalação do Transcritório falhou"** — o instalador
+tenta duas vezes sozinho; se falhar de novo, ele mostra as últimas
+linhas do registro e grava o arquivo completo em
+`%TEMP%\Transcritorio-instalador.log` (cole esse caminho na barra do
+Explorer). Mande esse arquivo (ou uma foto da tela) para quem lhe passou
+o instalador. Causas comuns: rede institucional bloqueando downloads
+(abaixo), conexão lenta (rode de novo — continua de onde parou) e pouco
+espaço em disco (são ~4 GB livres).
+
+**Rede institucional com proxy** — o download pode ser bloqueado. Peça ao
+setor de TI para liberar `pypi.org`, `files.pythonhosted.org`,
+`github.com` (de onde o `uv` baixa o Python quando o computador não tem
+nenhum), `astral.sh` e `huggingface.co` — ou instale em casa ou no
+hotspot do celular.
 
 **Antivírus sinaliza algo** — a instalação usa só componentes oficiais;
 alarmes sobre `python.exe` em `%LOCALAPPDATA%` são falsos positivos. O

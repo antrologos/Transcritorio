@@ -1,5 +1,16 @@
 # Changelog
 
+## Não lançado
+
+- **Instalador .bat blindado contra falhas de rede** (caso real de beta
+  tester: a causa do erro rolava para fora da tela). Tempo limite de
+  download ampliado para conexões lentas (`UV_HTTP_TIMEOUT=600`), segunda
+  tentativa automática com registro em `%TEMP%\Transcritorio-instalador.log`
+  e as últimas linhas do registro impressas junto da mensagem de erro; a
+  lista de endereços a liberar na TI passa a citar o `github.com` (de
+  onde o `uv` baixa o Python) e o espaço em disco necessário (~4 GB).
+  Mesma blindagem no `Atualizar-Transcritorio.bat`.
+
 ## v0.2.2 — 2026-09-01
 
 - **TAGARELA vira o motor padrão em máquinas sem placa de vídeo**

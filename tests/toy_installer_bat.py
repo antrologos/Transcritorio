@@ -35,6 +35,17 @@ for caminho in (INSTALAR, ATUALIZAR):
         f"{caminho.name}: sem varredura do pacote portable")
     assert r"%USERPROFILE%\.local\bin\uv.exe" in texto, (
         f"{caminho.name}: sem fallback do instalador oficial da Astral")
+    # Blindagem de rede (2026-09-02, beta tester com a causa fora da tela):
+    # tempo limite maior, 2a tentativa com registro e as ultimas linhas do
+    # registro impressas junto do erro; a lista de hosts cita o GitHub
+    # (de onde o uv baixa o Python quando a maquina nao tem nenhum).
+    assert 'set "UV_HTTP_TIMEOUT=' in texto, f"{caminho.name}: sem tempo limite ampliado"
+    assert r"%TEMP%\Transcritorio-" in texto and ".log" in texto, (
+        f"{caminho.name}: sem registro da 2a tentativa")
+    assert "-Tail" in texto, f"{caminho.name}: erro nao mostra o registro"
+    assert "github.com e" in texto or "e github.com" in texto, (
+        f"{caminho.name}: hosts sem github.com")
+    assert texto.count('> "%LOG%" 2>&1') == 1, f"{caminho.name}: 2a tentativa ausente/duplicada"
     # ---- checklist de seguranca ----
     assert "http://" not in texto, f"{caminho.name}: http sem criptografia"
     baixo = texto.lower()
@@ -50,6 +61,8 @@ assert "tool install transcritorio" in texto
 assert "tool upgrade transcritorio" in texto  # idempotente: ja instalado -> upgrade
 assert "SEM_WINGET" in texto and "ERRO_REDE" in texto
 assert "files.pythonhosted.org" in texto  # mensagem de proxy/TI
+assert "4 GB" in texto  # espaco em disco como causa comum
+assert "INSTALADO" in texto  # rotulo da 2a tentativa bem-sucedida
 # So os DOIS IDs oficiais no winget — nenhum pacote extra
 ids = re.findall(r"--id (\S+)", texto)
 assert sorted(set(ids)) == ["Gyan.FFmpeg", "astral-sh.uv"], ids
