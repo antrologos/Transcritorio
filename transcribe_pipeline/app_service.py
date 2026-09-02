@@ -271,10 +271,12 @@ def diarize_interviews(
 
 def render_interviews(context: ProjectContext, ids: list[str] | None = None, overrides: dict[str, Any] | None = None) -> JobResult:
     failures = 0
+    reasons: list[str] = []
     for interview_id in selected_ids(context, ids):
         config = project_store.config_with_file_metadata(merged_config(context.config, overrides), context.metadata.get(interview_id))
-        failures += render_outputs(context.rows, config, context.paths, ids=[interview_id])
-    return JobResult("render", failures)
+        failures += render_outputs(context.rows, config, context.paths, ids=[interview_id], failure_log=reasons)
+    # A causa vai no message: a GUI a mostra junto de "N falha(s)".
+    return JobResult("render", failures, " ".join(reasons[:3]))
 
 
 def qc_interviews(context: ProjectContext, ids: list[str] | None = None) -> JobResult:

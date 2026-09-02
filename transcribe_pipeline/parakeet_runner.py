@@ -24,7 +24,6 @@ from __future__ import annotations
 import json
 import math
 import os
-import re
 import sys
 import time
 from pathlib import Path
@@ -36,13 +35,10 @@ from .manifest import selected_rows
 from . import model_manager, onnx_env, runtime
 from .model_manager import validate_local_diarization_model
 from .utils import (append_jsonl, now_utc, parse_progress_json_line,
-                    run_command_stream, sanitize_message,
+                    run_command_stream, safe_output_id, sanitize_message,
                     secure_subprocess_env, write_json)
 
 ProgressCallback = Callable[[dict[str, Any]], None]
-
-# Mesmo padrao de sanitizacao do mlx_whisper_runner/asr_output_dir.
-_SAFE_ID_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 SAMPLE_RATE = 16_000
 # Janela < 200 s (limite do export); overlap para o merge ter contexto.
@@ -428,7 +424,9 @@ def run_parakeet(
             break
 
         raw_id = str(row.get("interview_id", "") or "")
-        safe_id = _SAFE_ID_RE.sub("_", raw_id).strip("._")
+        # O nome de saida tem de ser o id CRU (o render procura por ele):
+        # so separadores de caminho viram "_". Ver utils.safe_output_id.
+        safe_id = safe_output_id(raw_id)
         if not safe_id:
             _emit(progress_callback, raw_id or "<sem_id>",
                   {"event": "asr_error", "progress": 0,

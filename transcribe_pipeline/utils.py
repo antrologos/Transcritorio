@@ -34,6 +34,24 @@ def now_utc() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+_OUTPUT_ID_UNSAFE_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]+')
+
+
+def safe_output_id(raw_id: str) -> str:
+    """Nome de arquivo de saida derivado do interview_id.
+
+    O id e o stem do arquivo de midia e TODO o pipeline (WAV, pyannote,
+    render.find_whisperx_json, canonical, review) o usa cru — a saida do
+    ASR tem de nascer com o nome IDENTICO, com espacos, acentos e o que
+    mais o sistema operacional aceitar. So separadores de caminho e
+    caracteres proibidos em nome de arquivo viram "_" (defesa contra
+    manifest editado a mao: "../../../evil" fica dentro da pasta). Vazio
+    ou so pontos/espacos devolve "" (invalido).
+    """
+    safe = _OUTPUT_ID_UNSAFE_RE.sub("_", str(raw_id or ""))
+    return safe if safe.strip("._ ") else ""
+
+
 def write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 

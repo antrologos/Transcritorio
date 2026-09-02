@@ -38,9 +38,10 @@ assert seq == sorted(seq), "progresso do hook precisa ser monotonico"
 print("PASS: mapeamento do hook do pyannote")
 
 # --- expectativa por device e nucleos (referencia: 24 nucleos logicos) ---
-assert abs(expected_diarization_seconds(300, "cpu", 24) - (45 + 120)) < 1e-6    # ~104 s medidos + carga
-assert abs(expected_diarization_seconds(3600, "cpu", 24) - (45 + 1440)) < 1e-6  # 1 h ~ 25 min
-assert abs(expected_diarization_seconds(3600, "cpu", 8) - (45 + 4320)) < 1e-6   # 8 nucleos: 3x
+# 0,12x com a rede 1x por janela (diar_fast): 62 min de audio em 7,1 min.
+assert abs(expected_diarization_seconds(300, "cpu", 24) - (45 + 36)) < 1e-6     # clipe: 48 s medidos
+assert abs(expected_diarization_seconds(3600, "cpu", 24) - (45 + 432)) < 1e-6   # 1 h ~ 8 min
+assert abs(expected_diarization_seconds(3600, "cpu", 8) - (45 + 1296)) < 1e-6   # 8 nucleos: 3x
 assert abs(expected_diarization_seconds(3600, "cuda", 24) - (20 + 100.8)) < 1e-6
 assert expected_diarization_seconds(0, "cpu", 24) == 45.0
 assert expected_diarization_seconds(3600, "cpu", 0) > 0   # cores invalido nao explode
@@ -62,7 +63,7 @@ print("PASS: heartbeat com real > creep")
 
 # --- estimativa do lote (janela "quantas pessoas falam" em CPU) ---
 asr, diar = batch_time_estimate(3600, "parakeet_onnx", "cpu", 24)
-assert 200 < asr < 240 and abs(diar - 1485) < 1e-6, (asr, diar)
+assert 200 < asr < 240 and abs(diar - 477) < 1e-6, (asr, diar)
 asr4, diar4 = batch_time_estimate(3600, "parakeet_onnx", "cpu", 8)
 assert abs(asr4 - asr) < 1e-6 and diar4 > diar
 asr, _ = batch_time_estimate(3600, None, "cpu", 24)

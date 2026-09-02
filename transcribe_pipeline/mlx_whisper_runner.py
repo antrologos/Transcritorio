@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import math
 import os
-import re
 import threading
 import time
 from pathlib import Path
@@ -22,13 +21,8 @@ from .config import Paths
 from .manifest import selected_rows
 from . import runtime
 from .model_manager import diarize_effective, validate_local_diarization_model
-from .utils import append_jsonl, format_timestamp, now_utc, sanitize_message, write_json
-
-
-# Same safe pattern asr_output_dir() uses for variant names. interview_id
-# comes from manifest.csv which is user-editable; enforce safety before
-# using it as a path component.
-_SAFE_ID_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+from .utils import (append_jsonl, format_timestamp, now_utc, safe_output_id,
+                    sanitize_message, write_json)
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
@@ -191,9 +185,9 @@ def run_mlx_whisper(
             break
 
         raw_id = str(row.get("interview_id", "") or "")
-        # Defuse path traversal / shell chars / empty: accept only safe chars,
-        # matching the pattern asr_output_dir() uses for variants.
-        safe_id = _SAFE_ID_RE.sub("_", raw_id).strip("._")
+        # O nome de saida tem de ser o id CRU (o render procura por ele):
+        # so separadores de caminho viram "_". Ver utils.safe_output_id.
+        safe_id = safe_output_id(raw_id)
         if not safe_id:
             _emit(progress_callback, raw_id or "<sem_id>",
                   {"event": "asr_error", "progress": 0,

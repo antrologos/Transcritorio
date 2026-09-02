@@ -94,7 +94,7 @@ https://www.gyan.dev/ffmpeg/builds/ (adicione a pasta `bin` ao PATH).
 Comando (o PATH só atualiza em janelas novas).
 
 **A barra parece parada na "separação de falantes"** — sem placa de
-vídeo, essa é a etapa demorada: de 25 min a ~1 h por hora de áudio,
+vídeo, essa é a etapa demorada: de ~7 a ~20 min por hora de áudio,
 conforme o processador (a transcrição em si leva minutos). Desde a
 v0.2.3 a barra mostra o progresso real e uma estimativa; e ao clicar em
 Transcrever dá para desmarcar **"Separar falantes agora"** — o texto fica

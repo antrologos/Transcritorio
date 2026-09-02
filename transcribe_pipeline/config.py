@@ -89,6 +89,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # silencios/sobreposicoes segundo o modelo + margem de confianca da
     # atribuicao de voz por trecho (03_diarization/signals/).
     "diarization_capture_signals": True,
+    # Embeddings com a rede 1x por janela (2026-09-02): ~3x mais rapido em
+    # CPU, saida numericamente identica. False = caminho original do pyannote.
+    "diarization_fast_embeddings": True,
     # Margem (cos ao proprio centroide - cos ao 2o colocado) abaixo da qual
     # a atribuicao de voz do trecho e marcada como incerta. Margem negativa
     # = o proprio modelo prefere OUTRA voz no trecho. Calibrado em entrevista

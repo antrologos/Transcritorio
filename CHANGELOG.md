@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.2.4 — 2026-09-02
+
+Correção de um relato real de beta (arquivo com espaço no nome falhava ao
+montar a transcrição editável, depois de mais de uma hora separando
+falantes), a causa das falhas visível no diálogo, e a separação de
+falantes ~3× mais rápida em CPU.
+
+- **Separação de falantes ~3× mais rápida em CPU, com resultado idêntico.**
+  Medição de 2026-09-02: 94% do tempo dessa etapa era a rede de
+  embeddings (ResNet34) rodando **três vezes por janela de 10 s** — uma por
+  vaga de falante, mesmo numa entrevista a dois — sendo que a máscara de
+  quem fala só entra no *pooling* final. Agora a rede roda uma vez por
+  janela e só o pooling é feito por falante (`diar_fast.py`), sem tocar o
+  pyannote instalado: embeddings numericamente iguais (diferença máxima
+  4×10⁻⁸, cos-sim 1,000000 no teste contra o caminho original) e mesmos
+  hooks de progresso. Numa entrevista real de 62 min em CPU: **24,7 min →
+  7,1 min**, com separação de falantes idêntica (DER 0,000%, mesmos 648
+  segmentos). A estimativa mostrada ao transcrever acompanha (1 h de áudio
+  ≈ 7 min na máquina de referência; ~20 min num notebook de 4 núcleos).
+  Chave de escape `diarization_fast_embeddings: false` no `run_config.yaml`.
+- **Corrigido: arquivo com espaço ou acento no nome falhava em "montando
+  transcrição editável: 1 falha(s)"** com o TAGARELA (e com o MLX no Mac) —
+  depois de gastar a hora inteira da separação de falantes. O motor gravava
+  o texto transcrito com o nome "sanitizado" (`Sonia_Venancio.json` para
+  `Sonia Venancio.m4a`; acentos e cedilha também viravam `_`), e a etapa
+  final procurava pelo nome original. Agora a saída nasce com o nome
+  idêntico ao do arquivo: vale qualquer nome que o sistema operacional
+  aceite (espaços, acentos, maiúsculas, parênteses, colchetes, `&`, `%`,
+  `#`, apóstrofo…); só separadores de caminho viram `_`
+  (`utils.safe_output_id`, defesa contra manifest editado à mão). Quem já
+  tem a separação de falantes pronta não precisa refazê-la: basta
+  transcrever de novo sem "Separar falantes agora" e a montagem a
+  aproveita. Reproduzido ponta a ponta com
+  `Entrevista (Sônia) ÇÃO & cia [2], 100% #1 O'Neil.m4a`.
+- **A causa real de uma falha agora aparece.** O diálogo dizia só
+  "montando transcrição editável: 1 falha(s)" e o motivo ia para o
+  console. A montagem passa a devolver a causa ("Não encontrei o texto
+  transcrito de … (pasta Transcricoes/02_asr_raw)"), e ela aparece no
+  diálogo de erro e na fila de processamento (Ferramentas).
+
 ## v0.2.3 — 2026-09-02
 
 Correções guiadas por três relatos reais de beta testers (instalação

@@ -519,6 +519,15 @@ def engine_offer_due(
     return True
 
 
+def failure_summary(failures: int, message: str | None) -> str:
+    """Texto de uma etapa com falhas: "N falha(s)." + a causa que o servico
+    devolveu em JobResult.message (pura). Incidente 2026-09-02: "1 falha(s)."
+    sozinho escondia "Não encontrei o texto transcrito de …"."""
+    base = f"{failures} falha(s)."
+    detail = str(message or "").strip()
+    return f"{base} {detail}" if detail else base
+
+
 def job_step_flags(do_diarize: bool, boundary_cfg: bool, diarize_now: bool | None) -> tuple[bool, bool]:
     """(diarizar, conferir trocas) de UM lote (pura).
 
@@ -1532,7 +1541,8 @@ if QT_IMPORT_ERROR is None:
                             result = func()
                         failures = getattr(result, "failures", 0)
                         if failures:
-                            raise RuntimeError(f"{message}: {failures} falha(s).")
+                            raise RuntimeError(
+                                f"{message}: {failure_summary(failures, getattr(result, 'message', ''))}")
                     except Exception as exc:
                         if self.cancel_after_step:
                             self.finished_ok.emit(f"{self.label} cancelado.")
@@ -10729,7 +10739,7 @@ if QT_IMPORT_ERROR is None:
                                 "status": "Falha",
                                 "stage": stage,
                                 "progress": start_progress,
-                                "last_error": f"{failures} falha(s).",
+                                "last_error": failure_summary(failures, getattr(result, "message", "")),
                                 "finished_at": datetime.now().isoformat(timespec="seconds"),
                                 "estimated_finish_at": "",
                             },

@@ -24,7 +24,15 @@ FLAG_DISPLAY_LABELS = {
 }
 
 
-def render_outputs(rows: list[dict[str, str]], config: dict, paths: Paths, ids: list[str] | None = None) -> int:
+def render_outputs(
+    rows: list[dict[str, str]],
+    config: dict,
+    paths: Paths,
+    ids: list[str] | None = None,
+    failure_log: list[str] | None = None,
+) -> int:
+    """Devolve o numero de falhas; quando `failure_log` e dado, anexa a causa
+    legivel de cada uma (a GUI so via "1 falha(s)." e escondia o motivo)."""
     failures = 0
     speaker_map = read_speaker_map(paths.manifest_dir / "speakers_map.csv")
     for row in selected_rows(rows, ids):
@@ -32,6 +40,11 @@ def render_outputs(rows: list[dict[str, str]], config: dict, paths: Paths, ids: 
         source_json = find_whisperx_json(paths, interview_id)
         if not source_json:
             print(f"Missing WhisperX JSON for {interview_id}")
+            if failure_log is not None:
+                failure_log.append(
+                    f"Não encontrei o texto transcrito de {interview_id} "
+                    "(pasta Transcricoes/02_asr_raw)."
+                )
             failures += 1
             continue
         data = read_json(source_json)

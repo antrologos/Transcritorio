@@ -321,8 +321,9 @@ def cpu_speed_warning(hw: Hardware) -> str:
 # Segundos de maquina por segundo de audio, medidos na maquina de
 # referencia (os.cpu_count() = 24 nucleos logicos, RTX 4060): TAGARELA
 # 16,5x tempo real em CPU (26,4 h em 96 min) e ~62x em GPU; Whisper small
-# 1,1x em CPU; turbo 5-10 min por hora em GPU. Diarizacao: 0,40x em CPU
-# (300 s de audio em 104 s), 0,028x em GPU. Escala por 24/cpu_count().
+# 1,1x em CPU; turbo 5-10 min por hora em GPU. Diarizacao: 0,12x em CPU
+# com a rede de embeddings 1x por janela (diar_fast, 2026-09-02: 62 min de
+# audio em 7,1 min; era 0,40x), 0,028x em GPU. Escala por 24/cpu_count().
 _REF_LOGICAL_CORES = 24
 _ASR_SECONDS_PER_AUDIO_SECOND = {
     ("parakeet_onnx", "cpu"): 1 / 16.5,
@@ -338,7 +339,7 @@ def expected_diarization_seconds(audio_seconds: float, device: str, cores: int) 
     if device == "cuda":
         return 20.0 + 0.028 * audio
     escala = _REF_LOGICAL_CORES / max(1, int(cores or 1))
-    return 45.0 + 0.40 * audio * escala
+    return 45.0 + 0.12 * audio * escala
 
 
 def batch_time_estimate(total_audio_s: float, engine: str | None, device: str, cores: int) -> tuple[float, float]:

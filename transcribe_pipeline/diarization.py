@@ -186,6 +186,16 @@ def run_pyannote_diarization(
         pipeline.instantiate(custom_params)
         print(f"[{_ts()}] [diarize] Hiperparametros customizados: {custom_params}", flush=True)
 
+    # Rede de embeddings 1x por janela (2026-09-02): 94% do tempo em CPU era
+    # a ResNet34 rodando 3x por janela; mesma matematica, saida identica
+    # (tests/toy_diar_fast). Chave de escape: diarization_fast_embeddings.
+    if bool(config.get("diarization_fast_embeddings", True)):
+        from .diar_fast import install_fast_embeddings
+        if install_fast_embeddings(pipeline):
+            print(f"[{_ts()}] [diarize] embeddings: rede 1x por janela (rapido).", flush=True)
+        else:
+            print(f"[{_ts()}] [diarize] embeddings: caminho original (modelo sem forward_frames).", flush=True)
+
     print(f"[{_ts()}] [diarize] Pipeline carregado.", flush=True)
     emit("diarize_progress", 20, "Modelo carregado.")
     total = len(rows_to_run)
