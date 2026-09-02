@@ -61,4 +61,39 @@ lib = onnx_env.torch_lib_dir()
 assert lib is None or lib.is_dir()
 print("PASS: torch_lib_dir")
 
+# --- Python do pacote (2026-09-02): wheel de outro Python nao carrega ---
+import sys as _sys
+assert onnx_env.python_tag((3, 12)) == "cp312" and onnx_env.python_tag((3, 13)) == "cp313"
+assert onnx_env.python_tag() == f"cp{_sys.version_info.major}{_sys.version_info.minor}"
+assert onnx_env.env_spec()["python"] == onnx_env.python_tag()
+cmd = onnx_env.install_command("uv", Path("d"), onnx_env.env_spec(), python=r"C:\x\python.exe")
+assert cmd[cmd.index("--python") + 1] == r"C:\x\python.exe" and cmd[-1] == onnx_env.PACKAGE
+assert "--python" not in onnx_env.install_command("uv", Path("d"), onnx_env.env_spec())
+with tempfile.TemporaryDirectory() as td:
+    env_dir = Path(td) / "onnx-gpu"
+    canary = env_dir / "onnxruntime" / "capi" / "onnxruntime_providers_cuda.dll"
+    canary.parent.mkdir(parents=True)
+    canary.write_bytes(b"x")
+    outro = "cp313" if onnx_env.python_tag() != "cp313" else "cp312"
+    # marcador de outro Python: nao pronto, com motivo legivel
+    onnx_env.marker_path(env_dir).write_text(
+        json.dumps({"version": onnx_env.ONNX_ENV_SPEC_VERSION, "python": outro}), encoding="utf-8")
+    assert onnx_env.onnx_env_ready(env_dir) is False
+    assert "Python" in onnx_env.onnx_env_stale_reason(env_dir)
+    # marcador do Python atual: pronto
+    onnx_env.marker_path(env_dir).write_text(
+        json.dumps({"version": onnx_env.ONNX_ENV_SPEC_VERSION, "python": onnx_env.python_tag()}), encoding="utf-8")
+    assert onnx_env.onnx_env_ready(env_dir) is True and onnx_env.onnx_env_stale_reason(env_dir) == ""
+    # marcador antigo (sem "python"): decide pela wheel instalada
+    onnx_env.marker_path(env_dir).write_text(
+        json.dumps({"version": onnx_env.ONNX_ENV_SPEC_VERSION}), encoding="utf-8")
+    dist = env_dir / "onnxruntime_gpu-1.22.0.dist-info"
+    dist.mkdir()
+    (dist / "WHEEL").write_text(f"Wheel-Version: 1.0\nTag: {outro}-{outro}-win_amd64\n", encoding="utf-8")
+    assert onnx_env.installed_python_tag(env_dir) == outro
+    assert onnx_env.onnx_env_ready(env_dir) is False
+    (dist / "WHEEL").write_text(f"Tag: {onnx_env.python_tag()}-{onnx_env.python_tag()}-win_amd64\n", encoding="utf-8")
+    assert onnx_env.onnx_env_ready(env_dir) is True
+print("PASS: python_tag / onnx_env_stale_reason / install_command --python")
+
 print("PASS: toy_onnx_env")

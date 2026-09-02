@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.2.6 — 2026-09-02
+
+- **Corrigido: a aceleração GPU do TAGARELA parava de funcionar em
+  silêncio quando o Python do app mudava.** O pacote `onnxruntime-gpu` é
+  por versão de Python; o instalado no 3.13 (v0.2.2) não carregava no 3.12
+  (v0.2.3+): o worker falhava com "DLL load failed" e a transcrição caía
+  para o processador (8–16× o tempo real em vez de ~60×) — numa máquina
+  com placa NVIDIA, sem aviso que ficasse. Agora o app registra o Python do
+  pacote, detecta a incompatibilidade ("Incompleto — precisa ser
+  reinstalada: o pacote foi instalado para o Python 3.13…" em Gerenciar
+  modelos), oferece a reinstalação ao transcrever mesmo para quem havia
+  recusado a oferta original, instala a wheel do Python certo
+  (`--python` do próprio app) e recusa uma instalação que venha para outro
+  Python. A queda para a CPU passa a ficar registrada na fila de
+  processamento (`gpu_fallback`).
+- **Progresso do lote em dois níveis, sem números confusos.** Durante um
+  lote, a coluna Transcrição ficava em "Processando 0%" para todos os
+  arquivos (a lista só era redesenhada no fim) e a barra de baixo mostrava
+  dois percentuais com significados diferentes (o do lote e o interno do
+  motor). Agora **cada arquivo mostra a própria etapa e o próprio avanço**
+  na lista ("Transcrevendo 46%", "Separando falantes 12%", "Na fila",
+  "Transcrita" assim que termina, com "(WAV pronto)"), atualizada a cada
+  1,5 s sem reconstruir a tabela; e a **barra de baixo é só o lote**:
+  "Arquivo 2 de 5 · F03R_0729 · transcrevendo com o TAGARELA… · ~12 min
+  restantes". O filtro "Processando" da lista acompanha.
+
 ## v0.2.5 — 2026-09-02
 
 Três decisões de produto num só lançamento, todas com medição: o passo de

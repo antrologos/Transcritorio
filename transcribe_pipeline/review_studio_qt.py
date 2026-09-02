@@ -10,6 +10,7 @@ import logging
 import os
 import shutil
 import glob
+import re
 import subprocess
 import sys
 import time
@@ -562,6 +563,72 @@ def engine_offer_due(
     if busy or declined:
         return False
     return engine != "parakeet_onnx"
+
+
+# --- Progresso do lote em DOIS niveis (decisao do usuario, 2026-09-02) -------
+# Lista: cada arquivo mostra a propria etapa e o proprio avanco. Barra de
+# baixo: so o lote ("Arquivo k de n · id · atividade · ~M min restantes"),
+# sem o percentual interno do motor no texto — tres numeros com tres
+# significados confundiam. Puras, cobertas por tests/toy_progress_rows.
+_STAGE_VERBS: dict[str, str] = {
+    "aguardando": "Na fila",
+    "preparar audio": "Preparando áudio",
+    "transcrever": "Transcrevendo",
+    "identificar falantes": "Separando falantes",
+    "montar transcricao": "Montando transcrição",
+    "conferir trocas": "Conferindo trocas",
+    "recriar transcricao": "Recriando transcrição",
+    "verificar arquivos": "Verificando",
+}
+
+
+def row_progress_text(job: dict[str, Any] | None) -> str | None:
+    """Texto da coluna Transcrição para um job em andamento; None quando o
+    job nao esta em andamento (a linha precisa do estado completo)."""
+    job = job or {}
+    status = str(job.get("status") or "")
+    if status == "Na fila":
+        return "Na fila"
+    if status != "Rodando":
+        return None
+    verbo = _STAGE_VERBS.get(str(job.get("stage") or "").strip().lower(), "Processando")
+    try:
+        pct = max(0, min(100, int(job.get("progress") or 0)))
+    except (TypeError, ValueError):
+        pct = 0
+    return f"{verbo} {pct}%"
+
+
+def strip_percent(text: str) -> str:
+    """Tira percentuais internos ("(46%)", "— 30%") do texto de atividade."""
+    s = re.sub(r"\s*[—–-]\s*\d{1,3}%", "", str(text or ""))
+    s = re.sub(r"\s*\(\d{1,3}%\)", "", s)
+    s = re.sub(r"\s*\b\d{1,3}%", "", s)
+    return re.sub(r"[ \t]{2,}", " ", s).strip()
+
+
+def strip_step_prefix(message: str) -> str:
+    """Remove o prefixo "k/n ID: " das mensagens de etapa do lote."""
+    return re.sub(r"^\d+/\d+\s+\S+:\s*", "", str(message or ""))
+
+
+def eta_text(remaining_s: float) -> str:
+    remaining_s = max(0.0, float(remaining_s))
+    if remaining_s < 90:
+        return "menos de 2 min restantes"
+    mins = int(round(remaining_s / 60))
+    if mins < 60:
+        return f"~{mins} min restantes"
+    horas, resto = divmod(mins, 60)
+    return f"~{horas} h {resto:02d} min restantes"
+
+
+def batch_label(k: int, n: int, group: str, atividade: str, remaining_s: float | None) -> str:
+    """Rotulo da barra de baixo durante um lote por arquivo (pura)."""
+    partes = [f"Arquivo {k} de {n}", str(group or ""), strip_percent(strip_step_prefix(atividade))]
+    if remaining_s is not None:
+        partes.append(eta_text(remaining_s))
+    return " · ".join(p for p in partes if p)
 
 
 def failure_summary(failures: int, message: str | None) -> str:
@@ -1543,6 +1610,23 @@ if QT_IMPORT_ERROR is None:
             self.weights = weights or [1] * len(steps)
             self.cancel_after_step = False
             self.started_monotonic = time.monotonic()
+            # Arquivos do lote (grupos), na ordem: "Arquivo k de n" na barra.
+            self._groups: list[str] = []
+            for step in steps:
+                grupo = str(step[3]) if len(step) >= 4 and step[3] else None
+                if grupo and grupo not in self._groups:
+                    self._groups.append(grupo)
+
+        def label_for(self, index: int, group: str | None, atividade: str, percent: int) -> str:
+            """Texto da barra: por arquivo num lote; "Etapa i de N" nos jobs
+            de passo unico (sem grupo)."""
+            if group is None or group not in self._groups:
+                return f"Etapa {index} de {len(self.steps)}: {atividade}"
+            remaining = None
+            elapsed = time.monotonic() - self.started_monotonic
+            if percent >= 3 and elapsed >= 8:
+                remaining = elapsed * (100 - percent) / max(1, percent)
+            return batch_label(self._groups.index(group) + 1, len(self._groups), group, atividade, remaining)
 
         def request_cancel_after_step(self) -> None:
             self.cancel_after_step = True
@@ -1573,11 +1657,11 @@ if QT_IMPORT_ERROR is None:
                     if group is not None and group in failed_groups:
                         completed_weight += weight  # barra nao congela
                         continue
-                    self.progress.emit(f"Etapa {index} de {len(self.steps)}: {message}", start_percent)
+                    self.progress.emit(self.label_for(index, group, message, start_percent), start_percent)
                     try:
                         if accepts_progress:
                             result = func(
-                                self.step_progress_callback(index, len(self.steps), message, start_percent, end_percent),
+                                self.step_progress_callback(index, len(self.steps), message, start_percent, end_percent, group),
                                 self.is_cancel_requested,
                             )
                         else:
@@ -1596,14 +1680,16 @@ if QT_IMPORT_ERROR is None:
                         group_errors.setdefault(group, sanitize_message(str(exc)))
                         completed_weight += weight
                         self.progress.emit(
-                            f"Etapa {index} de {len(self.steps)}: {message} — falhou; "
-                            "continuando com o próximo arquivo.",
+                            self.label_for(index, group, f"{message} — falhou; continuando com o próximo arquivo.", end_percent),
                             end_percent,
                         )
                         _logger.warning("Arquivo %s falhou no lote: %s", group, exc)
                         continue
                     completed_weight += weight
-                    self.progress.emit(f"Etapa {index} de {len(self.steps)} concluída: {message}", end_percent)
+                    self.progress.emit(
+                        self.label_for(index, group, message, end_percent) if group is not None
+                        else f"Etapa {index} de {len(self.steps)} concluída: {message}",
+                        end_percent)
                     if self.cancel_after_step and index < len(self.steps):
                         self.finished_ok.emit(f"{self.label} interrompido apos a etapa atual.")
                         return
@@ -1633,7 +1719,8 @@ if QT_IMPORT_ERROR is None:
                 return str(step[0]), step[1], bool(step[2]), group
             return str(step[0]), step[1], False, None
 
-        def step_progress_callback(self, index: int, total: int, message: str, start_percent: int, end_percent: int) -> Callable[[dict[str, Any]], None]:
+        def step_progress_callback(self, index: int, total: int, message: str, start_percent: int, end_percent: int,
+                                   group: str | None = None) -> Callable[[dict[str, Any]], None]:
             def callback(detail: dict[str, Any]) -> None:
                 progress_value = detail.get("progress")
                 try:
@@ -1652,7 +1739,7 @@ if QT_IMPORT_ERROR is None:
                     label = str(detail_message)
                 else:
                     label = message
-                self.progress.emit(f"Etapa {index} de {total}: {label}", percent)
+                self.progress.emit(self.label_for(index, group, label, percent), percent)
 
             return callback
 
@@ -2308,10 +2395,12 @@ if QT_IMPORT_ERROR is None:
                                  "O motor Parakeet usa a GPU quando o Dispositivo "
                                  "é Automático ou GPU."))
                 elif dir_gpu.exists():
+                    motivo_gpu = _onnx_env.onnx_env_stale_reason()
                     rows.append((rotulo_gpu, "env:onnx_gpu", 0, "Incompleto",
                                  "-", False, "env:onnx_gpu", gb_gpu,
-                                 "Instalação incompleta ou desatualizada — "
-                                 "Baixar refaz do zero."))
+                                 (f"Precisa ser reinstalada: {motivo_gpu}. " if motivo_gpu else
+                                  "Instalação incompleta ou desatualizada — ")
+                                 + "Baixar refaz do zero."))
                 else:
                     vram_gpu = _rt.total_vram_gb()
                     aviso_gpu = ("" if vram_gpu is None or vram_gpu >= 6.0 else
@@ -6248,25 +6337,38 @@ if QT_IMPORT_ERROR is None:
             self._parakeet_gpu_prompted = True
             from . import onnx_env as _onnx_env, runtime as _runtime
             flag = _runtime.app_data_dir() / "parakeet_gpu_prompt_dismissed.flag"
-            if flag.exists():
-                return
             if _onnx_env.onnx_env_ready() or not _runtime.cuda_libs_present():
+                return
+            # Pacote instalado para OUTRO Python (2026-09-02): o worker falhava
+            # e o TAGARELA caia para a CPU calado. Reinstalar vale a pergunta
+            # mesmo para quem recusou a oferta original.
+            motivo = _onnx_env.onnx_env_stale_reason() if _onnx_env.onnx_env_dir().exists() else ""
+            if flag.exists() and not motivo:
                 return
             from . import capabilities as _caps
             hw = _caps.hardware_snapshot()
             if not hw.has_gpu:
                 return
-            if hw.vram_gb is not None and hw.vram_gb < 6.0:
+            if hw.vram_gb is not None and hw.vram_gb < 6.0 and not motivo:
                 return
             box = QMessageBox(self)
-            box.setWindowTitle("Acelerar o Parakeet na GPU?")
             box.setIcon(QMessageBox.Icon.Question)
-            box.setText(
-                "O motor Parakeet pode usar a sua placa NVIDIA e ficar "
-                "cerca de 4x mais rápido (uma hora de gravação em ~1 minuto).\n\n"
-                "Instalar a aceleração agora (uma vez, ~0,3 GB)? Sem ela, a "
-                "transcrição segue normalmente no processador.")
-            instalar = box.addButton("Instalar agora", QMessageBox.ButtonRole.AcceptRole)
+            if motivo:
+                box.setWindowTitle("Reinstalar a aceleração do Parakeet na GPU?")
+                box.setText(
+                    f"A aceleração GPU do motor Parakeet parou de funcionar: {motivo}. "
+                    "Sem ela, a transcrição está saindo no processador — cerca de 4x "
+                    "mais devagar.\n\n"
+                    "Reinstalar a aceleração agora (uma vez, ~0,3 GB)?")
+                instalar = box.addButton("Reinstalar agora", QMessageBox.ButtonRole.AcceptRole)
+            else:
+                box.setWindowTitle("Acelerar o Parakeet na GPU?")
+                box.setText(
+                    "O motor Parakeet pode usar a sua placa NVIDIA e ficar "
+                    "cerca de 4x mais rápido (uma hora de gravação em ~1 minuto).\n\n"
+                    "Instalar a aceleração agora (uma vez, ~0,3 GB)? Sem ela, a "
+                    "transcrição segue normalmente no processador.")
+                instalar = box.addButton("Instalar agora", QMessageBox.ButtonRole.AcceptRole)
             box.addButton("Agora não", QMessageBox.ButtonRole.RejectRole)
             nunca = box.addButton("Não perguntar de novo", QMessageBox.ButtonRole.DestructiveRole)
             box.exec()
@@ -7823,7 +7925,8 @@ if QT_IMPORT_ERROR is None:
                     # Arquivo com falha continua pendente de transcricao.
                     show_by_status = state_text in ("Não transcrita", "Falha")
                 elif status_filter == "Processando":
-                    show_by_status = state_text.startswith("Processando")
+                    # Em andamento: "Na fila" ou "<etapa> N%" (row_progress_text)
+                    show_by_status = state_text == "Na fila" or state_text.endswith("%")
                 show_by_text = (text_filter in real_id or text_filter in displayed_text) if text_filter else True
                 hidden = not (show_by_status and show_by_text)
                 self.interview_table.setRowHidden(row_idx, hidden)
@@ -7837,8 +7940,9 @@ if QT_IMPORT_ERROR is None:
 
         def friendly_state(self, status: Any, job: dict[str, Any] | None = None) -> str:
             job = job or {}
-            if job.get("status") in {"Na fila", "Rodando"}:
-                return f"Processando {job.get('progress', 0)}%"
+            em_andamento = row_progress_text(job)
+            if em_andamento is not None:
+                return em_andamento
             if status.review_exists or status.canonical_exists:
                 # Falha em RETRANSCRICAO nao esconde transcricao utilizavel.
                 return "Transcrita"
@@ -12157,6 +12261,56 @@ if QT_IMPORT_ERROR is None:
             self.progress_label.setText(message)
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(max(0, min(100, percent)))
+            self._refresh_running_rows()
+
+        def _refresh_running_rows(self, force: bool = False) -> None:
+            """Coluna Transcrição por arquivo DURANTE o lote (2026-09-02).
+
+            A thread do lote grava o avanco de cada arquivo em jobs.json
+            (job_step/relay), mas a lista so era redesenhada no fim: todos
+            ficavam em "Processando 0%". Aqui, no maximo a cada 1,5 s, o
+            jobs.json e lido e so as CELULAS mudam — nada de reconstruir a
+            tabela (selecao, rolagem e a transcricao aberta ficam intactas).
+            Quem sai de "Rodando" tem a linha recalculada ("Transcrita",
+            "(WAV pronto)").
+            """
+            if self.context is None or not hasattr(self, "interview_table"):
+                return
+            agora = time.monotonic()
+            if not force and agora - getattr(self, "_rows_refresh_at", 0.0) < 1.5:
+                return
+            self._rows_refresh_at = agora
+            from . import project_store as _ps_rows
+            try:
+                jobs = _ps_rows.read_json(_ps_rows.jobs_path(self.context.paths)) or {}
+            except Exception:  # noqa: BLE001 - arquivo em escrita: tenta no proximo sinal
+                return
+            anteriores: set[str] = getattr(self, "_rows_running", set())
+            em_andamento: set[str] = set()
+            for row_idx in range(self.interview_table.rowCount()):
+                id_item = self.interview_table.item(row_idx, COL_ARQUIVO)
+                state_item = self.interview_table.item(row_idx, COL_TRANSCRICAO)
+                if not id_item or not state_item:
+                    continue
+                iid = str(id_item.data(Qt.ItemDataRole.UserRole) or "")
+                job = jobs.get(iid) or {}
+                texto = row_progress_text(job)
+                if texto is not None:
+                    em_andamento.add(iid)
+                    if state_item.text() != texto:
+                        state_item.setText(texto)
+                elif iid in anteriores:
+                    try:
+                        from .status import collect_status as _collect
+                        estados = _collect(self.context.rows, self.context.paths, ids=[iid])
+                    except Exception:  # noqa: BLE001
+                        estados = []
+                    if estados:
+                        state_item.setText(self.friendly_state(estados[0], job))
+                        fmt_item = self.interview_table.item(row_idx, COL_FORMATO)
+                        if fmt_item:
+                            fmt_item.setText(media_format_label(estados[0]))
+            self._rows_running = em_andamento
 
         def on_worker_done(self, message: str) -> None:
             finished_label = self.current_job_label

@@ -473,6 +473,7 @@ def run_parakeet(
 
         started = time.monotonic()
         device_used = "cuda" if plan == "gpu" else "cpu"
+        gpu_fallback_reason = ""
         try:
             offsets: list[float] = []
             per_window: list[list[dict[str, Any]]] = []
@@ -489,6 +490,8 @@ def run_parakeet(
                     _GPU_FAILED_THIS_SESSION = True
                     plan = "cpu"
                     device_used = "cpu"
+                    gpu_fallback_reason = sanitize_message(str(exc))[:200]
+                    print(f"[Transcritorio] Parakeet: GPU falhou ({gpu_fallback_reason}) — continuando no processador.")
                     _emit(progress_callback, interview_id,
                           {"event": "asr_progress", "progress": 1,
                            "message": ("A GPU falhou; continuando no processador. "
@@ -566,7 +569,7 @@ def run_parakeet(
                "message": f"Parakeet ({rotulo_device}) concluido em {elapsed:.1f}s"})
         _log_job(paths, interview_id, repo, config, "ok",
                  output_dir=str(output_dir), elapsed_s=elapsed,
-                 device=device_used)
+                 device=device_used, gpu_fallback=gpu_fallback_reason or None)
 
     return failures
 
@@ -613,6 +616,7 @@ def _log_job(
     elapsed_s: float | None = None,
     error: str | None = None,
     device: str = "cpu",
+    gpu_fallback: str | None = None,
 ) -> None:
     # Mesmo schema do jobs.jsonl do whisperx_runner/mlx_whisper_runner;
     # backend distingue o produtor, align documenta a decisao (tempos
@@ -638,4 +642,8 @@ def _log_job(
         entry["elapsed_s"] = round(elapsed_s, 2)
     if error is not None:
         entry["error"] = error
+    if gpu_fallback:
+        # A GPU estava prevista e falhou: a queda para a CPU fica registrada
+        # (2026-09-02: era invisivel — so um flash na barra de status).
+        entry["gpu_fallback"] = gpu_fallback
     append_jsonl(paths.manifest_dir / "jobs.jsonl", entry)

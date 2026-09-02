@@ -22,6 +22,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -46,15 +47,61 @@ def marker_path(env_dir: Path | None = None) -> Path:
     return (env_dir or onnx_env_dir()) / MARKER_FILENAME
 
 
+def python_tag(version_info: tuple[int, int] | None = None) -> str:
+    """Tag ABI do interpretador ("cp312"): a wheel do onnxruntime-gpu e por
+    versao de Python e o .pyd nao carrega em outra (pura)."""
+    major, minor = version_info or (sys.version_info.major, sys.version_info.minor)
+    return f"cp{major}{minor}"
+
+
 def env_spec() -> dict[str, Any]:
     """Especificacao declarativa (pura, testavel)."""
-    return {"version": ONNX_ENV_SPEC_VERSION, "package": PACKAGE}
+    return {"version": ONNX_ENV_SPEC_VERSION, "package": PACKAGE, "python": python_tag()}
 
 
-def install_command(uv: str, env_dir: Path, spec: dict[str, Any]) -> list[str]:
-    """Comando uv para popular o diretorio (puro, testavel)."""
-    return [uv, "pip", "install", "--target", str(env_dir), "--no-deps",
-            str(spec["package"])]
+def installed_python_tag(env_dir: Path) -> str:
+    """Tag de Python da wheel instalada no diretorio, pelo WHEEL do
+    dist-info ("cp313" de "Tag: cp313-cp313-win_amd64"); "" se ilegivel."""
+    for wheel in env_dir.glob("onnxruntime_gpu-*.dist-info/WHEEL"):
+        try:
+            for line in wheel.read_text(encoding="utf-8").splitlines():
+                if line.lower().startswith("tag:"):
+                    return line.split(":", 1)[1].strip().split("-", 1)[0]
+        except OSError:
+            return ""
+    return ""
+
+
+def onnx_env_stale_reason(env_dir: Path | None = None) -> str:
+    """Por que o diretorio existente NAO serve para este interpretador; ""
+    quando serve (ou quando nao ha como saber). Caso real 2026-09-02: o
+    pacote instalado no Python 3.13 (v0.2.2) ficou mudo quando o app passou
+    ao 3.12 (v0.2.3) — o worker falhava com "DLL load failed" e o TAGARELA
+    caia para a CPU em silencio numa maquina com GPU."""
+    base = env_dir or onnx_env_dir()
+    atual = python_tag()
+    try:
+        marker = json.loads(marker_path(base).read_text(encoding="utf-8"))
+        gravado = str(marker.get("python") or "")
+    except Exception:  # noqa: BLE001 - marcador ausente: usa a wheel
+        gravado = ""
+    instalado = gravado or installed_python_tag(base)
+    if instalado and instalado != atual:
+        return (f"a aceleração foi instalada para o Python {instalado[2]}.{instalado[3:]} e o "
+                f"Transcritório agora usa o {atual[2]}.{atual[3:]}")
+    return ""
+
+
+def install_command(uv: str, env_dir: Path, spec: dict[str, Any], python: str | None = None) -> list[str]:
+    """Comando uv para popular o diretorio (puro, testavel).
+
+    `--python` = o interpretador DO APP: sem ele o uv escolhe qualquer Python
+    da maquina (ou o cache) e instala a wheel de outra versao — que nao
+    carrega (2026-09-02: wheel cp313 num app em 3.12, "pronta em 1 s")."""
+    cmd = [uv, "pip", "install", "--target", str(env_dir), "--no-deps"]
+    if python:
+        cmd += ["--python", str(python)]
+    return cmd + [str(spec["package"])]
 
 
 def onnx_env_ready(env_dir: Path | None = None) -> bool:
@@ -66,7 +113,11 @@ def onnx_env_ready(env_dir: Path | None = None) -> bool:
         marker = json.loads(marker_path(base).read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001 - marcador ausente/corrompido = recriar
         return False
-    return int(marker.get("version", -1)) == ONNX_ENV_SPEC_VERSION
+    if int(marker.get("version", -1)) != ONNX_ENV_SPEC_VERSION:
+        return False
+    # Wheel de outro Python nao carrega (2026-09-02): tratar como nao pronto
+    # para o app oferecer a reinstalacao em vez de cair para a CPU calado.
+    return not onnx_env_stale_reason(base)
 
 
 def create_onnx_env(
@@ -98,7 +149,7 @@ def create_onnx_env(
         except OSError as exc:
             print(f"Falha ao limpar o diretorio da aceleracao GPU: {exc}")
             return 1
-    completed = subprocess.run(install_command(uv, base, spec),
+    completed = subprocess.run(install_command(uv, base, spec, python=sys.executable),
                                capture_output=True, text=True)
     if completed.returncode != 0:
         tail = (completed.stderr or completed.stdout or "")[-2000:]
@@ -106,6 +157,10 @@ def create_onnx_env(
         return 1
     if not (base / _CANARY).is_file():
         print("Instalacao terminou sem a DLL do CUDA — pacote inesperado.")
+        return 1
+    instalado = installed_python_tag(base)
+    if instalado and instalado != python_tag():
+        print(f"Instalacao veio para outro Python ({instalado} != {python_tag()}) — pacote inesperado.")
         return 1
     marker = dict(spec)
     marker["created_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
