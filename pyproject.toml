@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "transcritorio"
-version = "0.2.6"
+version = "0.2.7"
 description = "Transcricao local de entrevistas em portugues brasileiro, com separacao de falantes (WhisperX + pyannote). Nenhum audio sai do computador."
 readme = "README.md"
 license = { text = "MIT" }

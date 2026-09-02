@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.7 — 2026-09-02
+
+- **Corrigido: caracteres "�" na barra de progresso** ("Separando falantes de
+  X � 84%"). As etapas que rodam em subprocesso (separar falantes, canais,
+  conferir trocas) escreviam a saída na codificação do Windows e o app a lia
+  como UTF-8. Agora todo subprocesso do app escreve em UTF-8.
+
 ## v0.2.6 — 2026-09-02
 
 - **Corrigido: a aceleração GPU do TAGARELA parava de funcionar em

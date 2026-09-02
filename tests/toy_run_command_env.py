@@ -44,4 +44,13 @@ finally:
     del os.environ["HF_TOKEN"]
 print("PASS: base recomendada continua sem segredos")
 
+# --- UTF-8 de ponta a ponta (2026-09-02): um filho Python no Windows escrevia
+# em cp1252 e o travessao de "Separando falantes — 84%" virava "�" na barra ---
+base = secure_subprocess_env()
+assert base.get("PYTHONIOENCODING") == "utf-8" and base.get("PYTHONUTF8") == "1"
+r = run_command_stream([sys.executable, "-c", "print('Separando falantes — 84% (áudio)')"])
+assert r.returncode == 0 and "Separando falantes — 84% (áudio)" in r.stdout, r.stdout
+assert "�" not in r.stdout
+print("PASS: saida do filho chega em UTF-8, sem mojibake")
+
 print("PASS: toy_run_command_env")

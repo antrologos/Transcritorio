@@ -93,11 +93,20 @@ def run_command(args: list[str], cwd: Path | None = None) -> subprocess.Complete
 
 
 def secure_subprocess_env() -> dict[str, str]:
-    """Return a copy of os.environ with sensitive variables removed."""
+    """Return a copy of os.environ with sensitive variables removed.
+
+    Tambem fixa UTF-8 na saida do filho: run_command_stream decodifica em
+    UTF-8, e um subprocesso Python no Windows escrevia em cp1252 — o travessao
+    de "Separando falantes — 84%" chegava a barra como "�" (2026-09-02).
+    """
     env = dict(os.environ)
     for key in list(env):
         if key.upper() in {"HF_TOKEN", "TRANSCRITORIO_MODEL_DOWNLOAD_TOKEN"}:
             del env[key]
+    # Sobrescreve mesmo se o usuario tiver outro valor global: quem decodifica
+    # e o app (run_command_stream, sempre UTF-8).
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
     return env
 
 
