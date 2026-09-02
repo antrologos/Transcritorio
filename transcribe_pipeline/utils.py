@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 import hashlib
 import json
 import os
@@ -216,15 +216,21 @@ def parse_progress_json_line(line: str) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def is_interview_artifact(name: str, interview_id: str) -> bool:
+def is_interview_artifact(name: str, interview_id: str, known_ids: Iterable[str] = ()) -> bool:
     """True se o nome de arquivo pertence a esta entrevista.
 
     Derivados seguem os padroes {id}.ext, {id}.kind.ext e {id}_nvivo.tsv.
     Um rglob("{id}*") sozinho tambem casaria "entrevista_10.json" para o id
     "entrevista_1" — este filtro evita apagar/mover artefatos de outra entrevista.
+    Com `known_ids` (os ids do projeto), o dono e o id MAIS LONGO que casa:
+    "Sonia" nao leva os derivados de "Sonia.Venancio" (auditoria 2026-09-02).
     """
-    return (
-        name == interview_id
-        or name.startswith(interview_id + ".")
-        or name == interview_id + "_nvivo.tsv"
-    )
+    def _casa(base: str) -> bool:
+        # Sem caixa: depois de renomear a midia so na caixa, os derivados
+        # antigos ("entrevista maria.json") continuam da mesma entrevista.
+        n, b = name.casefold(), base.casefold()
+        return n == b or n.startswith(b + ".") or n == b + "_nvivo.tsv"
+
+    if not _casa(interview_id):
+        return False
+    return not any(len(outro) > len(interview_id) and _casa(outro) for outro in known_ids)

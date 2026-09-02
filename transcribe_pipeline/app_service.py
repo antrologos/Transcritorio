@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import glob
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -543,6 +544,10 @@ def delete_transcription_outputs(context: ProjectContext, ids: list[str]) -> tup
         paths.qc_dir,
         index_dir(paths),
     ]
+    # Ids do projeto: o dono de "Sonia.Venancio.review.json" e "Sonia.Venancio",
+    # nunca "Sonia" (auditoria 2026-09-02). glob.escape: "[2]" no nome e
+    # literal, nao classe de caracteres.
+    conhecidos = {str(r.get("interview_id") or "") for r in (getattr(context, "rows", None) or [])} - {""}
     for interview_id in ids:
         # Ultima chance da review editada: backup so quando ha trabalho
         # humano (mesma regra do backup_review_file).
@@ -553,10 +558,10 @@ def delete_transcription_outputs(context: ProjectContext, ids: list[str]) -> tup
         for base_dir in dirs_to_clean:
             if not base_dir.exists():
                 continue
-            for f in base_dir.rglob(f"{interview_id}*"):
+            for f in base_dir.rglob(f"{glob.escape(interview_id)}*"):
                 if f.parent.name == "backups":
                     continue  # copias de seguranca sobrevivem a limpeza
-                if f.is_file() and is_interview_artifact(f.name, interview_id):
+                if f.is_file() and is_interview_artifact(f.name, interview_id, conhecidos):
                     try:
                         f.unlink()
                         deleted += 1
@@ -633,6 +638,7 @@ def collect_trash_files(context: ProjectContext, ids: list[str]) -> list[dict]:
         except OSError:
             pass
     waveform_dir = paths.output_root / "00_project" / "waveforms"
+    conhecidos = {str(r.get("interview_id") or "") for r in (getattr(context, "rows", None) or [])} - {""}
     for iid in ids:
         metadata = context.metadata.get(iid, {}) or {}
         source_path = metadata.get("source_path") or ""
@@ -649,8 +655,8 @@ def collect_trash_files(context: ProjectContext, ids: list[str]) -> list[dict]:
         for base in dirs_to_scan:
             if not base.exists():
                 continue
-            for f in base.rglob(f"{iid}*"):
-                if f.is_file() and is_interview_artifact(f.name, iid):
+            for f in base.rglob(f"{glob.escape(iid)}*"):
+                if f.is_file() and is_interview_artifact(f.name, iid, conhecidos):
                     add(f)
     # Deduplicate
     seen: set[str] = set()

@@ -49,15 +49,13 @@ assert chaves == {"asr_tiny"}, chaves
 print("PASS: get_required_models por perfil")
 
 # --- recomendacao de MODELO acompanha a maquina (pura) ---
-# 2026-09-01: sem GPU util a recomendacao e DUPLA — TAGARELA primario
-# (13-25x tempo real em CPU, tempos por palavra nativos) + small de
-# reserva para outros idiomas. GPU segue so com o turbo; Mac segue
-# small (rota Metal/MLX do Whisper). Plataforma explicita nas puras.
-assert caps.recommended_asr_variants(caps.parse_fake_hardware("gpu24"), platform="win32") == ("large-v3-turbo",)
+# 2026-09-02: TAGARELA primario em TODAS as maquinas + Whisper de reserva
+# para outros idiomas (turbo com GPU util, small no resto, Mac inclusive).
+assert caps.recommended_asr_variants(caps.parse_fake_hardware("gpu24"), platform="win32") == ("parakeet-pt", "large-v3-turbo")
 assert caps.recommended_asr_variants(caps.parse_fake_hardware("cpu"), platform="win32") == ("parakeet-pt", "small")
 assert caps.recommended_asr_variants(caps.parse_fake_hardware("minimo"), platform="linux") == ("parakeet-pt", "small")
 assert caps.recommended_asr_variants(caps.parse_fake_hardware("gpu2"), platform="win32") == ("parakeet-pt", "small")
-assert caps.recommended_asr_variants(caps.parse_fake_hardware("cpu"), platform="darwin") == ("small",)
+assert caps.recommended_asr_variants(caps.parse_fake_hardware("cpu"), platform="darwin") == ("parakeet-pt", "small")
 # model_sizes_from_registry soma o @asr quando recebe a dupla
 assert caps.model_sizes_from_registry(("parakeet-pt", "small"))["@asr"] == 3.45
 assert caps.model_sizes_from_registry("small")["@asr"] == 0.9

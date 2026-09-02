@@ -99,7 +99,12 @@ def _icon_path() -> str:
 
 
 def _shortcut_script(target: str, name: str, arguments: str, icon: str) -> str:
-    """Comando PowerShell do atalho (pura, para o toy)."""
+    """Comando PowerShell do atalho (pura, para o toy).
+
+    Aspas simples do PowerShell: um apostrofo no valor (usuario D'Avila)
+    quebraria o script — dobrar e a forma de escape (auditoria 2026-09-02).
+    """
+    target, name, arguments, icon = (str(v).replace("'", "''") for v in (target, name, arguments, icon))
     return (
         "$ws = New-Object -ComObject WScript.Shell; "
         "$desktop = [Environment]::GetFolderPath('Desktop'); "

@@ -21,11 +21,11 @@ from transcribe_pipeline import app_service, app_settings, project_store
 from transcribe_pipeline.config import load_config, make_paths
 
 # --- app_settings.asr_model_default: valida contra o registro ---
-assert app_settings.asr_model_default() == "large-v3-turbo"   # sem escolha: fabrica
+assert app_settings.asr_model_default() == "parakeet-pt"   # sem escolha: fabrica (2026-09-02: TAGARELA)
 app_settings.save({"asr_model_default": "tiny"})
 assert app_settings.asr_model_default() == "tiny"
 app_settings.save({"asr_model_default": "modelo-que-nao-existe"})
-assert app_settings.asr_model_default() == "large-v3-turbo"   # invalido: fabrica
+assert app_settings.asr_model_default() == "parakeet-pt"   # invalido: fabrica
 app_settings.save({"asr_model_default": "tiny", "diarize_default": False})
 print("PASS: asr_model_default")
 

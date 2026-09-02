@@ -23,7 +23,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # audio por canal e intermediario e vive fora do projeto.
     "channels_analysis": True,
     "channels_dominance_threshold": 0.65,
-    "asr_model": "large-v3-turbo",
+    # = model_manager.DEFAULT_ASR_VARIANT (2026-09-02: TAGARELA em todas as
+    # maquinas); literal repetido para nao importar model_manager aqui.
+    "asr_model": "parakeet-pt",
     "asr_language": "pt",
     # "auto" (v0.2+): device/precisao/batch resolvidos por
     # runtime.resolve_device + resolve_compute_settings — cuda -> float16/8,
@@ -92,6 +94,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # Embeddings com a rede 1x por janela (2026-09-02): ~3x mais rapido em
     # CPU, saida numericamente identica. False = caminho original do pyannote.
     "diarization_fast_embeddings": True,
+    # Passo da janela deslizante da segmentacao, como fracao da janela de
+    # 10 s: 0.2 = 2 s (A/B 2026-09-02: mesma qualidade que o 1 s do pyannote
+    # em gabarito sintetico e em 10 entrevistas reais, 2x mais rapido em CPU
+    # e em GPU). 0.1 = comportamento original do pyannote.
+    "diarization_segmentation_step": 0.2,
     # Margem (cos ao proprio centroide - cos ao 2o colocado) abaixo da qual
     # a atribuicao de voz do trecho e marcada como incerta. Margem negativa
     # = o proprio modelo prefere OUTRA voz no trecho. Calibrado em entrevista
@@ -223,7 +230,9 @@ def _load_simple_yaml(text: str) -> dict[str, Any]:
             continue
         # '#' so inicia comentario precedido de espaco (regra YAML);
         # '#' dentro de valores (ex.: paths como take#3.wav) e preservado.
-        comment_idx = raw_line.find(" #")
+        # Itens de lista (audio_files, audio_roots...) sao caminhos e nunca
+        # recebem comentario do writer: "Entrevista #3.m4a" e nome valido.
+        comment_idx = -1 if raw_line.startswith("  - ") else raw_line.find(" #")
         line = (raw_line[:comment_idx] if comment_idx != -1 else raw_line).rstrip()
         if not line:
             continue

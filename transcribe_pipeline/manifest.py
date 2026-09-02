@@ -60,8 +60,95 @@ class MediaFile:
     source_kind: str
 
 
-def build_manifest(config: dict, paths: Paths, hash_files: bool = False) -> list[dict[str, str]]:
-    media = discover_media(config, paths.project_root)
+def _media_key(path: Path) -> str:
+    return str(path.resolve()).casefold()
+
+
+def disambiguate_free_ids(media: list[MediaFile], known: dict[str, str] | None = None) -> list[MediaFile]:
+    """Nomes livres iguais em PASTAS diferentes sao entrevistas diferentes.
+
+    Auditoria 2026-09-02: "Maria/Entrevista.m4a" e "Jose/Entrevista.m4a"
+    viravam UMA entrevista (a segunda sumia da lista como "duplicate"), e
+    ids que diferem so na caixa colidiam no WAV/JSON em NTFS/APFS. Regra:
+    agrupa por stem sem caixa; UMA pasta fica com o stem; as demais ganham
+    " (nome da pasta)" e, se ainda colidir, " (2)", " (3)". Mesmo stem na
+    MESMA pasta (.mp3 + .m4a) continua sendo a mesma gravacao (duplicata).
+    Pares codificados (A01P_0608_A/_V) nao passam por aqui.
+
+    ESTABILIDADE: `known` = {caminho resolvido sem caixa: interview_id ja
+    atribuido no manifest anterior}. Quem ja tem id mantem o id (todos os
+    derivados sao chaveados por ele); a pasta que ja tinha o stem nu continua
+    dona dele mesmo que uma pasta nova ordene antes; so o recem-descoberto
+    recebe sufixo. Sem `known`, a primeira pasta na ordem do caminho fica com
+    o stem (determinista). Pura; altera os MediaFile no lugar.
+    """
+    known = {str(k).casefold(): str(v) for k, v in (known or {}).items() if v}
+    grupos: dict[str, list[MediaFile]] = {}
+    for item in media:
+        if MEDIA_ID_RE.match(item.path.stem):
+            continue
+        grupos.setdefault(item.interview_id.casefold(), []).append(item)
+    usados = {item.interview_id.casefold() for item in media} | {v.casefold() for v in known.values()}
+
+    def _id_conhecido(pasta_itens: list[MediaFile]) -> str | None:
+        return next((known[_media_key(m.path)] for m in pasta_itens if _media_key(m.path) in known), None)
+
+    for chave, itens in grupos.items():
+        pastas: dict[str, list[MediaFile]] = {}
+        for item in sorted(itens, key=lambda m: str(m.path).casefold()):
+            pastas.setdefault(str(item.path.resolve().parent).casefold(), []).append(item)
+        if len(pastas) <= 1 and len({m.interview_id for m in itens}) <= 1:
+            continue
+        # Dona do stem nu: a pasta que ja o tinha; senao a primeira do caminho.
+        ordem = sorted(pastas.values(), key=lambda pi: (
+            0 if (_id_conhecido(pi) or "").casefold() == chave else 1,
+            str(pi[0].path).casefold()))
+        for pos, pasta_itens in enumerate(ordem):
+            conhecido = _id_conhecido(pasta_itens)
+            base = pasta_itens[0].interview_id
+            if pos == 0:
+                novo = conhecido if conhecido is not None else base
+            elif conhecido is not None and conhecido.casefold() != chave:
+                novo = conhecido  # ja tinha sufixo: mantem
+            else:
+                raiz = f"{base} ({pasta_itens[0].path.parent.name})"
+                novo, n = raiz, 2
+                while novo.casefold() in usados:
+                    novo = f"{raiz} ({n})"
+                    n += 1
+            usados.add(novo.casefold())
+            for item in pasta_itens:
+                item.interview_id = novo
+    return media
+
+
+def known_ids_from_rows(rows: list[dict[str, str]], project_root: Path) -> dict[str, str]:
+    """{caminho resolvido sem caixa: interview_id} das linhas SELECIONADAS de
+    nome livre do manifest anterior (pura). Linhas 'duplicate' nao contam."""
+    known: dict[str, str] = {}
+    for row in rows:
+        if row.get("selected") != "true":
+            continue
+        source = str(row.get("source_path") or "")
+        interview_id = str(row.get("interview_id") or "")
+        if not source or not interview_id:
+            continue
+        path = Path(source)
+        if not path.is_absolute():
+            path = project_root / path
+        if MEDIA_ID_RE.match(path.stem):
+            continue
+        known[_media_key(path)] = interview_id
+    return known
+
+
+def build_manifest(config: dict, paths: Paths, hash_files: bool = False,
+                   previous_rows: list[dict[str, str]] | None = None) -> list[dict[str, str]]:
+    if previous_rows is None:
+        manifest_path = paths.manifest_dir / "manifest.csv"
+        previous_rows = read_manifest(manifest_path) if manifest_path.exists() else []
+    known = known_ids_from_rows(previous_rows, paths.project_root)
+    media = disambiguate_free_ids(discover_media(config, paths.project_root), known)
     tcles = discover_tcles(paths.project_root, config.get("tcle_globs"))
     grouped: dict[str, list[MediaFile]] = {}
     for item in media:
@@ -184,8 +271,10 @@ def read_manifest(path: Path) -> list[dict[str, str]]:
 def selected_rows(rows: list[dict[str, str]], ids: list[str] | None = None) -> list[dict[str, str]]:
     selected = [row for row in rows if row.get("selected") == "true"]
     if ids:
-        wanted = set(ids)
-        selected = [row for row in selected if row["interview_id"] in wanted]
+        # Sem caixa: `--ids a01p_0608` casa "A01P_0608" (o id codificado e
+        # forcado a maiusculas) e "entrevista maria" casa "Entrevista Maria".
+        wanted = {str(i).casefold() for i in ids}
+        selected = [row for row in selected if row["interview_id"].casefold() in wanted]
     return selected
 
 

@@ -1,5 +1,62 @@
 # Changelog
 
+## v0.2.5 — 2026-09-02
+
+Três decisões de produto num só lançamento, todas com medição: o passo de
+2 s na separação de falantes vira padrão em todos os dispositivos; o
+TAGARELA vira o motor padrão em todas as máquinas; e transcrever em outro
+idioma passa a ser explicado e resolvido com o Whisper de reserva. Mais 12
+correções da auditoria "qualquer nome de arquivo válido funciona".
+
+- **Separação de falantes 2× mais rápida, em CPU e em GPU, com a mesma
+  qualidade.** A/B automático (12 conversas sintéticas com verdade por
+  construção + 10 entrevistas reais julgadas pelo verificador acústico do
+  próprio app): passo de 2 s entre janelas de 10 s (em vez de 1 s) manteve
+  DER, posição das fronteiras e flags "duvida" (105 → 110) iguais dentro do
+  ruído, e cortou o tempo pela metade — CPU 0,12× → 0,060× (1 h de áudio ≈
+  4 min na máquina de referência de 24 threads; ~11 min com 8 threads, ~22
+  min com 4), GPU 44 s → 23 s por hora. Chave `diarization_segmentation_step` (0.1 =
+  pyannote original). Estimativas do app, README, INSTALL e site
+  acompanham.
+- **O TAGARELA é o motor padrão em todas as máquinas** (antes, só nas sem
+  placa de vídeo): treinado para o português falado — segundo os autores do
+  modelo, em fala espontânea erra menos palavras que o Whisper large-v3
+  (cerca de 14% contra 23%) —, com pontuação e tempos por palavra
+  nativos; em GPU roda no processador (16× o tempo real) até o pacote
+  onnx-gpu ser instalado — ainda 2× mais rápido que o turbo em GPU. Um
+  Whisper acompanha como **reserva para outros idiomas**: `large-v3-turbo`
+  com GPU, `small` no resto (Mac inclusive, pela rota MLX). O assistente
+  marca os dois; a faixa de oferta aparece para quem já estava no Whisper
+  em qualquer máquina, com texto novo; o padrão de fábrica é
+  `parakeet-pt`; rótulos "Recomendado"/"reserva" nos modelos; o aviso de
+  tempo do assistente fala do TAGARELA e da separação de falantes; a
+  estimativa antes do lote também aparece em máquinas com GPU quando o
+  TAGARELA vai rodar no processador.
+- **Outro idioma com o TAGARELA: aviso didático e o caminho para outro
+  modelo.** Nota inline ao escolher um idioma que não é português (em
+  Configurar transcrição, na aba Propriedades, em Editar propriedades e no
+  assistente). Ao Transcrever, a janela "Este lote tem outro idioma" explica
+  onde o modelo mora (Ferramentas → Configurar transcrição → Modelo) e
+  oferece o Whisper com a qualidade de cada opção instalada (o small é
+  rápido mas erra mais; o turbo é o mais preciso), baixando se preciso —
+  só para o lote ou para o projeto inteiro; "Configurar transcrição…" abre
+  o diálogo do motor. "Automático" conta como português também no motor
+  (o lote não cai mais no meio com "N falha(s)").
+- **Qualquer nome de arquivo válido no sistema funciona (auditoria de 12
+  defeitos).** Apagar transcrição/Lixeira de `Sonia` não leva mais os
+  derivados de `Sonia.Venancio` (o dono é o id mais longo); colchetes no
+  nome não quebram mais o glob (Apagar, Lixeira, Documentos); o QC não
+  herda mais o JSON de `Entrevista 10` para `Entrevista 1`; `Entrevista
+  #3.m4a` não some mais ao reabrir o projeto (parser YAML); nome começando
+  com "-" não vira mais flag ao separar falantes; "Mostrar na pasta" aceita
+  vírgula no caminho; o atalho da área de trabalho aceita apóstrofo no nome
+  do usuário Windows; renomear a mídia só na caixa mantém título, rótulos e
+  idioma; `--ids` na CLI ignora maiúsculas; o filtro da lista ignora
+  acentos. E **dois arquivos com o mesmo nome em pastas diferentes são
+  duas entrevistas** (a segunda ganha o sufixo com o nome da pasta e, se
+  ainda colidir, um número), inclusive nomes iguais só na caixa; na mesma
+  pasta (.mp3 + .m4a) continuam a mesma gravação.
+
 ## v0.2.4 — 2026-09-02
 
 Correção de um relato real de beta (arquivo com espaço no nome falhava ao

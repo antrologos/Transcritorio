@@ -102,9 +102,13 @@ ok, label = parakeet_runner.language_supported({"asr_language": "PT"})
 assert ok, "normalize deveria aceitar maiusculas"
 ok, label = parakeet_runner.language_supported({"asr_language": "es"})
 assert not ok and label == "es"
+# 2026-09-02: vazio/None ("automático") = portugues, alinhado a GUI
+# (languages_outside_pt); antes o lote passava pelo gate e caia no runner.
 ok, label = parakeet_runner.language_supported({"asr_language": None})
-assert not ok and label == "automático", label
-print("PASS: language_supported so aceita pt explicito")
+assert ok and label == "pt", (ok, label)
+ok, label = parakeet_runner.language_supported({"asr_language": "  "})
+assert ok and label == "pt", (ok, label)
+print("PASS: language_supported aceita pt e vazio; recusa outros idiomas")
 
 with tempfile.TemporaryDirectory() as td:
     root = Path(td)

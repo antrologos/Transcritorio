@@ -220,7 +220,7 @@ class ModelStatus:
 ASR_VARIANTS: dict[str, dict[str, Any]] = {
     "large-v3-turbo": {
         "label": "Whisper large-v3-turbo",
-        "friendly_pt": "Preciso rapido (recomendado, 3,1 GB)",
+        "friendly_pt": "Preciso rápido (3,1 GB) — reserva para outros idiomas em máquinas com GPU",
         # O repo original mobiuslabsgmbh/faster-whisper-large-v3-turbo foi
         # transferido pro org dropbox-dash em 2025-2026. HF API retorna 307
         # pra ca; apontar direto elimina a cadeia de redirect que estava
@@ -231,7 +231,7 @@ ASR_VARIANTS: dict[str, dict[str, Any]] = {
         "estimated_gb": 3.1,
         "quality": 8,
         "speed": 8,
-        "desc": "Recomendado. Melhor equilibrio entre qualidade e velocidade.",
+        "desc": "Melhor equilíbrio entre qualidade e velocidade do Whisper; reserva para outros idiomas em máquinas com GPU.",
     },
     "large-v3": {
         "label": "Whisper large-v3",
@@ -270,8 +270,10 @@ ASR_VARIANTS: dict[str, dict[str, Any]] = {
         # NATIVOS (sem alinhador). Roda via onnx-asr (CPU ~13x tempo
         # real). "engine" desvia run_whisperx para parakeet_runner. Sai
         # de experimental so apos A/B contra large-v3 nos gabaritos.
-        "label": "Parakeet pt-BR (TAGARELA) — experimental",
-        "friendly_pt": "⚠ Experimental — só português (2,5 GB); pontuação nativa",
+        # 2026-09-02: padrao em TODAS as maquinas (decisao do usuario); a
+        # chave "experimental" fica ate o A/B contra o Whisper nos gabaritos.
+        "label": "Parakeet pt-BR (TAGARELA)",
+        "friendly_pt": "Recomendado — só português (2,5 GB); pontuação e tempos por palavra nativos",
         "repo": "alefiury/parakeet-tdt-0.6b-v3-ptBR-TAGARELA-onnx",
         "revision": "f97e702671c4dc14344da4ef7a3c07ba94b279fc",
         "estimated_gb": 2.55,
@@ -279,7 +281,7 @@ ASR_VARIANTS: dict[str, dict[str, Any]] = {
         "speed": 8,
         "engine": "parakeet_onnx",
         "experimental": True,
-        "desc": "Motor experimental para portugues; pontuacao nativa.",
+        "desc": "Recomendado: treinado para o português falado do Brasil; pontuação e tempos por palavra nativos. Só transcreve português (para outros idiomas use o Whisper de reserva).",
     },
     "base": {
         # demo_only (2026-08-30): qualidade insuficiente para trabalho
@@ -318,7 +320,9 @@ _FRIENDLY_FIXED_MODELS: dict[str, str] = {
     "diarization": "Identificacao de falantes (70 MB)",
 }
 
-DEFAULT_ASR_VARIANT = "large-v3-turbo"
+# 2026-09-02: o TAGARELA e o padrao de fabrica em todas as maquinas; o
+# Whisper de reserva (outros idiomas) vem de capabilities.recommended_asr_variants.
+DEFAULT_ASR_VARIANT = "parakeet-pt"
 
 _FIXED_MODELS: tuple[ModelAsset, ...] = (
     ModelAsset(
@@ -871,8 +875,15 @@ def resolve_asr_model(configured: str, cache_dir: Path | None = None) -> str:
         # Unknown variant (e.g. custom model path) — pass through
         return configured
 
-    # Configured model not installed — find an alternative
-    installed = installed_asr_variants(cache_dir)
+    # Configured model not installed — find an alternative do MESMO motor
+    # (um Whisper ausente cai em outro Whisper, nunca no repo ONNX do
+    # TAGARELA, que o whisperx nao carrega — revisao 2026-09-02); o padrao
+    # de fabrica primeiro, depois a ordem do catalogo.
+    engine = info.get("engine")
+    installed = [k for k in installed_asr_variants(cache_dir)
+                 if (ASR_VARIANTS.get(k) or {}).get("engine") == engine]
+    if DEFAULT_ASR_VARIANT in installed:
+        return DEFAULT_ASR_VARIANT
     if installed:
         return installed[0]
     return configured

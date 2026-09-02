@@ -330,11 +330,31 @@ def _recognize_via_worker(
         out_path.unlink(missing_ok=True)
 
 
+def planned_device(resolved_device: str) -> str:
+    """"cuda"/"cpu" que o TAGARELA vai usar DE FATO nesta maquina (o plano
+    GPU exige Windows nao-frozen + [cuda] + pacote onnx-gpu). Para
+    estimativas de tempo e rotulos; nao altera estado."""
+    plan, _ = gpu_execution_plan(
+        resolved_device,
+        platform=sys.platform,
+        frozen=bool(getattr(sys, "frozen", False)),
+        env_ready=onnx_env.onnx_env_ready(),
+        cuda_ok=runtime.cuda_libs_present(),
+        gpu_failed_before=_GPU_FAILED_THIS_SESSION,
+    )
+    return "cuda" if plan == "gpu" else "cpu"
+
+
 def language_supported(config: dict) -> tuple[bool, str]:
-    """(ok, idioma_normalizado): o motor so aceita portugues explicito."""
+    """(ok, idioma_normalizado): o motor so transcreve portugues.
+
+    Vazio/None ("automático") conta como portugues: quem escolheu o TAGARELA
+    escolheu pt, e a GUI (languages_outside_pt) ja deixa "automático" passar
+    — bloquear aqui derrubava o lote no meio com "N falha(s)" (2026-09-02).
+    """
     raw = config.get("asr_language")
     if raw is None or not str(raw).strip():
-        return (False, "automático")
+        return (True, "pt")
     code = model_manager.normalize_language(str(raw))
     return (code == "pt", code)
 

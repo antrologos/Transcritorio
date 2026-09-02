@@ -244,21 +244,18 @@ def capability_status(
 def recommended_asr_variants(hw: Hardware, platform: str | None = None) -> tuple[str, ...]:
     """Variantes recomendadas para a maquina, a primaria primeiro (pura).
 
-    Em GPU o turbo e o melhor custo-beneficio. Sem placa util, o Whisper
-    roda ~1x o tempo do audio e a marcacao de tempos por palavra e mais
-    lenta ainda (beta testers em CPU viam a barra "travar" nessa fase):
-    o TAGARELA (parakeet-pt) transcreve 13-25x o tempo real em CPU com
-    tempos por palavra nativos e vira o PADRAO em maquinas sem GPU
-    (decisao do usuario 2026-09-01); o small acompanha como reserva para
-    outros idiomas — o TAGARELA so transcreve portugues. No Mac o
-    Whisper ja tem a rota rapida Metal/MLX (has_gpu so enxerga NVIDIA):
-    la a recomendacao segue como sempre foi. Sugestao, nunca imposicao.
+    O TAGARELA (parakeet-pt) e o PADRAO em TODAS as maquinas (decisao do
+    usuario 2026-09-02; antes so sem GPU): pt-BR espontaneo com WER 14 vs
+    23 do large-v3, pontuacao e tempos por palavra nativos, 13-25x o tempo
+    real em CPU — mais rapido ate que o turbo em GPU (~8x). Como so
+    transcreve portugues, um Whisper acompanha como RESERVA para outros
+    idiomas: large-v3-turbo onde ha GPU util (qualidade), small no resto
+    (no Mac o small roda pela rota Metal/MLX). `platform` fica por
+    compatibilidade dos toys. Sugestao, nunca imposicao.
     """
-    plataforma = platform or sys.platform
-    if plataforma == "darwin":
-        return ("small",)
+    _ = platform or sys.platform
     if hw.has_gpu and (hw.vram_gb is None or hw.vram_gb >= 4.0):
-        return ("large-v3-turbo",)
+        return ("parakeet-pt", "large-v3-turbo")
     return ("parakeet-pt", "small")
 
 
@@ -301,29 +298,33 @@ def profile_size(
 
 
 def cpu_speed_warning(hw: Hardware) -> str:
-    """Aviso honesto de lentidao em CPU; "" quando ha GPU (pura).
+    """Aviso honesto de tempo em CPU; "" quando ha GPU (pura).
 
-    Ordem de grandeza, nao promessa: em CPU o Whisper roda perto do
-    tempo real por nucleo util, entao uma entrevista de 1 h leva de
-    dezenas de minutos a algumas horas.
+    Ordem de grandeza, nao promessa, com o TAGARELA como motor (poucos
+    minutos por hora de audio em qualquer CPU) e a separacao de falantes
+    escalando com os nucleos (0,06x na maquina de 24 nucleos).
     """
     if hw.has_gpu:
         return ""
-    if hw.cores >= 8:
-        return "Sem placa de vídeo, 1 hora de entrevista deve levar de 30 a 60 minutos."
+    # Mesma conta que a barra de progresso e a janela do lote usam
+    # (expected_diarization_seconds), para os textos nunca divergirem.
+    separacao = describe_seconds(expected_diarization_seconds(3600.0, "cpu", hw.cores))
     if hw.cores >= 4:
-        return "Sem placa de vídeo, 1 hora de entrevista deve levar de 1 a 2 horas."
-    return ("Sem placa de vídeo e com poucos núcleos, 1 hora de entrevista pode "
-            "levar várias horas — prefira o modelo menor.")
+        return ("Sem placa de vídeo, 1 hora de entrevista leva poucos minutos para "
+                f"transcrever e cerca de {separacao} para separar os falantes.")
+    return ("Sem placa de vídeo e com poucos núcleos, transcrever é rápido, mas "
+            f"separar os falantes de 1 hora de entrevista leva cerca de {separacao} "
+            "— desmarque \"Separar falantes agora\" se tiver pressa.")
 
 
 # --- Estimativa de tempo de um lote (2026-09-02, puras) ---------------------
 # Segundos de maquina por segundo de audio, medidos na maquina de
 # referencia (os.cpu_count() = 24 nucleos logicos, RTX 4060): TAGARELA
 # 16,5x tempo real em CPU (26,4 h em 96 min) e ~62x em GPU; Whisper small
-# 1,1x em CPU; turbo 5-10 min por hora em GPU. Diarizacao: 0,12x em CPU
-# com a rede de embeddings 1x por janela (diar_fast, 2026-09-02: 62 min de
-# audio em 7,1 min; era 0,40x), 0,028x em GPU. Escala por 24/cpu_count().
+# 1,1x em CPU; turbo 5-10 min por hora em GPU. Diarizacao (rede de
+# embeddings 1x por janela + passo de 2 s, A/B 2026-09-02): 0,060x em CPU
+# (323 min de audio em 19,3 min; era 0,40x) e 0,0063x em GPU (62 min em
+# 23 s na RTX 4060). Escala por 24/cpu_count() em CPU.
 _REF_LOGICAL_CORES = 24
 _ASR_SECONDS_PER_AUDIO_SECOND = {
     ("parakeet_onnx", "cpu"): 1 / 16.5,
@@ -337,20 +338,32 @@ def expected_diarization_seconds(audio_seconds: float, device: str, cores: int) 
     """Tempo esperado da separacao de falantes: carga do modelo + processamento."""
     audio = max(0.0, float(audio_seconds))
     if device == "cuda":
-        return 20.0 + 0.028 * audio
+        return 20.0 + 0.0065 * audio
     escala = _REF_LOGICAL_CORES / max(1, int(cores or 1))
-    return 45.0 + 0.12 * audio * escala
+    return 45.0 + 0.06 * audio * escala
 
 
-def batch_time_estimate(total_audio_s: float, engine: str | None, device: str, cores: int) -> tuple[float, float]:
-    """(segundos de transcricao, segundos de separacao de falantes) do lote."""
+def batch_time_estimate(
+    total_audio_s: float,
+    engine: str | None,
+    device: str,
+    cores: int,
+    asr_device: str | None = None,
+) -> tuple[float, float]:
+    """(segundos de transcricao, segundos de separacao de falantes) do lote.
+
+    `asr_device` e o device REAL da transcricao quando difere do da maquina:
+    o TAGARELA numa maquina CUDA roda em CPU ate o pacote onnx-gpu ser
+    instalado (parakeet_runner.planned_device); a separacao usa `device`.
+    """
     audio = max(0.0, float(total_audio_s))
     if audio == 0:
         return 0.0, 0.0
     dev = "cuda" if device == "cuda" else "cpu"
+    dev_asr = "cuda" if (asr_device or device) == "cuda" else "cpu"
     eng = "parakeet_onnx" if engine == "parakeet_onnx" else "whisper"
-    asr = audio * _ASR_SECONDS_PER_AUDIO_SECOND[(eng, dev)]
-    if dev == "cpu" and eng == "whisper":
+    asr = audio * _ASR_SECONDS_PER_AUDIO_SECOND[(eng, dev_asr)]
+    if dev_asr == "cpu" and eng == "whisper":
         asr *= _REF_LOGICAL_CORES / max(1, int(cores or 1))
     return asr, expected_diarization_seconds(audio, dev, cores)
 
@@ -411,9 +424,15 @@ def cached_model_keys(asr_variant: str | None = None,
                 presentes.add(asset.key)
         except Exception:  # noqa: BLE001 - cache ilegivel = tratar como ausente
             continue
-    variante = asr_variant or model_manager.DEFAULT_ASR_VARIANT
+    # Aceita a dupla (TAGARELA + reserva): @asr so conta como presente quando
+    # TODAS as variantes estao instaladas (revisao 2026-09-02).
+    if asr_variant is None or isinstance(asr_variant, str):
+        variantes: tuple[str, ...] = (asr_variant or model_manager.DEFAULT_ASR_VARIANT,)
+    else:
+        variantes = tuple(asr_variant) or (model_manager.DEFAULT_ASR_VARIANT,)
     try:
-        if variante in model_manager.installed_asr_variants(cache):
+        instaladas = set(model_manager.installed_asr_variants(cache))
+        if all(v in instaladas for v in variantes):
             presentes.add(ASR_MODEL_TOKEN)
     except Exception:  # noqa: BLE001
         pass

@@ -131,8 +131,12 @@ def find_raw_json(paths: Paths, interview_id: str):
     for candidate in candidates:
         if candidate.exists():
             return candidate
-    for candidate in paths.asr_dir.rglob(f"*{interview_id}*.json"):
-        return candidate
+    # Match exato por nome, como render.find_whisperx_json: "*{id}*" casaria o
+    # JSON de "Entrevista 10" para "Entrevista 1" (auditoria 2026-09-02).
+    import glob as _glob
+    for pattern in (f"{_glob.escape(interview_id)}.json", f"{_glob.escape(interview_id)}.whisperx.json"):
+        for candidate in paths.asr_dir.rglob(pattern):
+            return candidate
     return None
 
 

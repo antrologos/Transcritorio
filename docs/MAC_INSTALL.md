@@ -26,6 +26,11 @@
    uv tool install --python 3.12 "transcritorio[mac]"
    ```
 
+   O motor padrão é o **TAGARELA** (Parakeet pt-BR; roda no processador e
+   só transcreve português); o Whisper com Metal fica como reserva para
+   gravações em outros idiomas — o app avisa e oferece a troca na hora de
+   transcrever.
+
    > **Aviso honesto:** este canal ainda não teve teste de campo no macOS —
    > funcionou no CI e o desenho não depende de nada específico do Windows,
    > mas se algo falhar na sua máquina, [abra uma

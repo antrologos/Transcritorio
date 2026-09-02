@@ -343,7 +343,7 @@ assert _compute_effective_target_ids(["a","b"], checked={"a"}, visually_selected
 check("9.1 reorder + merge + effective_target_ids")
 
 # F4 helpers
-assert "recomendado" in model_manager.friendly_name("large-v3-turbo").lower()
+assert "recomendado" in model_manager.friendly_name("parakeet-pt").lower()   # 2026-09-02: TAGARELA padrao
 assert "alinhamento" in model_manager.friendly_name("alignment_pt").lower()
 check("9.2 friendly_name pt-BR")
 

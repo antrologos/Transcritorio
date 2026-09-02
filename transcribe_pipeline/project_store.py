@@ -651,7 +651,17 @@ def sync_file_metadata(paths: Paths, config: dict[str, Any], rows: list[dict[str
         file_id = row.get("interview_id", "")
         if not file_id:
             continue
-        previous = existing.get(file_id, {})
+        previous = existing.get(file_id)
+        if previous is None:
+            # Rename so na caixa (NTFS/APFS): mesma midia, id novo — migrar
+            # a linha em vez de perder titulo, rotulos e idioma (2026-09-02).
+            origem = str(row.get("source_path", "")).casefold()
+            previous = next(
+                (item for key, item in existing.items()
+                 if key.casefold() == file_id.casefold()
+                 and str(item.get("source_path", "")).casefold() == origem),
+                {},
+            )
         item = default_file_metadata(row, project)
         item.update({key: value for key, value in previous.items() if key in METADATA_COLUMNS and value not in {None, ""}})
         item["file_id"] = file_id

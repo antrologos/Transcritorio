@@ -100,9 +100,14 @@ print("PASS: profile_size")
 assert "sem placa NVIDIA" in cap.describe_hardware(FRACA)
 assert "8 GB" in cap.describe_hardware(GPU_BOA)
 assert cap.cpu_speed_warning(GPU_BOA) == ""
-assert "30 a 60 minutos" in cap.cpu_speed_warning(
-    cap.Hardware(has_gpu=False, cores=16))
-assert "várias horas" in cap.cpu_speed_warning(MINIMA)
+# 2026-09-02: o aviso fala do TAGARELA (poucos minutos) e da separacao de
+# falantes (a etapa que escala com os nucleos), nao mais do Whisper.
+# ...e usa a MESMA conta da barra/janela do lote (0,06x x 24/nucleos):
+# 16 nucleos -> 45 + 216*1,5 s = 6 min; 4 nucleos -> 45 + 216*6 = 22 min.
+assert "6 min" in cap.cpu_speed_warning(cap.Hardware(has_gpu=False, cores=16))
+assert "22 min" in cap.cpu_speed_warning(cap.Hardware(has_gpu=False, cores=4))
+assert "Separar falantes agora" in cap.cpu_speed_warning(MINIMA)
+assert all("Sem placa de vídeo" in cap.cpu_speed_warning(h) for h in (MINIMA, cap.Hardware(has_gpu=False, cores=8)))
 print("PASS: textos de apoio")
 
 # --- integracao com o registro real de modelos (sem rede) ---

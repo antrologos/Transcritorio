@@ -163,6 +163,33 @@ with tempfile.TemporaryDirectory() as td:
         pr.runtime.app_data_dir = orig_app
 print("PASS: _recognize_via_worker classifica cancelado/42/falha/ok")
 
+# ---------------------------------------------------------------- 4b. planned_device (estimativas/selo)
+_orig_platform = sys.platform
+_orig_ready = pr.onnx_env.onnx_env_ready
+_orig_cuda = pr.runtime.cuda_libs_present
+_orig_failed = pr._GPU_FAILED_THIS_SESSION
+try:
+    sys.platform = "win32"
+    pr.onnx_env.onnx_env_ready = lambda env_dir=None: True
+    pr.runtime.cuda_libs_present = lambda: True
+    pr._GPU_FAILED_THIS_SESSION = False
+    assert pr.planned_device("cuda") == "cuda"
+    assert pr.planned_device("cpu") == "cpu"
+    pr.onnx_env.onnx_env_ready = lambda env_dir=None: False
+    assert pr.planned_device("cuda") == "cpu"          # sem o pacote onnx-gpu: CPU
+    pr.onnx_env.onnx_env_ready = lambda env_dir=None: True
+    sys.platform = "linux"
+    assert pr.planned_device("cuda") == "cpu"          # fora do Windows: CPU
+    sys.platform = "win32"
+    pr._GPU_FAILED_THIS_SESSION = True
+    assert pr.planned_device("cuda") == "cpu"          # GPU falhou na sessao
+finally:
+    sys.platform = _orig_platform
+    pr.onnx_env.onnx_env_ready = _orig_ready
+    pr.runtime.cuda_libs_present = _orig_cuda
+    pr._GPU_FAILED_THIS_SESSION = _orig_failed
+print("PASS: planned_device")
+
 # ---------------------------------------------------------------- 5. constantes coerentes
 assert 0 < pr.GPU_WINDOW_S < 200.0, "janela GPU deve ficar sob o limite do export"
 assert pr.GPU_WINDOW_S < pr.WINDOW_S, "GPU usa janela menor (VRAM + velocidade)"

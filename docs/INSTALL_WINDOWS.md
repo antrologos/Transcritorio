@@ -60,8 +60,8 @@ O programa abre pela primeira vez e cria o atalho **Transcritório** na
 (uma vez só) e pergunta se você quer a **identificação de falantes**:
 
 - **Não (apenas transcrever):** nenhum cadastro é necessário. ~3,5 GB
-  de modelos (perfil Essencial: em máquina sem placa de vídeo, o motor
-  rápido TAGARELA + o Whisper small de reserva).
+  de modelos (perfil Essencial: o motor TAGARELA, padrão em todas as
+  máquinas, + um Whisper de reserva para outros idiomas).
 - **Sim (separar falantes):** o assistente orienta a criar uma conta
   gratuita na Hugging Face e colar um token. ~5 GB de modelos
   (perfil Padrão em CPU; ~3 GB só o modelo grande para GPU). Dá para
@@ -94,8 +94,9 @@ https://www.gyan.dev/ffmpeg/builds/ (adicione a pasta `bin` ao PATH).
 Comando (o PATH só atualiza em janelas novas).
 
 **A barra parece parada na "separação de falantes"** — sem placa de
-vídeo, essa é a etapa demorada: de ~7 a ~20 min por hora de áudio,
-conforme o processador (a transcrição em si leva minutos). Desde a
+vídeo, essa é a etapa demorada: de ~4 min (máquina de 24 threads) a
+~22 min (4 threads) por hora de áudio (a transcrição em si leva minutos;
+com placa de vídeo a separação leva ≈ 1 min por hora). Desde a
 v0.2.3 a barra mostra o progresso real e uma estimativa; e ao clicar em
 Transcrever dá para desmarcar **"Separar falantes agora"** — o texto fica
 pronto em minutos e a lista oferece completar as vozes depois, em lote.

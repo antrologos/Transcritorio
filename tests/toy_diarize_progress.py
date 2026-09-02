@@ -38,11 +38,12 @@ assert seq == sorted(seq), "progresso do hook precisa ser monotonico"
 print("PASS: mapeamento do hook do pyannote")
 
 # --- expectativa por device e nucleos (referencia: 24 nucleos logicos) ---
-# 0,12x com a rede 1x por janela (diar_fast): 62 min de audio em 7,1 min.
-assert abs(expected_diarization_seconds(300, "cpu", 24) - (45 + 36)) < 1e-6     # clipe: 48 s medidos
-assert abs(expected_diarization_seconds(3600, "cpu", 24) - (45 + 432)) < 1e-6   # 1 h ~ 8 min
-assert abs(expected_diarization_seconds(3600, "cpu", 8) - (45 + 1296)) < 1e-6   # 8 nucleos: 3x
-assert abs(expected_diarization_seconds(3600, "cuda", 24) - (20 + 100.8)) < 1e-6
+# 0,060x com a rede 1x por janela + passo de 2 s (A/B 2026-09-02: 323 min
+# de audio em 19,3 min); GPU 0,0065x (62 min em 23 s).
+assert abs(expected_diarization_seconds(300, "cpu", 24) - (45 + 18)) < 1e-6
+assert abs(expected_diarization_seconds(3600, "cpu", 24) - (45 + 216)) < 1e-6   # 1 h ~ 4,4 min
+assert abs(expected_diarization_seconds(3600, "cpu", 8) - (45 + 648)) < 1e-6    # 8 nucleos: 3x
+assert abs(expected_diarization_seconds(3600, "cuda", 24) - (20 + 23.4)) < 1e-6
 assert expected_diarization_seconds(0, "cpu", 24) == 45.0
 assert expected_diarization_seconds(3600, "cpu", 0) > 0   # cores invalido nao explode
 print("PASS: expectativa de tempo da diarizacao")
@@ -63,7 +64,7 @@ print("PASS: heartbeat com real > creep")
 
 # --- estimativa do lote (janela "quantas pessoas falam" em CPU) ---
 asr, diar = batch_time_estimate(3600, "parakeet_onnx", "cpu", 24)
-assert 200 < asr < 240 and abs(diar - 477) < 1e-6, (asr, diar)
+assert 200 < asr < 240 and abs(diar - 261) < 1e-6, (asr, diar)   # 45 + 0,06 x 3600 (passo 2 s)
 asr4, diar4 = batch_time_estimate(3600, "parakeet_onnx", "cpu", 8)
 assert abs(asr4 - asr) < 1e-6 and diar4 > diar
 asr, _ = batch_time_estimate(3600, None, "cpu", 24)
@@ -71,6 +72,15 @@ assert abs(asr - 3960) < 1e-6                       # Whisper small 1,1x
 asr, diar = batch_time_estimate(3600, "whisper", "cuda", 24)
 assert abs(asr - 450) < 1e-6 and diar < 200
 assert batch_time_estimate(0, None, "cpu", 24) == (0.0, 0.0)
+# TAGARELA numa maquina CUDA sem o pacote onnx-gpu: transcricao em CPU (sem
+# escala por nucleos), separacao em GPU (2026-09-02)
+a, d = batch_time_estimate(3600, "parakeet_onnx", "cuda", 24, asr_device="cpu")
+assert abs(a - 3600 / 16.5) < 1e-6 and abs(d - (20 + 0.0065 * 3600)) < 1e-6, (a, d)
+a8, _ = batch_time_estimate(3600, "parakeet_onnx", "cuda", 8, asr_device="cpu")
+assert abs(a8 - a) < 1e-6
+g, _ = batch_time_estimate(3600, "parakeet_onnx", "cuda", 24, asr_device="cuda")
+assert abs(g - 3600 / 62.0) < 1e-6
+assert d < a
 assert describe_seconds(20) == "menos de 1 min"
 assert describe_seconds(240) == "4 min"
 assert describe_seconds(4200) == "1 h 10 min"

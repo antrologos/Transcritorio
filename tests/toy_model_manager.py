@@ -26,8 +26,9 @@ def test_friendly_name_variants() -> None:
         name = model_manager.friendly_name(key)
         assert isinstance(name, str) and len(name) > 5, f"{key}: {name!r}"
         assert "GB" in name or "MB" in name, f"{key}: sem tamanho no nome"
-    name_turbo = model_manager.friendly_name("large-v3-turbo")
-    assert "recomendado" in name_turbo.lower()
+    # 2026-09-02: o recomendado e o TAGARELA; o turbo e a reserva (outros idiomas)
+    assert "recomendado" in model_manager.friendly_name("parakeet-pt").lower()
+    assert "reserva" in model_manager.friendly_name("large-v3-turbo").lower()
     # Obrigatorios
     name_align = model_manager.friendly_name("alignment_pt")
     name_dia = model_manager.friendly_name("diarization")

@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import shutil
+import glob
 import subprocess
 import sys
 import time
@@ -497,6 +498,50 @@ def languages_outside_pt(langs: Iterable[str]) -> set[str]:
     return {str(lang).strip() for lang in langs if str(lang).strip()} - {"pt", "automático"}
 
 
+# Qualidade dos Whisper em linguagem de gente (2026-09-02: o TAGARELA e o
+# padrao em todas as maquinas; para outros idiomas o usuario escolhe um
+# Whisper e precisa saber o que perde/ganha com cada tamanho).
+_WHISPER_QUALITY_NOTES: dict[str, str] = {
+    "large-v3": "melhor qualidade; lento sem placa de vídeo",
+    "large-v3-turbo": "quase a mesma qualidade do large-v3, bem mais rápido; ideal com placa de vídeo",
+    "medium": "boa qualidade; lento sem placa de vídeo",
+    "small": "rápido em qualquer computador; erra mais palavras que os modelos grandes",
+    "base": "demonstração — qualidade baixa",
+    "tiny": "demonstração — qualidade baixa",
+}
+_WHISPER_QUALITY_ORDER = ("large-v3-turbo", "large-v3", "medium", "small", "base", "tiny")
+
+
+def whisper_reserve_options(installed: Iterable[str], recommended: str) -> list[tuple[str, str, bool]]:
+    """Whisper para outros idiomas: [(chave, nota de qualidade, instalado)] (pura).
+
+    A reserva recomendada da maquina vem primeiro (mesmo se ainda nao
+    baixada); depois os Whisper instalados, do melhor para o mais simples.
+    """
+    inst = {str(k) for k in installed if str(k) in _WHISPER_QUALITY_ORDER}
+    chaves: list[str] = []
+    if recommended in _WHISPER_QUALITY_ORDER:
+        chaves.append(recommended)
+    for key in _WHISPER_QUALITY_ORDER:
+        if key in inst and key not in chaves:
+            chaves.append(key)
+    return [(k, _WHISPER_QUALITY_NOTES.get(k, ""), k in inst) for k in chaves]
+
+
+def engine_language_note(model_key: str | None, language: str | None) -> str:
+    """Aviso inline quando o modelo e o TAGARELA e o idioma nao e portugues
+    (pura). "" quando nao ha o que avisar (pt, vazio, automático, Whisper)."""
+    from . import model_manager as _mm_note
+    if (_mm_note.ASR_VARIANTS.get(str(model_key or "")) or {}).get("engine") != "parakeet_onnx":
+        return ""
+    codigo = str(language or "").strip()
+    if codigo.lower() in {"", "pt", "auto", "automático", "project"}:
+        return ""
+    rotulo = str((_mm_note.ALIGN_LANGUAGES.get(codigo) or {}).get("label") or codigo)
+    return (f"⚠ O TAGARELA só transcreve português. Para {rotulo}, escolha um "
+            "modelo Whisper — na hora de transcrever o Transcritório também oferece essa troca.")
+
+
 def engine_offer_due(
     device: str,
     engine: str | None,
@@ -506,17 +551,17 @@ def engine_offer_due(
 ) -> bool:
     """Faixa da lista oferecendo o TAGARELA (pura).
 
-    Sem GPU NVIDIA (device cpu), fora do Mac (rota MLX), motor atual e
-    Whisper, oferta nao recusada em definitivo e nenhum job rodando. E o
-    caminho de migracao VISIVEL para quem instalou antes de o TAGARELA
-    virar o padrao de maquinas sem GPU (a QMessageBox ao Transcrever
-    era facil de nao ver).
+    Motor atual e Whisper, oferta nao recusada em definitivo e nenhum job
+    rodando — em QUALQUER maquina (2026-09-02: o TAGARELA e o padrao em
+    todas; antes so sem GPU e fora do Mac). E o caminho de migracao
+    VISIVEL para quem instalou antes (a QMessageBox ao Transcrever era
+    facil de nao ver). `device`/`platform` ficam na assinatura por
+    compatibilidade.
     """
-    if busy or declined or platform == "darwin":
+    _ = (device, platform)
+    if busy or declined:
         return False
-    if device != "cpu" or engine == "parakeet_onnx":
-        return False
-    return True
+    return engine != "parakeet_onnx"
 
 
 def failure_summary(failures: int, message: str | None) -> str:
@@ -546,22 +591,17 @@ def parakeet_cpu_offer_due(
     declined: bool,
     platform: str | None = None,
 ) -> bool:
-    """Oferecer o TAGARELA quando o Whisper vai rodar em CPU (pura).
+    """Oferecer o TAGARELA ao transcrever com o Whisper (pura).
 
-    Padrao para maquinas sem GPU desde 2026-09-01 (beta testers em CPU
-    viam a barra "travar" na fase silenciosa de alinhamento). So oferece
-    quando: device efetivo e cpu, o motor atual e Whisper, o lote e todo
-    em portugues (o TAGARELA so transcreve pt) e o usuario nunca recusou
-    em definitivo. Nunca no Mac (o Whisper la tem a rota rapida
-    Metal/MLX, mesmo com device coeragido para cpu). "Transcrever
-    novamente" e escolha explicita — o chamador nem consulta esta
-    funcao nesse caso.
+    Padrao em TODAS as maquinas desde 2026-09-02 (antes so sem GPU e fora
+    do Mac). So oferece quando: o motor atual e Whisper, o lote e todo em
+    portugues (o TAGARELA so transcreve pt) e o usuario nunca recusou em
+    definitivo. "Transcrever novamente" e escolha explicita — o chamador
+    nem consulta esta funcao nesse caso. `device`/`platform` ficam por
+    compatibilidade.
     """
-    if (platform or sys.platform) == "darwin":
-        return False
-    if declined or device != "cpu":
-        return False
-    if engine == "parakeet_onnx":
+    _ = (device, platform)
+    if declined or engine == "parakeet_onnx":
         return False
     return not languages_outside_pt(langs)
 
@@ -1464,29 +1504,32 @@ if QT_IMPORT_ERROR is None:
         Based on exhaustive benchmark (tests/benchmark_exhaustive_2026-04-19.csv).
         Weights approximate % of total wall-clock time per stage.
         """
+        # 2026-09-02: a separacao de falantes ficou ~8x mais rapida (rede 1x
+        # por janela + passo de 2 s: 0,06x em CPU, 0,0065x em GPU) — o peso
+        # migrou para a transcricao em quase todas as combinacoes.
         _CUDA: dict[str, list[int]] = {
-            "tiny":           [5, 38, 56, 1, 0],
-            "base":           [5, 38, 56, 1, 0],
-            "small":          [4, 45, 50, 1, 0],
-            "medium":         [4, 50, 45, 1, 0],
-            "large-v3-turbo": [4, 48, 47, 1, 0],
-            "large-v3":       [3, 63, 33, 1, 0],
-            # TAGARELA em GPU ~62x tempo real; diarizacao GPU 0,028x.
-            "parakeet-pt":    [3, 35, 60, 1, 0],
+            "tiny":           [5, 75, 19, 1, 0],
+            "base":           [5, 75, 19, 1, 0],
+            "small":          [4, 80, 15, 1, 0],
+            "medium":         [4, 85, 10, 1, 0],
+            "large-v3-turbo": [4, 90, 5, 1, 0],
+            "large-v3":       [3, 92, 4, 1, 0],
+            # TAGARELA: ~62x com a aceleracao onnx-gpu, senao em CPU (16,5x)
+            # dentro da maquina CUDA — a transcricao domina nos dois casos.
+            "parakeet-pt":    [3, 70, 25, 1, 1],
         }
         _CPU: dict[str, list[int]] = {
-            "tiny":           [2, 50, 47, 1, 0],
-            "base":           [2, 50, 47, 1, 0],
-            "small":          [1, 55, 43, 1, 0],
-            "medium":         [1, 55, 43, 1, 0],
-            "large-v3-turbo": [2, 59, 39, 0, 0],
-            "large-v3":       [1, 65, 33, 1, 0],
-            # Medido 2026-09-01/02: TAGARELA 16,5x tempo real em CPU;
-            # diarizacao 0,40x — e a diarizacao que domina sem GPU.
-            "parakeet-pt":    [1, 12, 85, 1, 0],
+            "tiny":           [2, 75, 22, 1, 0],
+            "base":           [2, 75, 22, 1, 0],
+            "small":          [1, 93, 5, 1, 0],
+            "medium":         [1, 93, 5, 1, 0],
+            "large-v3-turbo": [2, 94, 4, 0, 0],
+            "large-v3":       [1, 94, 4, 1, 0],
+            # TAGARELA 16,5x tempo real (0,06x) e diarizacao 0,06x: empate.
+            "parakeet-pt":    [1, 48, 49, 1, 1],
         }
         table = _CUDA if device == "cuda" else _CPU
-        return table.get(model, _CUDA.get("large-v3-turbo", [4, 48, 47, 1, 0]))
+        return table.get(model, table.get("parakeet-pt", [1, 48, 49, 1, 1]))
 
     class PipelineWorker(QThread):
         progress = Signal(str, int)
@@ -1998,9 +2041,11 @@ if QT_IMPORT_ERROR is None:
         def _show_in_explorer(self) -> None:
             target = self._selected_path() or self.results_folder
             if sys.platform == "win32":
-                # /select, COLADO ao caminho: com argumento separado o
-                # Explorer ignora e abre Documentos.
-                subprocess.Popen(["explorer", f"/select,{target}"])
+                # Linha de comando pronta, com aspas SO no caminho: como lista,
+                # o list2cmdline envolvia o token inteiro em aspas quando o
+                # caminho tinha virgula/espaco e o Explorer abria Documentos
+                # (auditoria 2026-09-02). Nomes Windows nunca contem aspas.
+                subprocess.Popen(f'explorer /select,"{target}"')
 
         def _copy_path(self) -> None:
             target = self._selected_path() or self.results_folder
@@ -2509,7 +2554,7 @@ if QT_IMPORT_ERROR is None:
             if not active:
                 return 0
             from . import model_manager
-            configured = ctx.config.get("asr_model") or "large-v3-turbo"
+            configured = ctx.config.get("asr_model") or model_manager.DEFAULT_ASR_VARIANT
             configured_repo = model_manager.ASR_VARIANTS.get(configured, {}).get("repo")
             # Bloquear remocao do asr atual OU de modelos obrigatorios enquanto ha job
             known_required = {asset.repo_id for asset in model_manager._FIXED_MODELS}
@@ -2720,6 +2765,17 @@ if QT_IMPORT_ERROR is None:
             grid.addWidget(self.use_context_as_prompt, 5, 1, 1, 3)
 
             layout.addLayout(grid)
+            # Nota inline (2026-09-02): projeto no TAGARELA + lingua aplicada
+            # que nao e portugues — avisa e ensina, sem bloquear.
+            self.engine_lang_note = QLabel("")
+            self.engine_lang_note.setWordWrap(True)
+            self.engine_lang_note.setStyleSheet(f"color: {ui_tokens.WARN}; font-weight: 600;")
+            self.engine_lang_note.setVisible(False)
+            layout.addWidget(self.engine_lang_note)
+            _ctx = getattr(parent, "context", None)
+            self._project_model = str(((getattr(_ctx, "config", None) or {}).get("asr_model")) or "")
+            self.language_combo.currentIndexChanged.connect(lambda _i: self._refresh_engine_lang_note())
+            self.apply_language.toggled.connect(lambda _c: self._refresh_engine_lang_note())
             hint = QLabel("Campos não marcados não serão alterados. O contexto é opcional e pode ficar vazio.")
             hint.setStyleSheet(_style_muted())
             layout.addWidget(hint)
@@ -2727,6 +2783,13 @@ if QT_IMPORT_ERROR is None:
             buttons.accepted.connect(self.accept)
             buttons.rejected.connect(self.reject)
             layout.addWidget(buttons)
+
+        def _refresh_engine_lang_note(self) -> None:
+            texto = ""
+            if self.apply_language.isChecked():
+                texto = engine_language_note(self._project_model, str(self.language_combo.currentData() or ""))
+            self.engine_lang_note.setText(texto)
+            self.engine_lang_note.setVisible(bool(texto))
 
         def updates(self) -> dict[str, str]:
             updates: dict[str, str] = {}
@@ -3724,15 +3787,21 @@ if QT_IMPORT_ERROR is None:
             super().__init__(parent)
             self.setWindowTitle("Configurações de transcrição local")
             layout = QVBoxLayout(self)
-            description = QLabel("Motor local de transcrição. Use GPU NVIDIA quando disponível; CPU funciona, mas tende a ser bem mais lenta.")
+            description = QLabel("Motor local de transcrição. Com o TAGARELA, o processador basta (1 h de áudio em poucos minutos); a placa NVIDIA acelera o Whisper e a separação de falantes.")
             description.setWordWrap(True)
             layout.addWidget(description)
+            # Nota inline (2026-09-02): TAGARELA + idioma que nao e portugues.
+            self.engine_lang_note = QLabel("")
+            self.engine_lang_note.setWordWrap(True)
+            self.engine_lang_note.setStyleSheet(f"color: {ui_tokens.WARN}; font-weight: 600;")
+            self.engine_lang_note.setVisible(False)
+            layout.addWidget(self.engine_lang_note)
 
             grid = QGridLayout()
             from . import model_manager
             self.model_combo = QComboBox()
             installed = model_manager.installed_asr_variants()
-            current = str(config.get("asr_model") or "large-v3-turbo")
+            current = str(config.get("asr_model") or model_manager.DEFAULT_ASR_VARIANT)
             current_idx = 0
             for key in model_manager.ASR_VARIANTS:
                 if key not in installed:
@@ -3750,7 +3819,7 @@ if QT_IMPORT_ERROR is None:
             self.install_models_btn.setToolTip("Ver, baixar e remover os modelos deste computador.")
             self.install_models_btn.clicked.connect(self._open_model_setup)
             model_row.addWidget(self.install_models_btn)
-            grid.addWidget(QLabel("Modelo Whisper:"), 0, 0)
+            grid.addWidget(QLabel("Modelo:"), 0, 0)
             grid.addLayout(model_row, 0, 1)
 
             self.device_combo = QComboBox()
@@ -3833,6 +3902,9 @@ if QT_IMPORT_ERROR is None:
             self.language_combo.setCurrentIndex(max(0, self.language_combo.findData(language)))
             grid.addWidget(QLabel("Idioma padrão:"), 3, 0)
             grid.addWidget(self.language_combo, 3, 1)
+            self.model_combo.currentIndexChanged.connect(self._refresh_engine_lang_note)
+            self.language_combo.currentIndexChanged.connect(self._refresh_engine_lang_note)
+            self._refresh_engine_lang_note()
 
             self.min_speakers_spin = QSpinBox()
             self.min_speakers_spin.setRange(1, 20)
@@ -3896,6 +3968,12 @@ if QT_IMPORT_ERROR is None:
             buttons.rejected.connect(self.reject)
             layout.addWidget(buttons)
 
+        def _refresh_engine_lang_note(self) -> None:
+            nota = engine_language_note(
+                str(self.model_combo.currentData() or ""), str(self.language_combo.currentData() or ""))
+            self.engine_lang_note.setText(nota)
+            self.engine_lang_note.setVisible(bool(nota))
+
         def _open_model_setup(self) -> None:
             # Abre o GERENCIADOR (escolha por item), nao o dialogo de escopo
             # obrigatorio — que numa instalacao completa ficava vazio, com um
@@ -3918,7 +3996,7 @@ if QT_IMPORT_ERROR is None:
             min_pause = float(self.min_pause_spin.value())
             min_segment = float(self.min_segment_spin.value())
             return {
-                "asr_model": str(self.model_combo.currentData() or self.model_combo.currentText() or "large-v3-turbo"),
+                "asr_model": str(self.model_combo.currentData() or self.model_combo.currentText() or __import__("transcribe_pipeline.model_manager", fromlist=["DEFAULT_ASR_VARIANT"]).DEFAULT_ASR_VARIANT),
                 "asr_device": device,
                 "asr_compute_type": compute_type,
                 "asr_batch_size": int(self.batch_spin.value()) or "auto",
@@ -3929,6 +4007,73 @@ if QT_IMPORT_ERROR is None:
                 "diarization_min_duration_off": min_pause if min_pause > 0 else None,
                 "diarization_min_segment": min_segment if min_segment > 0 else None,
             }
+
+
+    class OtherLanguageEngineDialog(QDialog):
+        """O lote tem idioma que o TAGARELA nao transcreve: explica, ensina
+        onde o modelo e escolhido e oferece o Whisper (reserva) com a
+        qualidade de cada opcao — so para este lote ou para o projeto."""
+
+        def __init__(self, idiomas: list[str], opcoes: list[tuple[str, str, bool]],
+                     parent: QWidget | None = None) -> None:
+            super().__init__(parent)
+            self.setWindowTitle("Este lote tem outro idioma")
+            layout = QVBoxLayout(self)
+            from . import model_manager as _mm_ol
+            rotulos = [str((_mm_ol.ALIGN_LANGUAGES.get(c) or {}).get("label") or c) for c in idiomas]
+            texto = QLabel(
+                "O TAGARELA só transcreve português, e este lote inclui: "
+                f"{', '.join(rotulos)}.\n\n"
+                "Para outros idiomas o Transcritório usa um modelo Whisper. A "
+                "qualidade depende do tamanho: o small é rápido, mas erra mais "
+                "palavras; o large-v3-turbo é quase tão preciso quanto o large-v3 "
+                "e bem mais rápido, ideal com placa de vídeo (ou paciência, sem "
+                "ela).\n\n"
+                "Se a gravação for em português e o idioma estiver marcado errado, "
+                "cancele e corrija-o na aba Propriedades (ou em Configurar "
+                "transcrição…).\n\n"
+                "Depois, o modelo do projeto fica em Ferramentas → Configurar "
+                "transcrição… (campo Modelo), e novos modelos em Ferramentas → "
+                "Gerenciar modelos…")
+            texto.setWordWrap(True)
+            layout.addWidget(texto)
+            layout.addWidget(QLabel("Modelo Whisper para este lote:"))
+            self.model_combo = QComboBox()
+            for key, nota, instalado in opcoes:
+                info = _mm_ol.ASR_VARIANTS.get(key) or {}
+                rotulo = str(info.get("label") or key)
+                sufixo = f" — {nota}" if nota else ""
+                if not instalado:
+                    sufixo += f"  (baixar, ~{float(info.get('estimated_gb') or 0):.1f} GB)"
+                self.model_combo.addItem(f"{rotulo}{sufixo}", key)
+            layout.addWidget(self.model_combo)
+            self.project_check = QCheckBox(
+                "Passar o projeto inteiro para este modelo (em vez de só este lote)")
+            layout.addWidget(self.project_check)
+            buttons = QDialogButtonBox()
+            self.ok_button = buttons.addButton("Transcrever com o Whisper", QDialogButtonBox.ButtonRole.AcceptRole)
+            self.settings_button = buttons.addButton("Configurar transcrição…", QDialogButtonBox.ButtonRole.ActionRole)
+            buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
+            self._wants_settings = False
+            self.settings_button.clicked.connect(self._on_settings)
+            buttons.accepted.connect(self.accept)
+            buttons.rejected.connect(self.reject)
+            layout.addWidget(buttons)
+            self.ok_button.setEnabled(self.model_combo.count() > 0)
+
+        def _on_settings(self) -> None:
+            self._wants_settings = True
+            self.reject()
+
+        @property
+        def wants_settings(self) -> bool:
+            return self._wants_settings
+
+        def chosen_model(self) -> str:
+            return str(self.model_combo.currentData() or "")
+
+        def apply_to_project(self) -> bool:
+            return self.project_check.isChecked()
 
 
     class RetranscribeDialog(QDialog):
@@ -4191,9 +4336,16 @@ if QT_IMPORT_ERROR is None:
             hardware = caps.hardware_snapshot()
             recomendado = caps.recommended_profile(hardware)
             variantes = caps.recommended_asr_variants(hardware)
-            variante = variantes[0]
-            tamanhos = caps.model_sizes_from_registry(variantes)
-            em_cache = caps.cached_model_keys(variante)
+            # Cobrar so o que FALTA da dupla (revisao 2026-09-02): o tamanho
+            # somava TAGARELA + reserva mesmo com um deles ja instalado.
+            from . import model_manager as _mm_pf
+            try:
+                instaladas = set(_mm_pf.installed_asr_variants())
+            except Exception:  # noqa: BLE001 - cache ilegivel = nada instalado
+                instaladas = set()
+            faltantes = tuple(v for v in variantes if v not in instaladas)
+            tamanhos = caps.model_sizes_from_registry(faltantes or variantes)
+            em_cache = caps.cached_model_keys(variantes)
             detectado = QLabel(f"Este computador tem: {caps.describe_hardware(hardware)}.")
             detectado.setWordWrap(True)
             layout.addWidget(detectado)
@@ -4329,7 +4481,10 @@ if QT_IMPORT_ERROR is None:
                 "áudio até ela.\n"
                 "Gravações em outros idiomas transcrevem normalmente, apenas "
                 "sem os tempos por palavra. Você pode baixar mais idiomas "
-                "depois em Ferramentas → Gerenciar modelos…")
+                "depois em Ferramentas → Gerenciar modelos…\n"
+                "O motor recomendado (TAGARELA) só transcreve português: para "
+                "outros idiomas o Transcritório usa o Whisper de reserva e avisa "
+                "na hora de transcrever.")
             intro.setWordWrap(True)
             layout.addWidget(intro)
             grade = QGridLayout()
@@ -4507,13 +4662,11 @@ if QT_IMPORT_ERROR is None:
             self._model_manager = model_manager
             self._wizard = wizard
             self.setTitle("Escolha o modelo de transcrição")
-            # A recomendacao acompanha a MAQUINA, nao um default fixo: em
-            # CPU, um modelo grande leva horas por entrevista (feedback do
-            # 1o teste real da pagina de perfis, 2026-08-30).
+            # A recomendacao acompanha a MAQUINA: TAGARELA primario em todas
+            # (2026-09-02) + um Whisper de reserva para outros idiomas (turbo
+            # com GPU util, small no resto).
             _recs = caps.recommended_asr_variants(caps.hardware_snapshot())
             self._recommended_key = _recs[0]
-            # Em CPU a recomendacao e dupla: TAGARELA (primario) + small
-            # como reserva para outros idiomas (decisao 2026-09-01).
             self._recommended_keys = tuple(_recs)
             layout = QVBoxLayout(self)
             intro = QLabel(
@@ -4529,13 +4682,13 @@ if QT_IMPORT_ERROR is None:
             layout.addWidget(intro)
 
             self._checkboxes: dict[str, QCheckBox] = {}
-            # O recomendado da maquina aparece sempre no grupo de cima,
-            # mesmo quando e um modelo pequeno (maquinas de CPU).
-            top_keys = list(self.RECOMMENDED)
-            other_keys = [k for k in self.OTHERS if k not in self._recommended_keys]
-            for _rec in self._recommended_keys:
+            # Grupo de cima: o recomendado da maquina PRIMEIRO (TAGARELA), a
+            # reserva em seguida e os grandes do Whisper depois.
+            top_keys = list(self._recommended_keys)
+            for _rec in self.RECOMMENDED:
                 if _rec not in top_keys:
                     top_keys.append(_rec)
+            other_keys = [k for k in self.OTHERS if k not in self._recommended_keys]
 
             def _make_checkbox(key: str) -> QCheckBox:
                 info = self._model_manager.ASR_VARIANTS[key]
@@ -6145,19 +6298,19 @@ if QT_IMPORT_ERROR is None:
             device = _runtime.resolve_device(
                 str(self.context.config.get("asr_device") or "auto"))[0]
             if not parakeet_cpu_offer_due(
-                    device, motor_spec.get("engine"), langs, flag.exists()):
+                    device, motor_spec.get("engine"), langs, self._engine_offer_declined(flag)):
                 return False
             self._parakeet_cpu_prompted = True
             box = QMessageBox(self)
-            box.setWindowTitle("Usar o motor rápido deste computador?")
+            box.setWindowTitle("Usar o motor recomendado?")
             box.setIcon(QMessageBox.Icon.Question)
             box.setText(
-                "Sem placa de vídeo, o Whisper leva cerca do tempo do próprio "
-                "áudio para transcrever, e a barra pode parecer parada na "
-                "marcação dos tempos por palavra.\n\n"
-                "O motor Parakeet pt-BR (TAGARELA, experimental) transcreve "
-                "1 hora de gravação em poucos minutos neste computador, com "
-                "tempos por palavra — mas só transcreve português.\n\n"
+                "O motor Parakeet pt-BR (TAGARELA) é o recomendado: feito para "
+                "o português falado — segundo os autores do modelo, em fala "
+                "espontânea erra menos palavras que o Whisper large-v3 —, com "
+                "pontuação e tempos por palavra nativos, e transcreve 1 hora de "
+                "gravação em poucos minutos mesmo sem placa de vídeo. Só "
+                "transcreve português.\n\n"
                 "Usar o TAGARELA nesta e nas próximas transcrições deste "
                 "projeto?")
             usar = box.addButton("Usar o TAGARELA", QMessageBox.ButtonRole.AcceptRole)
@@ -6197,6 +6350,39 @@ if QT_IMPORT_ERROR is None:
                 except Exception as exc:  # noqa: BLE001
                     _logger.warning("nao foi possivel gravar asr_model_default: %s", exc)
             return True
+
+        def _switch_engine_to_whisper(self, model_key: str) -> bool:
+            """Inverso de _switch_engine_to_parakeet (2026-09-02): passa o
+            projeto para um Whisper (outros idiomas). Nao mexe no idioma nem
+            no padrao da maquina."""
+            if self.context is None or not model_key:
+                return False
+            try:
+                self.context = app_service.update_engine_config(self.context, {"asr_model": model_key})
+            except Exception as exc:  # noqa: BLE001
+                QMessageBox.warning(self, "Não foi possível trocar o motor",
+                                    sanitize_message(str(exc)))
+                return False
+            # Escolha explicita do usuario: a oferta do TAGARELA nao volta
+            # neste projeto durante a sessao (faixa e QMessageBox).
+            self._engine_user_choice.add(str(self.context.paths.project_root))
+            self._parakeet_cpu_prompted = True
+            return True
+
+        @property
+        def _engine_user_choice(self) -> set[str]:
+            if not hasattr(self, "_engine_user_choice_set"):
+                self._engine_user_choice_set: set[str] = set()
+            return self._engine_user_choice_set
+
+        def _engine_offer_declined(self, flag: Path) -> bool:
+            """Recusa definitiva (flag da maquina) ou escolha explicita de um
+            Whisper neste projeto nesta sessao."""
+            if flag.exists():
+                return True
+            if self.context is None:
+                return False
+            return str(self.context.paths.project_root) in self._engine_user_choice
 
         def _maybe_offer_cuda_install(self) -> None:
             """Se Windows + NVIDIA detectada + bundle sem torch_cuda + flag
@@ -6702,9 +6888,11 @@ if QT_IMPORT_ERROR is None:
             engine_offer_layout = QHBoxLayout(self.engine_offer_banner)
             engine_offer_layout.setContentsMargins(10, 6, 10, 6)
             engine_offer_label = QLabel(
-                "⚡ Este computador não tem placa de vídeo — o motor TAGARELA "
-                "transcreve 1 hora de entrevista em poucos minutos (o Whisper "
-                "leva cerca da duração do áudio). Só transcreve português.")
+                "⚡ O TAGARELA é o motor recomendado: feito para o português "
+                "falado (segundo os autores do modelo, erra menos palavras que o "
+                "Whisper em fala espontânea), com pontuação e tempos por palavra "
+                "nativos, e transcreve 1 hora em poucos minutos mesmo sem placa "
+                "de vídeo. Só transcreve português.")
             engine_offer_label.setWordWrap(True)
             engine_offer_layout.addWidget(engine_offer_label, 1)
             engine_accept_button = QPushButton("Usar o TAGARELA")
@@ -6901,7 +7089,7 @@ if QT_IMPORT_ERROR is None:
                 self.project_label.setToolTip(
                     f"Projeto: {self.context.paths.project_root}\n"
                     "Clique em \"Modelo\" ou \"Motor\" para configurar a "
-                    "transcrição (modelo Whisper, dispositivo CUDA/CPU, idioma).")
+                    "transcrição (modelo, dispositivo CUDA/CPU, idioma).")
             else:
                 self.setWindowTitle(APP_NAME)
                 self.project_label.setToolTip("Nenhum projeto aberto.")
@@ -6920,6 +7108,14 @@ if QT_IMPORT_ERROR is None:
                 model = f"{configurado} (não instalado)"
             asr_device = self.context.config.get("asr_device") if self.context else None
             backend = _runtime_local.describe_backend(asr_device)
+            # TAGARELA numa maquina CUDA roda no processador ate o pacote
+            # onnx-gpu existir: o selo nao pode dizer "CUDA" em verde.
+            engine_efetivo = (model_manager.ASR_VARIANTS.get(
+                model_manager.resolve_asr_model(configurado)) or {}).get("engine")
+            if engine_efetivo == "parakeet_onnx" and "CUDA" in backend:
+                from . import parakeet_runner as _pk_badge
+                if _pk_badge.planned_device("cuda") == "cpu":
+                    backend = "CPU (TAGARELA — aceleração NVIDIA não ativa)"
             # Color the backend badge: green for GPU acceleration, amber when
             # only CPU is available so the user sees it at a glance.
             # E um LINK (mesmo destino do "Modelo"): o seletor CUDA/CPU
@@ -7547,7 +7743,10 @@ if QT_IMPORT_ERROR is None:
                 motor = str(self.context.config.get("asr_model") or "")
                 engine = (_mm_b.ASR_VARIANTS.get(motor) or {}).get("engine")
                 busy = bool(self.worker and self.worker.isRunning())
-                visivel = engine_offer_due(device, engine, sys.platform, flag.exists(), busy)
+                # Projeto em outro idioma: o TAGARELA nao serve — sem faixa.
+                idioma_fora = bool(languages_outside_pt([str(self.context.config.get("asr_language") or "")]))
+                visivel = (not idioma_fora) and engine_offer_due(
+                    device, engine, sys.platform, self._engine_offer_declined(flag), busy)
             self.engine_offer_banner.setVisible(visivel)
 
         def _on_engine_offer_accept(self) -> None:
@@ -7584,27 +7783,38 @@ if QT_IMPORT_ERROR is None:
             if total <= 0:
                 return None
             engine = (_mm_e.ASR_VARIANTS.get(asr_model) or {}).get("engine")
-            asr_s, diar_s = _caps_e.batch_time_estimate(total, engine, device, _runtime_e.cpu_cores())
-            return (f"Neste computador (sem placa de vídeo), para {_caps_e.describe_seconds(total)} "
+            asr_dev = device
+            if engine == "parakeet_onnx" and device == "cuda":
+                from . import parakeet_runner as _pk_e
+                asr_dev = _pk_e.planned_device(device)   # CPU ate o onnx-gpu existir
+            asr_s, diar_s = _caps_e.batch_time_estimate(
+                total, engine, device, _runtime_e.cpu_cores(), asr_device=asr_dev)
+            onde = "sem placa de vídeo" if device != "cuda" else "com placa de vídeo"
+            dica = ("A separação é a etapa demorada — dá para deixá-la para depois "
+                    "(a lista oferece um botão) e já revisar o texto."
+                    if diar_s > asr_s else
+                    "Dá para deixar a separação para depois (a lista oferece um botão).")
+            return (f"Neste computador ({onde}), para {_caps_e.describe_seconds(total)} "
                     f"de áudio: transcrição ≈ {_caps_e.describe_seconds(asr_s)} · separação de "
-                    f"falantes ≈ {_caps_e.describe_seconds(diar_s)}.\n"
-                    "A separação é a etapa demorada — dá para deixá-la para depois "
-                    "(a lista oferece um botão) e já revisar o texto.")
+                    f"falantes ≈ {_caps_e.describe_seconds(diar_s)}.\n{dica}")
 
         def _apply_interview_filter(self) -> None:
             """Hide/show table rows based on status combo and text search."""
             if not hasattr(self, "filter_status_combo"):
                 return
             status_filter = self.filter_status_combo.currentText()
-            text_filter = self.filter_text_edit.text().strip().lower()
+            # Mesmo normalizador da busca no texto: "joao" acha "Entrevista João"
+            # (sem acentos, sem caixa, NFC/NFD) — auditoria 2026-09-02.
+            from . import search as _search_f
+            text_filter = _search_f.normalize(self.filter_text_edit.text().strip())
             visible_count = 0
             for row_idx in range(self.interview_table.rowCount()):
                 id_item = self.interview_table.item(row_idx, COL_ARQUIVO)
                 state_item = self.interview_table.item(row_idx, COL_TRANSCRICAO)
                 if not id_item or not state_item:
                     continue
-                real_id = str(id_item.data(Qt.ItemDataRole.UserRole) or "").lower()
-                displayed_text = id_item.text().lower()
+                real_id = _search_f.normalize(str(id_item.data(Qt.ItemDataRole.UserRole) or ""))
+                displayed_text = _search_f.normalize(id_item.text())
                 state_text = state_item.text()
                 show_by_status = True
                 if status_filter == "Transcritas":
@@ -10378,13 +10588,30 @@ if QT_IMPORT_ERROR is None:
             if motor_spec.get("engine") == "parakeet_onnx":
                 fora_pt = sorted(languages_outside_pt(set(langs_lote) | set(avisos_idioma)))
                 if fora_pt:
-                    QMessageBox.warning(
-                        self, "Motor só para português",
-                        "O motor Parakeet pt-BR (experimental) só transcreve "
-                        f"português, e este lote inclui: {', '.join(fora_pt)}.\n\n"
-                        "Ajuste o idioma do projeto (no Motor) ou o idioma do "
-                        "arquivo (nas propriedades), ou escolha um modelo "
-                        "Whisper para transcrever.")
+                    # 2026-09-02: em vez de um aviso com OK, a janela explica,
+                    # ensina onde o modelo mora e oferece o Whisper de reserva
+                    # (com a qualidade de cada opcao) so para o lote ou para o
+                    # projeto; "Configurar transcrição…" abre o dialogo do motor.
+                    from . import capabilities as _caps_ol
+                    reserva = _caps_ol.recommended_asr_variants(_caps_ol.hardware_snapshot())[-1]
+                    opcoes = whisper_reserve_options(_mm_motor.installed_asr_variants(), reserva)
+                    dialog_ol = OtherLanguageEngineDialog(fora_pt, opcoes, self)
+                    if dialog_ol.exec() != QDialog.DialogCode.Accepted:
+                        if dialog_ol.wants_settings:
+                            self.configure_engine()
+                        return
+                    escolhido = dialog_ol.chosen_model()
+                    if not escolhido:
+                        return
+                    if dialog_ol.apply_to_project():
+                        if not self._switch_engine_to_whisper(escolhido):
+                            return
+                        self.run_full_transcription_job(
+                            ids=ids, confirmed_recreate=confirmed_recreate, diarize_now=diarize_now)
+                    else:
+                        self.run_full_transcription_job(
+                            ids=ids, asr_model=escolhido, confirmed_recreate=confirmed_recreate,
+                            diarize_now=diarize_now)
                     return
                 langs_lote, avisos_idioma = (), ()
                 # Oferta unica da aceleracao GPU (nao bloqueia: qualquer
@@ -10456,9 +10683,16 @@ if QT_IMPORT_ERROR is None:
                 device_pre = _runtime_pre.resolve_device(
                     str(self.context.config.get("asr_device") or "auto"))[0]
                 estimate_text = None
-                if device_pre != "cuda" and diarize_now is None:
-                    estimate_text = self._batch_estimate_text(
-                        ids, asr_model or str(self.context.config.get("asr_model") or ""), device_pre)
+                # Estimativa + caixa "Separar falantes agora" quando algo vai
+                # rodar em CPU: maquina sem GPU, ou TAGARELA sem o pacote
+                # onnx-gpu numa maquina CUDA (2026-09-02).
+                modelo_pre = asr_model or str(self.context.config.get("asr_model") or "")
+                asr_em_cpu = device_pre != "cuda"
+                if not asr_em_cpu and (_mm_motor.ASR_VARIANTS.get(modelo_pre) or {}).get("engine") == "parakeet_onnx":
+                    from . import parakeet_runner as _pk_pre
+                    asr_em_cpu = _pk_pre.planned_device(device_pre) == "cpu"
+                if asr_em_cpu and diarize_now is None:
+                    estimate_text = self._batch_estimate_text(ids, modelo_pre, device_pre)
                 if pending or estimate_text:
                     dialog = SpeakerCountDialog(
                         len(pending), self, estimate_text=estimate_text, ask_counts=bool(pending))
@@ -10479,7 +10713,7 @@ if QT_IMPORT_ERROR is None:
             # Dynamic weights from benchmark data (tests/benchmark_exhaustive_2026-04-19.csv)
             # `or` DENTRO do str(): config com `asr_model: null` virava a
             # string "None" nos overrides.
-            asr_model = asr_model or str(self.context.config.get("asr_model") or "large-v3-turbo")
+            asr_model = asr_model or str(self.context.config.get("asr_model") or _mm_motor.DEFAULT_ASR_VARIANT)
             # Rotulo do job diz o MOTOR certo (dizia "Whisper" ate com o TAGARELA).
             motor_label = ("o TAGARELA"
                            if (_mm_motor.ASR_VARIANTS.get(asr_model) or {}).get("engine") == "parakeet_onnx"
@@ -10865,7 +11099,7 @@ if QT_IMPORT_ERROR is None:
 
                 command = _rt.cli_command(
                     "--project", str(self.context.paths.project_root),
-                    "channels", "--ids", iid, "--progress-json",
+                    "channels", f"--ids={iid}", "--progress-json",
                 )
                 completed = run_command_stream(command, on_output=on_output, should_cancel=should_cancel)
                 if completed.returncode != 0:
@@ -10903,7 +11137,7 @@ if QT_IMPORT_ERROR is None:
 
                 command = _rt.cli_command(
                     "--project", str(self.context.paths.project_root),
-                    "diarize", "--ids", iid, "--progress-json",
+                    "diarize", f"--ids={iid}", "--progress-json",
                 )
                 completed = run_command_stream(command, on_output=on_output, should_cancel=should_cancel)
                 if completed.returncode != 0:
@@ -10942,7 +11176,7 @@ if QT_IMPORT_ERROR is None:
 
                 command = _rt.cli_command(
                     "--project", str(self.context.paths.project_root),
-                    "check-boundaries", "--ids", iid, "--progress-json",
+                    "check-boundaries", f"--ids={iid}", "--progress-json",
                 )
                 completed = run_command_stream(command, on_output=on_output, should_cancel=should_cancel)
                 if completed.returncode != 0:
@@ -11169,7 +11403,18 @@ if QT_IMPORT_ERROR is None:
                 self._props_lang_combo.addItem(str(_spec["label"]), _code)
             self._props_lang_combo.currentIndexChanged.connect(
                 lambda _i: self._touch_props("language"))
-            grid.addWidget(self._props_lang_combo, base, 1)
+            # Nota inline (2026-09-02): projeto no TAGARELA + idioma do arquivo
+            # que nao e portugues — avisa e ensina, sem bloquear.
+            self._props_lang_note = QLabel("")
+            self._props_lang_note.setWordWrap(True)
+            self._props_lang_note.setStyleSheet(f"color: {ui_tokens.WARN}; font-weight: 600;")
+            self._props_lang_note.setVisible(False)
+            self._props_lang_combo.currentIndexChanged.connect(lambda _i: self._refresh_props_lang_note())
+            _lang_box = QVBoxLayout()
+            _lang_box.setContentsMargins(0, 0, 0, 0)
+            _lang_box.addWidget(self._props_lang_combo)
+            _lang_box.addWidget(self._props_lang_note)
+            grid.addLayout(_lang_box, base, 1)
             # Falantes: modo + spins (mesma semantica do dialogo de lote).
             _nome("Falantes esperados:", base + 1)
             falantes_row = QHBoxLayout()
@@ -11237,6 +11482,17 @@ if QT_IMPORT_ERROR is None:
             raiz.addLayout(rodape)
             raiz.addStretch(1)
             return self._props_tab
+
+        def _refresh_props_lang_note(self) -> None:
+            """Nota "TAGARELA só transcreve português" sob o idioma do arquivo."""
+            note = getattr(self, "_props_lang_note", None)
+            combo = getattr(self, "_props_lang_combo", None)
+            if note is None or combo is None:
+                return
+            modelo = str(self.context.config.get("asr_model") or "") if self.context else ""
+            texto = engine_language_note(modelo, str(combo.currentData() or ""))
+            note.setText(texto)
+            note.setVisible(bool(texto))
 
         def _touch_props(self, campo: str) -> None:
             """Gesto do usuario num campo editavel da aba (os populates
@@ -11356,6 +11612,7 @@ if QT_IMPORT_ERROR is None:
                 lingua = str(metadata.get("language") or "")
                 indice = self._props_lang_combo.findData(lingua)
                 self._props_lang_combo.setCurrentIndex(max(0, indice))
+                self._refresh_props_lang_note()
                 modo = str(metadata.get("speaker_mode") or "") or "exact"
                 indice = self._props_mode_combo.findData(modo)
                 self._props_mode_combo.setCurrentIndex(max(0, indice))
@@ -11380,9 +11637,9 @@ if QT_IMPORT_ERROR is None:
 
         def _show_path_in_folder(self, caminho: str) -> None:
             if sys.platform == "win32":
-                # /select, COLADO ao caminho (com argumento separado o
-                # Explorer ignora e abre Documentos).
-                subprocess.Popen(["explorer", f"/select,{caminho}"])
+                # Linha de comando pronta, com aspas SO no caminho (ver o
+                # outro /select, acima): virgula no nome abria Documentos.
+                subprocess.Popen(f'explorer /select,"{caminho}"')
             else:
                 open_folder_in_explorer(Path(caminho).parent)
 
@@ -11447,7 +11704,7 @@ if QT_IMPORT_ERROR is None:
                 ]:
                     achado: Path | None = None
                     try:
-                        achado = next(iter(sorted(alvo.rglob(f"{iid}*.{ext}"))), None)
+                        achado = next(iter(sorted(alvo.rglob(f"{glob.escape(iid)}*.{ext}"))), None)
                     except OSError:
                         achado = None
                     if achado is not None:
@@ -11473,7 +11730,7 @@ if QT_IMPORT_ERROR is None:
                         acao_rotulo="✨ Gerar", acao_chave="gerar_resumo"))
                 backups_dir = self.context.paths.review_dir / "edits" / "backups"
                 try:
-                    n_backups = len(list(backups_dir.glob(f"{iid}*")))
+                    n_backups = len(list(backups_dir.glob(f"{glob.escape(iid)}*")))
                 except OSError:
                     n_backups = 0
                 if n_backups:

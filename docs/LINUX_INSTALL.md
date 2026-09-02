@@ -58,9 +58,9 @@ uv tool install --reinstall --python 3.12 "transcritorio[cuda]" \
   Secret Service do desktop (GNOME Keyring/KWallet); em servidores sem
   desktop, um fallback criptografado local é usado automaticamente.
 - Primeira execução baixa os modelos do perfil escolhido (~3,5 GB só
-  transcrição em máquina sem GPU NVIDIA — o motor rápido TAGARELA + o
-  Whisper small de reserva; ~5 GB somando separação de falantes e
-  tempos por palavra); depois tudo roda offline.
+  transcrição — o motor TAGARELA, padrão em todas as máquinas, + um
+  Whisper de reserva para outros idiomas; ~5 GB somando separação de
+  falantes e tempos por palavra); depois tudo roda offline.
 - Wayland/X11: a interface usa Qt 6 (PySide6); em caso de problema de
   renderização, tente `QT_QPA_PLATFORM=xcb transcritorio`.
 

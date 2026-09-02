@@ -29,9 +29,10 @@ assert minimo == Hardware(has_gpu=False, vram_gb=None, ram_gb=4.0, cores=2,
 cpu = parse_fake_hardware("cpu")
 assert cpu is not None and not cpu.has_gpu
 
-# Maquina minima (4 GB RAM / 2 nucleos): Essencial + TAGARELA primario
-# com small de reserva (outros idiomas), nunca GPU. Plataforma explicita
-# para o toy valer igual nos 3 SOs do CI.
+# 2026-09-02: TAGARELA primario em TODAS as maquinas (decisao do usuario);
+# a reserva Whisper para outros idiomas e o turbo com GPU util, small no
+# resto (Mac inclusive — la o small roda pela rota MLX). Plataforma
+# explicita para o toy valer igual nos 3 SOs do CI.
 assert recommended_profile(minimo) == "essencial"
 assert recommended_asr_variants(minimo, platform="win32") == ("parakeet-pt", "small")
 assert recommended_asr_variants(minimo, platform="linux") == ("parakeet-pt", "small")
@@ -40,14 +41,15 @@ assert recommended_asr_variants(minimo, platform="linux") == ("parakeet-pt", "sm
 assert recommended_profile(cpu) == "padrao"
 assert recommended_asr_variants(cpu, platform="win32") == ("parakeet-pt", "small")
 
-# Mac: o Whisper ja tem a rota rapida Metal/MLX — recomendacao segue small
-assert recommended_asr_variants(cpu, platform="darwin") == ("small",)
+# Mac: TAGARELA primario tambem; small (MLX) de reserva
+assert recommended_asr_variants(cpu, platform="darwin") == ("parakeet-pt", "small")
 
-# GPU 6 GB+: Completo + turbo, e SO o turbo
+# GPU 6 GB+: Completo + TAGARELA primario com o turbo de reserva
 gpu = parse_fake_hardware("gpu8")
 assert recommended_profile(gpu) == "completo"
-assert recommended_asr_variants(gpu, platform="win32") == ("large-v3-turbo",)
-assert recommended_asr_variants(gpu, platform="linux")[0] == "large-v3-turbo"
+assert recommended_asr_variants(gpu, platform="win32") == ("parakeet-pt", "large-v3-turbo")
+assert recommended_asr_variants(gpu, platform="linux") == ("parakeet-pt", "large-v3-turbo")
+assert recommended_asr_variants(gpu, platform="darwin")[0] == "parakeet-pt"
 
 # GPU fraca (< 6 GB) NAO ganha o Completo (analise AI pede 6 GB VRAM)
 gpu_fraca = parse_fake_hardware("gpu4")

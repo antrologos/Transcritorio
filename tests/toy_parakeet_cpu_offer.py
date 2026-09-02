@@ -36,28 +36,28 @@ assert languages_outside_pt(["en"]) == {"en"}
 assert parakeet_cpu_offer_due("cpu", None, ["automático"], False, platform="win32") is True
 assert parakeet_cpu_offer_due("cpu", None, ["pt", "automático"], False, platform="win32") is True
 
-# Faixa da lista (migracao visivel): sem GPU + Whisper + nao recusada + ocioso
+# Faixa da lista (migracao visivel): Whisper + nao recusada + ocioso — em
+# QUALQUER maquina (2026-09-02: TAGARELA padrao em todas, GPU e Mac inclusive)
 assert engine_offer_due("cpu", None, "win32", False, False) is True
 assert engine_offer_due("cpu", "whisper", "linux", False, False) is True
-assert engine_offer_due("cuda", None, "win32", False, False) is False
+assert engine_offer_due("cuda", None, "win32", False, False) is True
+assert engine_offer_due("cpu", None, "darwin", False, False) is True
 assert engine_offer_due("cpu", "parakeet_onnx", "win32", False, False) is False
-assert engine_offer_due("cpu", None, "darwin", False, False) is False
 assert engine_offer_due("cpu", None, "win32", True, False) is False
 assert engine_offer_due("cpu", None, "win32", False, True) is False
 print("PASS: languages_outside_pt + engine_offer_due")
 
-# Caso alvo: Whisper em CPU, lote em pt, sem recusa -> oferece
+# Caso alvo: Whisper, lote em pt, sem recusa -> oferece
 assert parakeet_cpu_offer_due("cpu", None, ["pt"], False, platform="win32") is True
 assert parakeet_cpu_offer_due("cpu", None, ["pt"], False, platform="linux") is True
 # Sem idioma declarado = default pt do projeto -> oferece
 assert parakeet_cpu_offer_due("cpu", None, [], False, platform="win32") is True
 assert parakeet_cpu_offer_due("cpu", None, ["pt", ""], False, platform="win32") is True
 
-# Nunca em GPU (o Whisper turbo e o melhor motor la)
-assert parakeet_cpu_offer_due("cuda", None, ["pt"], False, platform="win32") is False
-# Mac: o Whisper tem a rota Metal/MLX mesmo com device coeragido p/ cpu
-assert parakeet_cpu_offer_due("cpu", None, ["pt"], False, platform="darwin") is False
-assert parakeet_cpu_offer_due("mps", None, ["pt"], False, platform="win32") is False
+# GPU, Mac e MPS tambem recebem a oferta (padrao em todas as maquinas)
+assert parakeet_cpu_offer_due("cuda", None, ["pt"], False, platform="win32") is True
+assert parakeet_cpu_offer_due("cpu", None, ["pt"], False, platform="darwin") is True
+assert parakeet_cpu_offer_due("mps", None, ["pt"], False, platform="win32") is True
 
 # Motor ja e o TAGARELA -> nada a oferecer
 assert parakeet_cpu_offer_due("cpu", "parakeet_onnx", ["pt"], False, platform="win32") is False

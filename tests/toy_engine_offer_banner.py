@@ -45,12 +45,10 @@ assert not flag.exists()
 win = ReviewStudioWindow(project_root=root)
 win.refresh_interviews()
 app.processEvents()
-if sys.platform == "darwin":
-    assert not win.engine_offer_banner.isVisibleTo(win), "Mac fica fora (rota MLX)"
-    print("PASS: toy_engine_offer_banner (darwin: sem faixa)")
-    sys.exit(0)
-assert win.engine_offer_banner.isVisibleTo(win), "faixa deveria aparecer: CPU + Whisper"
-print("PASS: faixa aparece sem GPU com projeto no Whisper")
+# 2026-09-02: TAGARELA padrao em TODAS as maquinas — a faixa aparece em
+# qualquer SO/device quando o projeto esta no Whisper.
+assert win.engine_offer_banner.isVisibleTo(win), "faixa deveria aparecer: projeto no Whisper"
+print("PASS: faixa aparece com projeto no Whisper")
 
 # Recusar: flag gravada, faixa some e nao volta no proximo refresh
 win._on_engine_offer_decline()
@@ -76,6 +74,27 @@ assert app_settings.asr_model_default() == "parakeet-pt"     # projetos novos he
 assert chamadas and chamadas[0].get("asr_variants") == ["parakeet-pt"], chamadas
 assert not win.engine_offer_banner.isVisibleTo(win)          # motor ja e o TAGARELA
 print("PASS: aceitar troca projeto, padrao da maquina e pede o download")
+
+# Escolha explicita de um Whisper (outro idioma): a oferta nao volta neste
+# projeto durante a sessao, mesmo com o projeto de volta ao Whisper
+assert win._switch_engine_to_whisper("small")
+assert win.context.config.get("asr_model") == "small"
+win.refresh_interviews()
+app.processEvents()
+assert not win.engine_offer_banner.isVisibleTo(win), "faixa voltou apos escolha explicita do Whisper"
+# ...e projeto em outro idioma nunca ve a faixa
+win._engine_user_choice.clear()
+win.context = app_service.update_engine_config(win.context, {"asr_language": "es"})
+win.refresh_interviews()
+app.processEvents()
+assert not win.engine_offer_banner.isVisibleTo(win), "faixa com projeto em espanhol"
+win.context = app_service.update_engine_config(win.context, {"asr_language": "pt"})
+win.refresh_interviews()
+app.processEvents()
+assert win.engine_offer_banner.isVisibleTo(win)
+print("PASS: escolha explicita do Whisper e idioma fora do pt silenciam a oferta")
+# de volta ao TAGARELA para o selo abaixo
+assert win._switch_engine_to_parakeet(machine_default=False)
 
 # Selo da statusbar mostra o modelo CONFIGURADO e diz "(não instalado)"
 # quando outro modelo ja baixado seria usado no lugar (resolve_asr_model

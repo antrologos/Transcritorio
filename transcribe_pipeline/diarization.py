@@ -196,6 +196,17 @@ def run_pyannote_diarization(
         else:
             print(f"[{_ts()}] [diarize] embeddings: caminho original (modelo sem forward_frames).", flush=True)
 
+    try:
+        passo = float(config.get("diarization_segmentation_step") or 0.0)
+    except (TypeError, ValueError):
+        passo = 0.0
+    if passo > 0:
+        try:
+            passo_s = apply_segmentation_step(pipeline, passo)
+            print(f"[{_ts()}] [diarize] passo da segmentacao: {passo_s:.1f} s.", flush=True)
+        except (AttributeError, ValueError) as exc:  # sem Inference padrao / valor invalido: fica como esta
+            print(f"[{_ts()}] [diarize] passo da segmentacao: padrao ({exc}).", flush=True)
+
     print(f"[{_ts()}] [diarize] Pipeline carregado.", flush=True)
     emit("diarize_progress", 20, "Modelo carregado.")
     total = len(rows_to_run)
@@ -356,6 +367,25 @@ def _persist_speaker_embeddings(paths: Paths, interview_id: str, output, model_n
             by_speaker[str(label)] = vector
     if by_speaker:
         write_speaker_embeddings(paths, interview_id, by_speaker, model_name)
+
+
+def apply_segmentation_step(pipeline: Any, step: float) -> float:
+    """Passo da janela deslizante da segmentacao, como FRACAO da janela
+    (0.1 = 1 s a cada 10 s, padrao do pyannote; 0.2 = 2 s). So o construtor
+    le `segmentation_step`; a Inference ja criada le `.step` em segundos —
+    os dois sao ajustados. A/B 2026-09-02 (sintetico com verdade por
+    construcao + 10 entrevistas reais + verificador acustico): 2 s tem a
+    mesma qualidade e e 2x mais rapido. Devolve o passo efetivo em segundos.
+    """
+    if step > 1.0:
+        raise ValueError(
+            f"diarization_segmentation_step e fracao da janela (0 < x <= 1); recebido {step}")
+    inference = pipeline._segmentation
+    duration = float(inference.duration)
+    if step > 0 and abs(float(pipeline.segmentation_step) - step) > 1e-9:
+        pipeline.segmentation_step = step
+        inference.step = step * duration
+    return float(inference.step)
 
 
 def _custom_pipeline_params(config: dict) -> dict:
