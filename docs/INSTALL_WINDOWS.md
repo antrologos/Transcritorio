@@ -93,6 +93,13 @@ https://www.gyan.dev/ffmpeg/builds/ (adicione a pasta `bin` ao PATH).
 **"uv não é reconhecido" no passo 3** — feche e reabra o Prompt de
 Comando (o PATH só atualiza em janelas novas).
 
+**A barra parece parada na "separação de falantes"** — sem placa de
+vídeo, essa é a etapa demorada: de 25 min a ~1 h por hora de áudio,
+conforme o processador (a transcrição em si leva minutos). Desde a
+v0.2.3 a barra mostra o progresso real e uma estimativa; e ao clicar em
+Transcrever dá para desmarcar **"Separar falantes agora"** — o texto fica
+pronto em minutos e a lista oferece completar as vozes depois, em lote.
+
 **"transcritorio não é reconhecido" logo após instalar** — mesmo motivo,
 com uma pegadinha: se o Windows Terminal já estava aberto, *abas novas
 herdam o ambiente antigo* — é preciso fechar TODAS as janelas do

@@ -46,6 +46,76 @@ def _load_wav_as_tensor(audio_path: Path):
     return {"waveform": waveform, "sample_rate": sample_rate}
 
 
+# --- Progresso honesto da diarizacao (2026-09-02) ---------------------------
+# Beta tester em CPU: "congelou no 88%". O 88 era o teto do heartbeat
+# exponencial calibrado para GPU (tau=120 s) — em CPU o pyannote leva
+# 0,40x o tempo do audio (medido: 300 s de audio em 104 s, 8 nucleos
+# fisicos / 16 logicos) e a barra ficava parada 20-45 min. O pyannote
+# EMITE progresso real por chunk (segmentation) e por batch (embeddings);
+# agora ele alimenta a barra, e o heartbeat vira reserva com expectativa
+# por device + duracao. Tudo puro e coberto por tests/toy_diarize_progress.
+
+from .capabilities import expected_diarization_seconds  # noqa: E402 - puras, sem torch/Qt
+
+
+def diarize_hook_percent(step: str, completed: int | None, total: int | None) -> int | None:
+    """% interno (0-100) de um arquivo a partir do hook do pyannote (pura).
+
+    Ordem real do pipeline community-1: segmentation (progresso por chunk)
+    -> speaker_counting -> embeddings (progresso por batch) -> clustering
+    (sem hook) -> discrete_diarization. Sem total/completed -> None (o
+    heartbeat cobre).
+    """
+    if step == "speaker_counting":
+        return 48
+    if step == "discrete_diarization":
+        return 95
+    if not total or completed is None:
+        return None
+    frac = max(0.0, min(1.0, completed / total))
+    if step == "segmentation":
+        return 2 + int(43 * frac)
+    if step == "embeddings":
+        return 50 + int(40 * frac)
+    return None
+
+
+def heartbeat_percent(elapsed: float, expected: float, real_inner: int | None, lo: int, hi: int) -> int:
+    """% do arquivo para a barra (pura): o REAL do hook vence o creep.
+
+    Creep = 1 - e^(-t/tau) com tau = expected/2 (chega a ~86% quando o
+    tempo esperado passa); cap 0,95 do range para nunca fingir "quase
+    pronto"; nunca abaixo de lo+1.
+    """
+    span = max(1, hi - lo - 3)
+    tau = max(1.0, float(expected) / 2.0)
+    creep = 1.0 - math.exp(-max(0.0, elapsed) / tau)
+    real = (real_inner or 0) / 100.0
+    frac = min(0.95, max(creep, real))
+    return lo + max(1, int(span * frac))
+
+
+def _wav_seconds(audio_path: Path) -> float:
+    """Duracao de um WAV pelo cabecalho (sem carregar o audio)."""
+    try:
+        with wave_mod.open(str(audio_path), "r") as wf:
+            rate = wf.getframerate() or 16000
+            return wf.getnframes() / float(rate)
+    except Exception:  # noqa: BLE001 - estimativa e opcional
+        return 0.0
+
+
+def _fmt_eta(seconds: float) -> str:
+    seconds = max(0.0, float(seconds))
+    if seconds < 90:
+        return "menos de 2 min"
+    mins = int(round(seconds / 60))
+    if mins < 60:
+        return f"~{mins} min"
+    horas, resto = divmod(mins, 60)
+    return f"~{horas} h {resto:02d} min"
+
+
 def run_pyannote_diarization(
     rows: list[dict[str, str]],
     config: dict,
@@ -99,6 +169,10 @@ def run_pyannote_diarization(
         print("[Transcritorio] CUDA indisponivel. Usando CPU para diarizacao.")
     device = torch.device(effective_device)
     print(f"[{_ts()}] [diarize] Device: {effective_device}. Carregando pipeline...", flush=True)
+    if effective_device != "cuda":
+        # Em CPU a carga do modelo levou 15-70 s nas medicoes — dizer.
+        emit("diarize_progress", 2, "Carregando o modelo de identificação de falantes "
+                                    "(em CPU pode levar ~1 min)...")
     try:
         checkpoint = model_name if Path(model_name).exists() else model_manager.local_pyannote_checkpoint()
         pipeline = Pipeline.from_pretrained(checkpoint, token=None, cache_dir=str(runtime.model_cache_dir())).to(device)
@@ -136,24 +210,44 @@ def run_pyannote_diarization(
             audio_tensor = _load_wav_as_tensor(audio_path)
             print(f"[{_ts()}] [diarize] Audio carregado. Rodando pipeline (pode levar alguns minutos)...", flush=True)
 
-            # Heartbeat: emit progress every 5s so GUI doesn't appear frozen
+            # Progresso real (hook do pyannote) + heartbeat de reserva com
+            # expectativa por device e duracao (ver puras no topo).
             heartbeat_stop = threading.Event()
             t0 = time.monotonic()
+            audio_seconds = _wav_seconds(audio_path)
+            expected = expected_diarization_seconds(
+                audio_seconds, effective_device, os.cpu_count() or 1)
+            real_inner: dict[str, int] = {"pct": 0}
+            pct_lo, pct_hi = file_start_pct, file_end_pct
+            cpu_note = " — sem placa de vídeo esta etapa é a mais demorada" if effective_device != "cuda" else ""
+
+            def _mensagem(elapsed: float) -> str:
+                mins, secs = divmod(int(elapsed), 60)
+                time_str = f"{mins}min {secs:02d}s" if mins else f"{secs}s"
+                real = real_inner["pct"]
+                if real >= 10:
+                    restante = elapsed * (100 - real) / real
+                else:
+                    restante = expected - elapsed
+                return (f"Separando falantes de {interview_id} — {real}% "
+                        f"({time_str}, {_fmt_eta(restante)} restantes){cpu_note}")
+
+            def _emit_now() -> None:
+                elapsed = time.monotonic() - t0
+                pct = heartbeat_percent(elapsed, expected, real_inner["pct"], pct_lo, pct_hi)
+                emit("diarize_progress", pct, _mensagem(elapsed))
+
+            def _on_hook_progress(step_name: str, completed: int | None, total: int | None) -> None:
+                novo = diarize_hook_percent(step_name, completed, total)
+                if novo is not None and novo > real_inner["pct"]:
+                    real_inner["pct"] = novo
+                    _emit_now()
 
             def _heartbeat() -> None:
-                # Exponential curve calibrated from benchmark data:
-                # GPU diarize ~1.7s per minute of audio (tau=120 covers
-                # 63% at 2min, 86% at 4min, 95% at 6min).
-                tau = 120
-                pct_range = file_end_pct - file_start_pct - 3
                 while not heartbeat_stop.wait(5):
+                    _emit_now()
                     elapsed = int(time.monotonic() - t0)
-                    mins, secs = divmod(elapsed, 60)
-                    time_str = f"{mins}min {secs:02d}s" if mins else f"{secs}s"
-                    frac = 1 - math.exp(-elapsed / tau)
-                    pct = file_start_pct + max(1, int(pct_range * min(0.95, frac)))
-                    emit("diarize_progress", pct, f"Processando {interview_id}... ({time_str})")
-                    print(f"[{_ts()}] [diarize] heartbeat: {time_str} processando...", flush=True)
+                    print(f"[{_ts()}] [diarize] heartbeat: {elapsed}s, real {real_inner['pct']}%", flush=True)
 
             heartbeat_thread = threading.Thread(target=_heartbeat, daemon=True)
             heartbeat_thread.start()
@@ -166,11 +260,24 @@ def run_pyannote_diarization(
                     collector = SignalCollector()
                 except Exception:  # noqa: BLE001 - sinais sao opcionais
                     collector = None
-            try:
+
+            def _hook(step_name: str, step_artifact: Any = None, *, file: Any = None,
+                      total: int | None = None, completed: int | None = None) -> None:
+                # Progresso primeiro (nunca depende do coletor); depois o
+                # coletor de sinais, se ativo. Falha em qualquer um nao
+                # derruba a diarizacao.
+                try:
+                    _on_hook_progress(step_name, completed, total)
+                except Exception:  # noqa: BLE001
+                    pass
                 if collector is not None:
-                    output = pipeline(audio_tensor, hook=collector.hook, **speaker_kwargs(config))
-                else:
-                    output = pipeline(audio_tensor, **speaker_kwargs(config))
+                    try:
+                        collector.hook(step_name, step_artifact, file=file, total=total, completed=completed)
+                    except Exception:  # noqa: BLE001 - sinais sao opcionais
+                        pass
+
+            try:
+                output = pipeline(audio_tensor, hook=_hook, **speaker_kwargs(config))
             finally:
                 heartbeat_stop.set()
                 heartbeat_thread.join(timeout=2)

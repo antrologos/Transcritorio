@@ -85,7 +85,7 @@ tempos em CPU de 8 núcleos — em 4 núcleos, conte aproximadamente o dobro):
 | Perfil | O que faz | Máquina | Disco | 1 h de áudio |
 |---|---|---|---|---|
 | **Essencial** | Só transcrever (TAGARELA + `small`) | 2+ núcleos, 4 GB RAM | ~6 GB | poucos minutos (TAGARELA) |
-| **Padrão** | + separar falantes + tempos por palavra | 4+ núcleos, 8 GB RAM | ~7,5 GB | ~1 h (a separação de falantes domina) |
+| **Padrão** | + separar falantes + tempos por palavra | 4+ núcleos, 8 GB RAM | ~7,5 GB | transcrição em minutos; separação de falantes de 25 min a ~1 h por hora de áudio, conforme o processador — pode ficar para depois |
 | **Padrão + GPU** | idem, com aceleração NVIDIA (`large-v3-turbo`) | GPU NVIDIA 4 GB+ VRAM | ~10 GB | ~5–10 min |
 | **Completo** | + análise com AI local (resumo, glossário, perguntar) | GPU NVIDIA 6 GB+ VRAM, 16 GB RAM | ~20 GB | ~5–10 min |
 
@@ -95,8 +95,11 @@ tempos em CPU de 8 núcleos — em 4 núcleos, conte aproximadamente o dobro):
 > minutos; a velocidade varia com o áudio), com tempos por palavra
 > nativos. É experimental e só transcreve português — o Whisper `small`
 > acompanha como reserva para outros idiomas. Quem instalou antes recebe
-> a oferta de troca ao transcrever; também dá para trocar clicando no
-> selo **Modelo** da barra inferior.
+> a oferta de troca na própria lista de arquivos; também dá para trocar
+> clicando no selo **Modelo** da barra inferior. E a etapa demorada sem
+> placa de vídeo passa a ser a **separação de falantes** (25 min a ~1 h
+> por hora de áudio): ao transcrever, a caixa **"Separar falantes agora"**
+> permite deixá-la para depois e já revisar o texto.
 
 ### Primeiros passos
 

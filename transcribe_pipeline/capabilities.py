@@ -317,6 +317,55 @@ def cpu_speed_warning(hw: Hardware) -> str:
             "levar várias horas — prefira o modelo menor.")
 
 
+# --- Estimativa de tempo de um lote (2026-09-02, puras) ---------------------
+# Segundos de maquina por segundo de audio, medidos na maquina de
+# referencia (os.cpu_count() = 24 nucleos logicos, RTX 4060): TAGARELA
+# 16,5x tempo real em CPU (26,4 h em 96 min) e ~62x em GPU; Whisper small
+# 1,1x em CPU; turbo 5-10 min por hora em GPU. Diarizacao: 0,40x em CPU
+# (300 s de audio em 104 s), 0,028x em GPU. Escala por 24/cpu_count().
+_REF_LOGICAL_CORES = 24
+_ASR_SECONDS_PER_AUDIO_SECOND = {
+    ("parakeet_onnx", "cpu"): 1 / 16.5,
+    ("parakeet_onnx", "cuda"): 1 / 62.0,
+    ("whisper", "cpu"): 1.1,
+    ("whisper", "cuda"): 1 / 8.0,
+}
+
+
+def expected_diarization_seconds(audio_seconds: float, device: str, cores: int) -> float:
+    """Tempo esperado da separacao de falantes: carga do modelo + processamento."""
+    audio = max(0.0, float(audio_seconds))
+    if device == "cuda":
+        return 20.0 + 0.028 * audio
+    escala = _REF_LOGICAL_CORES / max(1, int(cores or 1))
+    return 45.0 + 0.40 * audio * escala
+
+
+def batch_time_estimate(total_audio_s: float, engine: str | None, device: str, cores: int) -> tuple[float, float]:
+    """(segundos de transcricao, segundos de separacao de falantes) do lote."""
+    audio = max(0.0, float(total_audio_s))
+    if audio == 0:
+        return 0.0, 0.0
+    dev = "cuda" if device == "cuda" else "cpu"
+    eng = "parakeet_onnx" if engine == "parakeet_onnx" else "whisper"
+    asr = audio * _ASR_SECONDS_PER_AUDIO_SECOND[(eng, dev)]
+    if dev == "cpu" and eng == "whisper":
+        asr *= _REF_LOGICAL_CORES / max(1, int(cores or 1))
+    return asr, expected_diarization_seconds(audio, dev, cores)
+
+
+def describe_seconds(seconds: float) -> str:
+    """Duracao em linguagem de gente: "menos de 1 min", "4 min", "1 h 10 min"."""
+    seconds = max(0.0, float(seconds))
+    mins = int(round(seconds / 60))
+    if mins < 1:
+        return "menos de 1 min"
+    if mins < 60:
+        return f"{mins} min"
+    horas, resto = divmod(mins, 60)
+    return f"{horas} h {resto:02d} min" if resto else f"{horas} h"
+
+
 def model_sizes_from_registry(asr_variant: str | Iterable[str] | None = None,
                               align_language: str | None = None) -> dict[str, float]:
     """{chave do modelo: GB} a partir do registro (I/O leve, sem rede).

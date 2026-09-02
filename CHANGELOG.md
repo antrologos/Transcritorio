@@ -1,7 +1,38 @@
 # Changelog
 
-## Não lançado
+## v0.2.3 — 2026-09-02
 
+Correções guiadas por três relatos reais de beta testers (instalação
+travada no Python 3.14; "o padrão continuou o Whisper small"; "congelou
+no 88%" em computador sem placa de vídeo).
+
+- **A separação de falantes ganhou barra de progresso REAL e estimativa
+  de tempo.** O "congelou no 88%" era o teto de um relógio calibrado para
+  GPU: em CPU o pyannote leva ~0,4× a duração do áudio (medido: 1 h de
+  entrevista ≈ 25 min na máquina de referência; até ~1 h num notebook de
+  4 núcleos) e a barra ficava parada esse tempo todo. Agora o progresso
+  que o próprio pyannote informa (por trecho e por lote de vozes) move a
+  barra, a mensagem diz "Separando falantes — N% (tempo decorrido,
+  ~M min restantes)" e a carga do modelo em CPU avisa que pode levar ~1
+  min. A mensagem honesta da fase silenciosa da transcrição (v0.2.2)
+  passou a chegar de fato à barra de status, e o rótulo do trabalho diz
+  o motor certo ("com o TAGARELA").
+- **Sem placa de vídeo, a janela "Quantas pessoas falam?" mostra a
+  estimativa do lote** ("transcrição ≈ 4 min · separação de falantes ≈
+  49 min") e a caixa **"Separar falantes agora"**. Desmarcada, o lote sai
+  só com o texto — em minutos — e a lista oferece "Separar falantes
+  agora" para completar as vozes depois, em lote (que agora também
+  pergunta quantas pessoas falam, se ainda não souber). Nada é gravado
+  no projeto: a escolha vale só para aquele lote.
+- **Faixa na lista migra quem já estava instalado para o TAGARELA**: em
+  máquina sem placa de vídeo com o projeto no Whisper aparece "Este
+  computador não tem placa de vídeo — o motor TAGARELA transcreve 1 hora
+  em poucos minutos [Usar o TAGARELA] [Continuar com o Whisper]". Aceitar
+  troca o projeto e o padrão do computador e já baixa o modelo; recusar
+  é lembrado. A oferta ao clicar Transcrever deixou de ser bloqueada por
+  arquivos com idioma "Automático" (mesmo ajuste no guard do motor), e o
+  selo da barra de status mostra o modelo configurado — com "(não
+  instalado)" quando outro seria usado no lugar.
 - **Python fixo em 3.12 em todos os comandos de instalação** (instalador
   .bat, README, guias, site e os comandos de Reparar/aceleração NVIDIA do
   app). Caso real de beta tester: o `uv` escolhia o Python mais novo da

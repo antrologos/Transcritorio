@@ -486,6 +486,50 @@ def choose_split_time(
     )
 
 
+def languages_outside_pt(langs: Iterable[str]) -> set[str]:
+    """Idiomas do lote que o TAGARELA NAO cobre (pura).
+
+    Ignora vazios, "pt" e o rotulo "automático" (= nenhum idioma
+    declarado; para um motor so-portugues, transcrever como pt e o
+    comportamento esperado — antes o rotulo bloqueava a oferta E o
+    proprio guard do motor, caso real de beta tester 2026-09-02).
+    """
+    return {str(lang).strip() for lang in langs if str(lang).strip()} - {"pt", "automático"}
+
+
+def engine_offer_due(
+    device: str,
+    engine: str | None,
+    platform: str,
+    declined: bool,
+    busy: bool,
+) -> bool:
+    """Faixa da lista oferecendo o TAGARELA (pura).
+
+    Sem GPU NVIDIA (device cpu), fora do Mac (rota MLX), motor atual e
+    Whisper, oferta nao recusada em definitivo e nenhum job rodando. E o
+    caminho de migracao VISIVEL para quem instalou antes de o TAGARELA
+    virar o padrao de maquinas sem GPU (a QMessageBox ao Transcrever
+    era facil de nao ver).
+    """
+    if busy or declined or platform == "darwin":
+        return False
+    if device != "cpu" or engine == "parakeet_onnx":
+        return False
+    return True
+
+
+def job_step_flags(do_diarize: bool, boundary_cfg: bool, diarize_now: bool | None) -> tuple[bool, bool]:
+    """(diarizar, conferir trocas) de UM lote (pura).
+
+    diarize_now=False e a caixa "Separar falantes agora" desmarcada: vale so
+    para este lote, nunca grava no projeto; sem diarizacao nao ha trocas a
+    conferir. None/True nao mudam a decisao do projeto.
+    """
+    diar = bool(do_diarize) and (diarize_now is not False)
+    return diar, diar and bool(boundary_cfg)
+
+
 def parakeet_cpu_offer_due(
     device: str,
     engine: str | None,
@@ -510,8 +554,7 @@ def parakeet_cpu_offer_due(
         return False
     if engine == "parakeet_onnx":
         return False
-    restantes = {str(lang).strip() for lang in langs if str(lang).strip()} - {"pt"}
-    return not restantes
+    return not languages_outside_pt(langs)
 
 
 def diar_offer_candidates(
@@ -1419,6 +1462,8 @@ if QT_IMPORT_ERROR is None:
             "medium":         [4, 50, 45, 1, 0],
             "large-v3-turbo": [4, 48, 47, 1, 0],
             "large-v3":       [3, 63, 33, 1, 0],
+            # TAGARELA em GPU ~62x tempo real; diarizacao GPU 0,028x.
+            "parakeet-pt":    [3, 35, 60, 1, 0],
         }
         _CPU: dict[str, list[int]] = {
             "tiny":           [2, 50, 47, 1, 0],
@@ -1427,6 +1472,9 @@ if QT_IMPORT_ERROR is None:
             "medium":         [1, 55, 43, 1, 0],
             "large-v3-turbo": [2, 59, 39, 0, 0],
             "large-v3":       [1, 65, 33, 1, 0],
+            # Medido 2026-09-01/02: TAGARELA 16,5x tempo real em CPU;
+            # diarizacao 0,40x — e a diarizacao que domina sem GPU.
+            "parakeet-pt":    [1, 12, 85, 1, 0],
         }
         table = _CUDA if device == "cuda" else _CPU
         return table.get(model, _CUDA.get("large-v3-turbo", [4, 48, 47, 1, 0]))
@@ -1544,7 +1592,10 @@ if QT_IMPORT_ERROR is None:
                 detail_message = detail.get("message")
                 if detail_message and event in ("model_download_bytes", "model_download_start", "model_download_done", "model_download_error", "model_download_retry"):
                     label = str(detail_message)
-                elif detail_message and event == "diarize_progress":
+                elif detail_message and event in ("diarize_progress", "asr_progress"):
+                    # asr_progress entrou em 2026-09-02: a mensagem honesta
+                    # da fase silenciosa em CPU (whisperx_runner) nunca
+                    # chegava a statusbar — caia no rotulo generico do step.
                     label = str(detail_message)
                 else:
                     label = message
@@ -2702,48 +2753,74 @@ if QT_IMPORT_ERROR is None:
         configuracao de falantes (plano D3.1). Uma pergunta por LOTE — a
         transcricao em massa nunca e interrompida arquivo a arquivo."""
 
-        def __init__(self, file_count: int, parent: QWidget | None = None) -> None:
+        def __init__(
+            self,
+            file_count: int,
+            parent: QWidget | None = None,
+            *,
+            estimate_text: str | None = None,
+            ask_counts: bool = True,
+        ) -> None:
             super().__init__(parent)
-            self.setWindowTitle("Quantas pessoas falam?")
+            # 2026-09-02: a mesma janela carrega, sem GPU, a estimativa
+            # honesta do lote e a caixa "Separar falantes agora" (a
+            # separacao domina o tempo em CPU; o texto pode vir antes).
+            # ask_counts=False = contagens ja configuradas: so a estimativa.
+            self.ask_counts = bool(ask_counts)
+            self.setWindowTitle("Quantas pessoas falam?" if self.ask_counts else "Transcrever")
             self.setMinimumWidth(480)
             layout = QVBoxLayout(self)
-            scope = f"nestes {file_count} arquivos" if file_count > 1 else "neste arquivo"
-            intro = QLabel(
-                f"Quantas pessoas falam {scope}? Isso orienta a separação de vozes — "
-                "um grupo focal forçado a 2 falantes sai errado. Dá para ajustar depois por arquivo em Editar propriedades."
-            )
-            intro.setWordWrap(True)
-            layout.addWidget(intro)
-            self.interview_radio = QRadioButton("Entrevista — 2 pessoas (entrevistador e entrevistado)")
-            self.interview_radio.setChecked(True)
-            layout.addWidget(self.interview_radio)
-            group_row = QHBoxLayout()
-            self.group_radio = QRadioButton("Grupo focal — entre")
-            group_row.addWidget(self.group_radio)
-            self.group_min_spin = QSpinBox()
-            self.group_min_spin.setRange(2, 20)
-            self.group_min_spin.setValue(3)
-            group_row.addWidget(self.group_min_spin)
-            group_row.addWidget(QLabel("e"))
-            self.group_max_spin = QSpinBox()
-            self.group_max_spin.setRange(2, 20)
-            self.group_max_spin.setValue(8)
-            group_row.addWidget(self.group_max_spin)
-            group_row.addWidget(QLabel("pessoas"))
-            group_row.addStretch()
-            layout.addLayout(group_row)
-            exact_row = QHBoxLayout()
-            self.exact_radio = QRadioButton("Número exato:")
-            exact_row.addWidget(self.exact_radio)
-            self.exact_spin = QSpinBox()
-            self.exact_spin.setRange(1, 20)
-            self.exact_spin.setValue(3)
-            exact_row.addWidget(self.exact_spin)
-            exact_row.addWidget(QLabel("pessoas"))
-            exact_row.addStretch()
-            layout.addLayout(exact_row)
-            self.auto_radio = QRadioButton("Automático — deixar o programa estimar")
-            layout.addWidget(self.auto_radio)
+            self.interview_radio = self.group_radio = self.exact_radio = self.auto_radio = None
+            if self.ask_counts:
+                scope = f"nestes {file_count} arquivos" if file_count > 1 else "neste arquivo"
+                intro = QLabel(
+                    f"Quantas pessoas falam {scope}? Isso orienta a separação de vozes — "
+                    "um grupo focal forçado a 2 falantes sai errado. Dá para ajustar depois por arquivo em Editar propriedades."
+                )
+                intro.setWordWrap(True)
+                layout.addWidget(intro)
+                self.interview_radio = QRadioButton("Entrevista — 2 pessoas (entrevistador e entrevistado)")
+                self.interview_radio.setChecked(True)
+                layout.addWidget(self.interview_radio)
+                group_row = QHBoxLayout()
+                self.group_radio = QRadioButton("Grupo focal — entre")
+                group_row.addWidget(self.group_radio)
+                self.group_min_spin = QSpinBox()
+                self.group_min_spin.setRange(2, 20)
+                self.group_min_spin.setValue(3)
+                group_row.addWidget(self.group_min_spin)
+                group_row.addWidget(QLabel("e"))
+                self.group_max_spin = QSpinBox()
+                self.group_max_spin.setRange(2, 20)
+                self.group_max_spin.setValue(8)
+                group_row.addWidget(self.group_max_spin)
+                group_row.addWidget(QLabel("pessoas"))
+                group_row.addStretch()
+                layout.addLayout(group_row)
+                exact_row = QHBoxLayout()
+                self.exact_radio = QRadioButton("Número exato:")
+                exact_row.addWidget(self.exact_radio)
+                self.exact_spin = QSpinBox()
+                self.exact_spin.setRange(1, 20)
+                self.exact_spin.setValue(3)
+                exact_row.addWidget(self.exact_spin)
+                exact_row.addWidget(QLabel("pessoas"))
+                exact_row.addStretch()
+                layout.addLayout(exact_row)
+                self.auto_radio = QRadioButton("Automático — deixar o programa estimar")
+                layout.addWidget(self.auto_radio)
+            self.diarize_now_check: QCheckBox | None = None
+            if estimate_text:
+                estimate_label = QLabel(estimate_text)
+                estimate_label.setWordWrap(True)
+                estimate_label.setStyleSheet(_style_muted())
+                layout.addWidget(estimate_label)
+                self.diarize_now_check = QCheckBox("Separar falantes agora")
+                self.diarize_now_check.setChecked(True)
+                self.diarize_now_check.setToolTip(
+                    "Desmarcada: este lote sai só com o texto; a lista oferece "
+                    "\"Separar falantes agora\" para completar depois, em lote.")
+                layout.addWidget(self.diarize_now_check)
             buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
             buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Transcrever")
             buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Cancelar")
@@ -2751,8 +2828,14 @@ if QT_IMPORT_ERROR is None:
             buttons.rejected.connect(self.reject)
             layout.addWidget(buttons)
 
+        def diarize_now(self) -> bool:
+            """Decisao do lote: True sem a caixa (GPU) ou com ela marcada."""
+            return True if self.diarize_now_check is None else self.diarize_now_check.isChecked()
+
         def updates(self) -> dict[str, str]:
             """Mesmas chaves do MetadataDialog + marcador speaker_setup."""
+            if not self.ask_counts:
+                return {}
             result: dict[str, str] = {"speaker_setup": "true"}
             if self.interview_radio.isChecked():
                 result.update({
@@ -6080,13 +6163,29 @@ if QT_IMPORT_ERROR is None:
                 return False
             if box.clickedButton() is not usar:
                 return False
+            return self._switch_engine_to_parakeet(machine_default=True)
+
+        def _switch_engine_to_parakeet(self, machine_default: bool) -> bool:
+            """Troca o motor do projeto para o TAGARELA (e, se pedido, o
+            padrao da maquina para projetos novos). Sem idioma declarado no
+            projeto, grava "pt" — o motor so transcreve portugues."""
+            if self.context is None:
+                return False
+            updates: dict[str, Any] = {"asr_model": "parakeet-pt"}
+            if not str(self.context.config.get("asr_language") or "").strip():
+                updates["asr_language"] = "pt"
             try:
-                self.context = app_service.update_engine_config(
-                    self.context, {"asr_model": "parakeet-pt"})
+                self.context = app_service.update_engine_config(self.context, updates)
             except Exception as exc:  # noqa: BLE001
                 QMessageBox.warning(self, "Não foi possível trocar o motor",
                                     sanitize_message(str(exc)))
                 return False
+            if machine_default:
+                try:
+                    from . import app_settings as _settings_sw
+                    _settings_sw.save({"asr_model_default": "parakeet-pt"})
+                except Exception as exc:  # noqa: BLE001
+                    _logger.warning("nao foi possivel gravar asr_model_default: %s", exc)
             return True
 
         def _maybe_offer_cuda_install(self) -> None:
@@ -6581,6 +6680,34 @@ if QT_IMPORT_ERROR is None:
             project_search_button.clicked.connect(lambda: self.open_word_search())
             filter_row.addWidget(project_search_button)
             layout.addLayout(filter_row)
+            # 2026-09-02: migracao VISIVEL para o TAGARELA em maquinas sem
+            # GPU — quem instalou antes da 0.2.2 ficou no Whisper, e a
+            # QMessageBox ao Transcrever era facil de nao ver. Decisao pura:
+            # engine_offer_due; recusa grava a mesma flag da QMessageBox.
+            self.engine_offer_banner = QFrame()
+            self.engine_offer_banner.setVisible(False)
+            self.engine_offer_banner.setStyleSheet(
+                f"QFrame {{ {ui_tokens.banner_style(ui_tokens.INFO)} }}"
+            )
+            engine_offer_layout = QHBoxLayout(self.engine_offer_banner)
+            engine_offer_layout.setContentsMargins(10, 6, 10, 6)
+            engine_offer_label = QLabel(
+                "⚡ Este computador não tem placa de vídeo — o motor TAGARELA "
+                "transcreve 1 hora de entrevista em poucos minutos (o Whisper "
+                "leva cerca da duração do áudio). Só transcreve português.")
+            engine_offer_label.setWordWrap(True)
+            engine_offer_layout.addWidget(engine_offer_label, 1)
+            engine_accept_button = QPushButton("Usar o TAGARELA")
+            engine_accept_button.setToolTip(
+                "Troca o motor deste projeto e o padrão deste computador; "
+                "baixa o modelo se ele ainda não estiver instalado.")
+            engine_accept_button.clicked.connect(self._on_engine_offer_accept)
+            engine_offer_layout.addWidget(engine_accept_button)
+            engine_decline_button = QPushButton("Continuar com o Whisper")
+            engine_decline_button.setToolTip("Não perguntar de novo neste computador.")
+            engine_decline_button.clicked.connect(self._on_engine_offer_decline)
+            engine_offer_layout.addWidget(engine_decline_button)
+            layout.addWidget(self.engine_offer_banner)
             # R3: oferta contextual que substitui o item de menu
             # "Reprocessar falantes" — aparece quando ha entrevistas
             # transcritas sem separacao de vozes e o recurso esta ativo
@@ -6774,7 +6901,13 @@ if QT_IMPORT_ERROR is None:
                 return "Nenhum projeto aberto"
             from . import model_manager
             from . import runtime as _runtime_local
-            model = model_manager.resolve_asr_model(str(self.context.config.get("asr_model", "?")))
+            # Mostrar o modelo CONFIGURADO; se o que vai rodar de fato for
+            # outro (configurado ainda nao baixado), dizer — o selo calado
+            # fazia o usuario concluir que "continuou o small" (2026-09-02).
+            configurado = str(self.context.config.get("asr_model") or "?")
+            model = configurado
+            if model_manager.resolve_asr_model(configurado) != configurado:
+                model = f"{configurado} (não instalado)"
             asr_device = self.context.config.get("asr_device") if self.context else None
             backend = _runtime_local.describe_backend(asr_device)
             # Color the backend badge: green for GPU acceleration, amber when
@@ -7245,6 +7378,8 @@ if QT_IMPORT_ERROR is None:
                     self.interview_table.setVisible(False)
                 if hasattr(self, "diar_offer_banner"):
                     self.diar_offer_banner.setVisible(False)
+                if hasattr(self, "engine_offer_banner"):
+                    self.engine_offer_banner.setVisible(False)
                 if hasattr(self, "project_label"):
                     self._update_project_label()
                 self.update_action_states()
@@ -7333,6 +7468,7 @@ if QT_IMPORT_ERROR is None:
                 self._empty_state_widget.setVisible(not has_rows)
                 self.interview_table.setVisible(True)
             self._update_add_media_emphasis(has_rows)
+            self._update_engine_offer_banner()
             self._update_diar_offer_banner()
             # R4: aba Propriedades visivel acompanha o estado novo (o
             # metodo preserva o form quando ha edicao nao salva).
@@ -7386,6 +7522,64 @@ if QT_IMPORT_ERROR is None:
             ids = list(getattr(self, "_diar_offer_ids", []) or [])
             if ids:
                 self.run_diarization_job(ids=ids)
+
+        def _update_engine_offer_banner(self) -> None:
+            """Faixa da lista: TAGARELA para maquinas sem GPU cujo projeto
+            ainda transcreve com o Whisper (migracao visivel, 2026-09-02)."""
+            if not hasattr(self, "engine_offer_banner"):
+                return
+            visivel = False
+            if self.context is not None:
+                from . import runtime as _runtime_b, model_manager as _mm_b
+                flag = _runtime_b.app_data_dir() / "parakeet_cpu_offer_dismissed.flag"
+                device = _runtime_b.resolve_device(
+                    str(self.context.config.get("asr_device") or "auto"))[0]
+                motor = str(self.context.config.get("asr_model") or "")
+                engine = (_mm_b.ASR_VARIANTS.get(motor) or {}).get("engine")
+                busy = bool(self.worker and self.worker.isRunning())
+                visivel = engine_offer_due(device, engine, sys.platform, flag.exists(), busy)
+            self.engine_offer_banner.setVisible(visivel)
+
+        def _on_engine_offer_accept(self) -> None:
+            if self.context is None:
+                return
+            if not self._switch_engine_to_parakeet(machine_default=True):
+                return
+            self.engine_offer_banner.setVisible(False)
+            self.refresh_interviews()
+            # Baixar JA: sem isto o proximo Transcrever cairia no modelo
+            # antigo em silencio (resolve_asr_model substitui o nao baixado).
+            self.ensure_models_ready(asr_variants=["parakeet-pt"], retry=self.refresh_interviews)
+
+        def _on_engine_offer_decline(self) -> None:
+            from . import runtime as _runtime_d
+            flag = _runtime_d.app_data_dir() / "parakeet_cpu_offer_dismissed.flag"
+            try:
+                flag.parent.mkdir(parents=True, exist_ok=True)
+                flag.write_text("dismissed", encoding="utf-8")
+            except OSError:
+                pass
+            self.engine_offer_banner.setVisible(False)
+
+        def _batch_estimate_text(self, ids: list[str], asr_model: str, device: str) -> str | None:
+            """Estimativa honesta do lote em maquina sem GPU (None sem duracoes)."""
+            from . import capabilities as _caps_e, model_manager as _mm_e, runtime as _runtime_e
+            total = 0.0
+            for iid in ids:
+                status = self.status_by_interview_id(iid)
+                try:
+                    total += float(getattr(status, "duration_sec", "") or 0)
+                except (TypeError, ValueError):
+                    pass
+            if total <= 0:
+                return None
+            engine = (_mm_e.ASR_VARIANTS.get(asr_model) or {}).get("engine")
+            asr_s, diar_s = _caps_e.batch_time_estimate(total, engine, device, _runtime_e.cpu_cores())
+            return (f"Neste computador (sem placa de vídeo), para {_caps_e.describe_seconds(total)} "
+                    f"de áudio: transcrição ≈ {_caps_e.describe_seconds(asr_s)} · separação de "
+                    f"falantes ≈ {_caps_e.describe_seconds(diar_s)}.\n"
+                    "A separação é a etapa demorada — dá para deixá-la para depois "
+                    "(a lista oferece um botão) e já revisar o texto.")
 
         def _apply_interview_filter(self) -> None:
             """Hide/show table rows based on status combo and text search."""
@@ -10137,7 +10331,10 @@ if QT_IMPORT_ERROR is None:
 
         def run_full_transcription_job(self, ids: list[str] | None = None, *,
                                        asr_model: str | None = None,
-                                       confirmed_recreate: bool = False) -> None:
+                                       confirmed_recreate: bool = False,
+                                       diarize_now: bool | None = None) -> None:
+            # diarize_now: decisao SO deste lote (caixa "Separar falantes
+            # agora" da janela pre-transcricao em CPU); None = perguntar.
             # asr_model: modelo escolhido SO para esta rodada (Transcrever
             # novamente...) — sobrescreve o baseline com consentimento e nao
             # toca a config do projeto. Nada aqui usa asr_variant (singular),
@@ -10169,7 +10366,7 @@ if QT_IMPORT_ERROR is None:
                 motor_key = "parakeet-pt"
                 motor_spec = _mm_motor.ASR_VARIANTS.get(motor_key) or {}
             if motor_spec.get("engine") == "parakeet_onnx":
-                fora_pt = sorted((set(langs_lote) | set(avisos_idioma)) - {"pt"})
+                fora_pt = sorted(languages_outside_pt(set(langs_lote) | set(avisos_idioma)))
                 if fora_pt:
                     QMessageBox.warning(
                         self, "Motor só para português",
@@ -10239,20 +10436,52 @@ if QT_IMPORT_ERROR is None:
                 if answer != QMessageBox.StandardButton.Yes:
                     return
             if do_diarize:
-                if not self._ask_speaker_counts_if_needed(ids):
-                    return
-                self._reset_speakers_confirmed(ids)
+                # Uma janela por lote: contagem de falantes (so para arquivos
+                # nunca configurados) e, sem GPU, a estimativa honesta de tempo
+                # com a caixa "Separar falantes agora" (2026-09-02: em CPU a
+                # separacao leva ~0,4x o audio e dominava o lote; o texto pode
+                # ficar pronto em minutos e as vozes virem depois, em lote).
+                pending = ids_without_speaker_setup(self.context.metadata, ids)
+                from . import runtime as _runtime_pre
+                device_pre = _runtime_pre.resolve_device(
+                    str(self.context.config.get("asr_device") or "auto"))[0]
+                estimate_text = None
+                if device_pre != "cuda" and diarize_now is None:
+                    estimate_text = self._batch_estimate_text(
+                        ids, asr_model or str(self.context.config.get("asr_model") or ""), device_pre)
+                if pending or estimate_text:
+                    dialog = SpeakerCountDialog(
+                        len(pending), self, estimate_text=estimate_text, ask_counts=bool(pending))
+                    if dialog.exec() != QDialog.DialogCode.Accepted:
+                        return
+                    if pending:
+                        try:
+                            self.context = app_service.update_file_metadata(
+                                self.context, pending, dialog.updates())
+                        except Exception as exc:
+                            _logger.warning("Falha ao gravar configuracao de falantes: %s", exc)
+                    if estimate_text and diarize_now is None:
+                        diarize_now = dialog.diarize_now()
+                if diarize_now is not False:
+                    self._reset_speakers_confirmed(ids)
             steps: list[tuple] = []
             weights: list[int] = []
             # Dynamic weights from benchmark data (tests/benchmark_exhaustive_2026-04-19.csv)
             # `or` DENTRO do str(): config com `asr_model: null` virava a
             # string "None" nos overrides.
             asr_model = asr_model or str(self.context.config.get("asr_model") or "large-v3-turbo")
+            # Rotulo do job diz o MOTOR certo (dizia "Whisper" ate com o TAGARELA).
+            motor_label = ("o TAGARELA"
+                           if (_mm_motor.ASR_VARIANTS.get(asr_model) or {}).get("engine") == "parakeet_onnx"
+                           else f"o Whisper ({asr_model})")
             # _pipeline_weights espera o device EFETIVO ("cuda"/"cpu") — com o
             # default "auto" (v0.2+) e preciso resolver antes do lookup.
             from . import runtime as _runtime_w
             asr_device = _runtime_w.resolve_device(str(self.context.config.get("asr_device") or "auto"))[0]
-            do_boundary = do_diarize and bool(self.context.config.get("boundary_check", True))
+            # diarize_now=False (caixa "Separar falantes agora" desmarcada) vale
+            # SO para este lote: nada e gravado no run_config.yaml.
+            do_diarize, do_boundary = job_step_flags(
+                do_diarize, bool(self.context.config.get("boundary_check", True)), diarize_now)
             w5 = _pipeline_weights(asr_model, asr_device)
             # 7 fases: [prepare, asr, diarize, render, conferir trocas,
             # recriar transcricao editavel, qc]. Conferencia e recriacao
@@ -10283,7 +10512,7 @@ if QT_IMPORT_ERROR is None:
                 file_steps = [
                     self.job_step(f"{prefix}: convertendo o áudio para WAV 16 kHz...", interview_id, "preparar audio", r[0], r[1], lambda item=interview_id: app_service.prepare_interviews(self.context, ids=[item])),
                     self.job_step(
-                        f"{prefix}: transcrevendo com o Whisper ({asr_model})...",
+                        f"{prefix}: transcrevendo com {motor_label}...",
                         interview_id,
                         "transcrever",
                         r[1],
@@ -10729,6 +10958,10 @@ if QT_IMPORT_ERROR is None:
                 ids = self.selected_ids_for_job()
             if not ids:
                 QMessageBox.information(self, "Selecione uma entrevista", "Selecione uma entrevista para identificar falantes.")
+                return
+            # Quem transcreveu com "Separar falantes agora" desmarcado nunca
+            # respondeu quantas pessoas falam — perguntar aqui (uma vez por lote).
+            if not self._ask_speaker_counts_if_needed(ids):
                 return
             self._reset_speakers_confirmed(ids)
             # Diarizar SEM remontar nao mudava nada visivel; o fluxo
