@@ -206,6 +206,26 @@ def relative_to(path: Path, root: Path) -> str:
 
 
 PROGRESS_JSON_PREFIX = "@PROGRESS "
+# Servidor de diarizacao (cli diarize-serve, 2026-09-02): marcadores de
+# protocolo na mesma familia do @PROGRESS.
+READY_JSON_PREFIX = "@READY "
+DONE_JSON_PREFIX = "@DONE "
+
+
+def parse_prefixed_json_line(line: str, prefix: str) -> dict[str, Any] | None:
+    """Parse uma linha '<prefixo> {json}' (ex.: '@PROGRESS {...}').
+
+    Retorna o dict ou None para qualquer outra linha (logs humanos, vazio,
+    JSON invalido, JSON que nao e objeto).
+    """
+    stripped = (line or "").strip()
+    if not stripped.startswith(prefix):
+        return None
+    try:
+        payload = json.loads(stripped[len(prefix):])
+    except (ValueError, TypeError):
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def parse_progress_json_line(line: str) -> dict[str, Any] | None:
@@ -215,14 +235,7 @@ def parse_progress_json_line(line: str) -> dict[str, Any] | None:
     qualquer outra linha (logs humanos, vazio, JSON invalido). Usado pela GUI
     para acompanhar a diarizacao rodando em subprocesso (v0.2).
     """
-    stripped = (line or "").strip()
-    if not stripped.startswith(PROGRESS_JSON_PREFIX):
-        return None
-    try:
-        payload = json.loads(stripped[len(PROGRESS_JSON_PREFIX):])
-    except (ValueError, TypeError):
-        return None
-    return payload if isinstance(payload, dict) else None
+    return parse_prefixed_json_line(line, PROGRESS_JSON_PREFIX)
 
 
 def is_interview_artifact(name: str, interview_id: str, known_ids: Iterable[str] = ()) -> bool:

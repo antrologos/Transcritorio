@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 import numpy as np
@@ -116,38 +117,43 @@ def _fmt_eta(seconds: float) -> str:
     return f"~{horas} h {resto:02d} min"
 
 
-def run_pyannote_diarization(
-    rows: list[dict[str, str]],
+def _ts() -> str:
+    return time.strftime("%H:%M:%S")
+
+
+def _emit(progress_callback: ProgressCallback | None, event: str, progress: int, message: str) -> None:
+    if progress_callback is not None:
+        progress_callback({"event": event, "progress": progress, "message": message})
+
+
+@dataclass
+class LoadedDiarizer:
+    """Pipeline pyannote carregado, pronto para varios arquivos (2026-09-02).
+
+    Carga e execucao separadas por causa do servidor de diarizacao da GUI
+    (`transcritorio-cli diarize-serve`): um lote paga a carga (abrir o
+    Python, importar torch/pyannote, carregar o modelo — ~35 s em GPU,
+    minutos em CPU) UMA vez, nao por arquivo."""
+    pipeline: Any
+    model_name: str
+    device: str
+
+
+def load_diarization_pipeline(
     config: dict,
-    paths: Paths,
-    ids: list[str] | None = None,
-    dry_run: bool = False,
     progress_callback: ProgressCallback | None = None,
-    should_cancel: Callable[[], bool] | None = None,
-) -> int:
-    failures = 0
+) -> LoadedDiarizer | None:
+    """Valida o modelo local e carrega o pipeline. None quando nao da (o
+    motivo vai para o stdout, como sempre). Mesmos passos e mensagens do
+    fluxo por arquivo."""
     token_env = str(config["model_download_token_env"])
     try:
         model_name = model_manager.validate_local_diarization_model(config.get("diarize_model"))
     except ValueError as exc:
         print(str(exc))
-        return len(selected_rows(rows, ids)) or 1
-    rows_to_run = selected_rows(rows, ids)
+        return None
 
-    if dry_run:
-        for row in rows_to_run:
-            audio_path = diarization_audio_path(paths, row)
-            print(f"pyannote {audio_path} --model {model_name} --offline {speaker_config_summary(config)}")
-        return 0
-
-    def emit(event: str, progress: int, message: str) -> None:
-        if progress_callback is not None:
-            progress_callback({"event": event, "progress": progress, "message": message})
-
-    def _ts() -> str:
-        return time.strftime("%H:%M:%S")
-
-    emit("diarize_progress", 0, "Carregando modelo de identificacao de falantes...")
+    _emit(progress_callback, "diarize_progress", 0, "Carregando modelo de identificacao de falantes...")
     print(f"[{_ts()}] [diarize] Inicio da diarizacao", flush=True)
 
     runtime.apply_secure_hf_environment(offline=True, token_env=token_env)
@@ -160,7 +166,7 @@ def run_pyannote_diarization(
         from pyannote.audio import Pipeline
     except ImportError as exc:
         print(f"Missing pyannote dependencies: {exc}")
-        return len(rows_to_run) or 1
+        return None
 
     torch.set_float32_matmul_precision("high")
 
@@ -171,14 +177,14 @@ def run_pyannote_diarization(
     print(f"[{_ts()}] [diarize] Device: {effective_device}. Carregando pipeline...", flush=True)
     if effective_device != "cuda":
         # Em CPU a carga do modelo levou 15-70 s nas medicoes — dizer.
-        emit("diarize_progress", 2, "Carregando o modelo de identificação de falantes "
+        _emit(progress_callback, "diarize_progress",2, "Carregando o modelo de identificação de falantes "
                                     "(em CPU pode levar ~1 min)...")
     try:
         checkpoint = model_name if Path(model_name).exists() else model_manager.local_pyannote_checkpoint()
         pipeline = Pipeline.from_pretrained(checkpoint, token=None, cache_dir=str(runtime.model_cache_dir())).to(device)
     except Exception as exc:  # noqa: BLE001 - provide an actionable standalone error.
         print(f"Could not load local pyannote model: {exc}")
-        return len(rows_to_run) or 1
+        return None
 
     # Apply custom hyperparameters if configured
     custom_params = _custom_pipeline_params(config)
@@ -208,7 +214,26 @@ def run_pyannote_diarization(
             print(f"[{_ts()}] [diarize] passo da segmentacao: padrao ({exc}).", flush=True)
 
     print(f"[{_ts()}] [diarize] Pipeline carregado.", flush=True)
-    emit("diarize_progress", 20, "Modelo carregado.")
+    _emit(progress_callback, "diarize_progress", 20, "Modelo carregado.")
+    return LoadedDiarizer(pipeline, model_name, effective_device)
+
+
+def diarize_rows(
+    loaded: LoadedDiarizer,
+    rows: list[dict[str, str]],
+    config: dict,
+    paths: Paths,
+    ids: list[str] | None = None,
+    progress_callback: ProgressCallback | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+) -> int:
+    """Roda o pipeline JA carregado nas entrevistas selecionadas e devolve
+    o numero de falhas. Progresso 20-100 repartido entre os arquivos."""
+    failures = 0
+    pipeline = loaded.pipeline
+    model_name = loaded.model_name
+    effective_device = loaded.device
+    rows_to_run = selected_rows(rows, ids)
     total = len(rows_to_run)
 
     for idx, row in enumerate(rows_to_run):
@@ -224,7 +249,7 @@ def run_pyannote_diarization(
 
         file_start_pct = 20 + int(70 * idx / max(1, total))
         file_end_pct = 20 + int(70 * (idx + 1) / max(1, total))
-        emit("diarize_progress", file_start_pct, f"Processando {interview_id}...")
+        _emit(progress_callback, "diarize_progress",file_start_pct, f"Processando {interview_id}...")
 
         try:
             print(f"[{_ts()}] [diarize] Carregando audio {interview_id}...", flush=True)
@@ -256,7 +281,7 @@ def run_pyannote_diarization(
             def _emit_now() -> None:
                 elapsed = time.monotonic() - t0
                 pct = heartbeat_percent(elapsed, expected, real_inner["pct"], pct_lo, pct_hi)
-                emit("diarize_progress", pct, _mensagem(elapsed))
+                _emit(progress_callback, "diarize_progress",pct, _mensagem(elapsed))
 
             def _on_hook_progress(step_name: str, completed: int | None, total: int | None) -> None:
                 novo = diarize_hook_percent(step_name, completed, total)
@@ -320,7 +345,7 @@ def run_pyannote_diarization(
             regular = _postprocess_annotation(regular, config)
             if exclusive is not None:
                 exclusive = _postprocess_annotation(exclusive, config, preserve_exclusive=True)
-            emit("diarize_progress", file_end_pct - 2, f"Gravando resultados de {interview_id}...")
+            _emit(progress_callback, "diarize_progress",file_end_pct - 2, f"Gravando resultados de {interview_id}...")
             write_annotation_outputs(paths, interview_id, "regular", regular, model_name, audio_path)
             if exclusive is not None:
                 write_annotation_outputs(paths, interview_id, "exclusive", exclusive, model_name, audio_path)
@@ -332,9 +357,39 @@ def run_pyannote_diarization(
             print(f"[{_ts()}] [diarize] ERRO em {interview_id}: {exc}", flush=True)
             log_job(paths, interview_id, "error", model_name, audio_path, str(exc)[-2000:])
 
-    emit("diarize_progress", 100, "Identificacao de falantes concluida.")
+    _emit(progress_callback, "diarize_progress",100, "Identificacao de falantes concluida.")
     print(f"[{_ts()}] [diarize] Diarizacao finalizada. Falhas: {failures}", flush=True)
     return failures
+
+
+def run_pyannote_diarization(
+    rows: list[dict[str, str]],
+    config: dict,
+    paths: Paths,
+    ids: list[str] | None = None,
+    dry_run: bool = False,
+    progress_callback: ProgressCallback | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+) -> int:
+    """Carga + execucao num so passo (CLI `diarize`, app_service, toys)."""
+    rows_to_run = selected_rows(rows, ids)
+    if dry_run:
+        try:
+            model_name = model_manager.validate_local_diarization_model(config.get("diarize_model"))
+        except ValueError as exc:
+            print(str(exc))
+            return len(rows_to_run) or 1
+        for row in rows_to_run:
+            audio_path = diarization_audio_path(paths, row)
+            print(f"pyannote {audio_path} --model {model_name} --offline {speaker_config_summary(config)}")
+        return 0
+    loaded = load_diarization_pipeline(config, progress_callback)
+    if loaded is None:
+        return len(rows_to_run) or 1
+    return diarize_rows(
+        loaded, rows, config, paths, ids=ids,
+        progress_callback=progress_callback, should_cancel=should_cancel,
+    )
 
 
 def diarization_audio_path(paths: Paths, row: dict[str, str]) -> Path:

@@ -631,6 +631,32 @@ def batch_label(k: int, n: int, group: str, atividade: str, remaining_s: float |
     return " · ".join(p for p in partes if p)
 
 
+def busy_hint_text(estado: str) -> str:
+    """Faixa da lista durante um lote (pura): o usuario achou que as ferramentas
+    de AI "nao vieram instaladas" porque ficavam cinza sem explicacao (2026-09-02)."""
+    estado = str(estado or "").strip().rstrip(".")
+    if estado:
+        return (f"⏳ Lote em andamento — {estado}. As análises com AI e as demais ações "
+                "voltam sozinhas quando terminar.")
+    return "⏳ Tarefa em andamento. As análises com AI e as demais ações voltam sozinhas quando terminar."
+
+
+def busy_click_text(acao: str, estado: str) -> str:
+    """Resposta ao clique numa acao durante o lote (pura)."""
+    estado = str(estado or "").strip().rstrip(".")
+    andamento = f"Em andamento: {estado}. " if estado else ""
+    return (f"O Transcritório executa uma tarefa por vez. {andamento}"
+            f"\"{acao}\" fica disponível quando o lote terminar — não é preciso fazer nada.")
+
+
+def busy_reason_text(estado: str) -> str:
+    """Tooltip de todo item desabilitado por lote (pura)."""
+    estado = str(estado or "").strip().rstrip(".")
+    if estado:
+        return f"Aguarde o lote terminar ({estado}) — as ações voltam sozinhas."
+    return "Aguarde a tarefa atual terminar — as ações voltam sozinhas."
+
+
 def failure_summary(failures: int, message: str | None) -> str:
     """Texto de uma etapa com falhas: "N falha(s)." + a causa que o servico
     devolveu em JobResult.message (pura). Incidente 2026-09-02: "1 falha(s)."
@@ -847,6 +873,33 @@ def should_offer_voice_naming(config: dict[str, Any], file_metadata: dict[str, s
     if confirmed == "true":
         return False
     return len(raw_voice_ids(turns)) >= 2
+
+
+def voice_naming_pending(
+    ids: list[str],
+    config: dict[str, Any],
+    metadata: dict[str, dict[str, str]],
+    load_turns: Callable[[str], list[dict[str, Any]]],
+) -> list[str]:
+    """Entrevistas de um lote cujas vozes ainda nao foram identificadas
+    (faixa "vozes por identificar", 2026-09-02).
+
+    Mesmo criterio do dialogo "De quem é esta voz?" (should_offer_voice_naming).
+    load_turns so e chamado para quem ainda nao tem speakers_confirmed; uma
+    falha ao ler a transcricao vale como "nada a perguntar". Ordem do lote
+    preservada."""
+    pendentes: list[str] = []
+    for iid in ids:
+        meta = metadata.get(iid) or {}
+        if str(meta.get("speakers_confirmed") or "").strip().lower() == "true":
+            continue
+        try:
+            turns = load_turns(iid)
+        except Exception:  # noqa: BLE001 - review ausente/corrompida: sem pergunta
+            continue
+        if should_offer_voice_naming(config, meta, turns):
+            pendentes.append(iid)
+    return pendentes
 
 
 def dominant_speaker_key(turns: list[dict[str, Any]], speaker_id: str) -> str:
@@ -1732,10 +1785,12 @@ if QT_IMPORT_ERROR is None:
                 detail_message = detail.get("message")
                 if detail_message and event in ("model_download_bytes", "model_download_start", "model_download_done", "model_download_error", "model_download_retry"):
                     label = str(detail_message)
-                elif detail_message and event in ("diarize_progress", "asr_progress"):
+                elif detail_message and event in ("diarize_progress", "asr_progress", "prepare_progress"):
                     # asr_progress entrou em 2026-09-02: a mensagem honesta
                     # da fase silenciosa em CPU (whisperx_runner) nunca
                     # chegava a statusbar — caia no rotulo generico do step.
+                    # prepare_progress: "Preparando os áudios (k de n)" do
+                    # preparo em paralelo (B2).
                     label = str(detail_message)
                 else:
                     label = message
@@ -6081,6 +6136,18 @@ if QT_IMPORT_ERROR is None:
 
             # --- Analisar: busca no projeto e ✨ AI assistiva ---
             analisar_menu = self.menuBar().addMenu("Analisar")
+            # Linha explicativa durante um lote (2026-09-02): item cinza nao
+            # mostra tooltip, e o usuario concluia que a AI "nao veio instalada".
+            self.busy_menu_hint_action = QAction("", self)
+            self.busy_menu_hint_action.setEnabled(False)
+            self.busy_menu_hint_action.setVisible(False)
+            analisar_menu.addAction(self.busy_menu_hint_action)
+            # Separador como QAction com pai (o de addSeparator() pertence ao
+            # menu e o wrapper Python pode morrer antes — smoke_nav_ui).
+            self.busy_menu_hint_separator = QAction(self)
+            self.busy_menu_hint_separator.setSeparator(True)
+            self.busy_menu_hint_separator.setVisible(False)
+            analisar_menu.addAction(self.busy_menu_hint_separator)
             analisar_menu.addAction(self.project_search_action)
             analisar_menu.addAction(self.explore_action)
             analisar_menu.addSeparator()
@@ -7030,6 +7097,47 @@ if QT_IMPORT_ERROR is None:
             diar_offer_button.clicked.connect(self._on_diar_offer_clicked)
             diar_offer_layout.addWidget(diar_offer_button)
             layout.addWidget(self.diar_offer_banner)
+            # Faixa "lote em andamento" (2026-09-02): explica por que as acoes
+            # (AI inclusive) estao cinza e responde ao clique nelas.
+            self.busy_hint_banner = QFrame()
+            self.busy_hint_banner.setVisible(False)
+            self.busy_hint_banner.setStyleSheet(
+                f"QFrame {{ {ui_tokens.banner_style(ui_tokens.INFO)} }}"
+            )
+            busy_hint_layout = QHBoxLayout(self.busy_hint_banner)
+            busy_hint_layout.setContentsMargins(10, 6, 10, 6)
+            self.busy_hint_label = QLabel("")
+            self.busy_hint_label.setWordWrap(True)
+            busy_hint_layout.addWidget(self.busy_hint_label, 1)
+            layout.addWidget(self.busy_hint_banner)
+            # Faixa "vozes por identificar" (2026-09-02): ao fim de um lote,
+            # as entrevistas cujas vozes ainda nao foram nomeadas — o dialogo
+            # automatico so cobre a transcricao aberta; as demais ficam aqui,
+            # com identificacao em sequencia.
+            self.voice_batch_banner = QFrame()
+            self.voice_batch_banner.setVisible(False)
+            self.voice_batch_banner.setStyleSheet(
+                f"QFrame {{ {ui_tokens.banner_style(ui_tokens.INFO)} }}"
+            )
+            voice_batch_layout = QHBoxLayout(self.voice_batch_banner)
+            voice_batch_layout.setContentsMargins(10, 6, 10, 6)
+            self.voice_batch_label = QLabel("")
+            self.voice_batch_label.setWordWrap(True)
+            voice_batch_layout.addWidget(self.voice_batch_label, 1)
+            self.voice_batch_button = QPushButton("Identificar agora…")
+            self.voice_batch_button.setToolTip(
+                "Abre cada entrevista pendente, uma por vez, e pergunta de quem "
+                "é cada voz.\nCancelar numa delas interrompe a sequência — o "
+                "restante continua nesta faixa.")
+            self.voice_batch_button.clicked.connect(self._on_voice_batch_identify)
+            voice_batch_layout.addWidget(self.voice_batch_button)
+            self.voice_batch_later_button = QPushButton("Depois")
+            self.voice_batch_later_button.setToolTip(
+                "Esconde esta faixa. Cada entrevista continua perguntando "
+                "pelas vozes quando você a abrir.")
+            self.voice_batch_later_button.clicked.connect(self._on_voice_batch_later)
+            voice_batch_layout.addWidget(self.voice_batch_later_button)
+            layout.addWidget(self.voice_batch_banner)
             # Interview table (10 columns: checkbox + 9 data columns)
             self.interview_table = QTableWidget(0, 10)
             self.interview_table.setAccessibleName("Arquivos do projeto")
@@ -7688,6 +7796,11 @@ if QT_IMPORT_ERROR is None:
                     self.diar_offer_banner.setVisible(False)
                 if hasattr(self, "engine_offer_banner"):
                     self.engine_offer_banner.setVisible(False)
+                if hasattr(self, "busy_hint_banner"):
+                    self.busy_hint_banner.setVisible(False)
+                if hasattr(self, "voice_batch_banner"):
+                    self._voice_batch_ids = []
+                    self.voice_batch_banner.setVisible(False)
                 if hasattr(self, "project_label"):
                     self._update_project_label()
                 self.update_action_states()
@@ -7850,6 +7963,226 @@ if QT_IMPORT_ERROR is None:
                 visivel = (not idioma_fora) and engine_offer_due(
                     device, engine, sys.platform, self._engine_offer_declined(flag), busy)
             self.engine_offer_banner.setVisible(visivel)
+
+        def _busy_state_text(self) -> str:
+            """Texto atual do lote (a barra de baixo), so enquanto ha worker."""
+            if not (self.worker and self.worker.isRunning()):
+                return ""
+            return str(self.progress_label.text() if hasattr(self, "progress_label") else "")
+
+        def _sync_busy_hints(self, busy: bool | None = None) -> None:
+            """Faixa da lista + linha do menu Analisar acompanham o lote (2026-09-02)."""
+            if busy is None:
+                busy = bool(self.worker and self.worker.isRunning())
+            estado = self._busy_state_text() if busy else ""
+            if hasattr(self, "busy_hint_banner"):
+                if busy and self.context is not None:
+                    # Nao sobrescrever a resposta a um clique enquanto ela pisca.
+                    if not getattr(self, "_busy_click_active", False):
+                        self.busy_hint_label.setText(busy_hint_text(estado))
+                    self.busy_hint_banner.setVisible(True)
+                else:
+                    self.busy_hint_banner.setVisible(False)
+            if busy and hasattr(self, "voice_batch_banner"):
+                # Durante um lote a faixa de vozes sai de cena (as acoes
+                # dela abririam transcricoes que o lote esta recriando).
+                self.voice_batch_banner.setVisible(False)
+            if hasattr(self, "busy_menu_hint_action"):
+                if busy:
+                    resumo = estado.split(" · ")[0] if estado else ""
+                    detalhe = f" ({resumo})" if resumo else ""
+                    self.busy_menu_hint_action.setText(
+                        f"⏳ Aguardando o lote terminar{detalhe} — as análises com AI voltam sozinhas")
+                self.busy_menu_hint_action.setVisible(busy)
+                self.busy_menu_hint_separator.setVisible(busy)
+
+        def _explain_busy(self, acao: str) -> bool:
+            """True (e explica na faixa) quando uma acao foi acionada durante um
+            lote: nada executa, nada modal — a faixa mostra o motivo e pisca."""
+            if not (self.worker and self.worker.isRunning()):
+                return False
+            texto = busy_click_text(acao, self._busy_state_text())
+            if hasattr(self, "busy_hint_banner"):
+                self._busy_click_active = True
+                self.busy_hint_label.setText(texto)
+                self.busy_hint_banner.setStyleSheet(
+                    f"QFrame {{ {ui_tokens.banner_style(ui_tokens.WARN)} }}")
+                self.busy_hint_banner.setVisible(True)
+
+                def _volta() -> None:
+                    self._busy_click_active = False
+                    if hasattr(self, "busy_hint_banner"):
+                        self.busy_hint_banner.setStyleSheet(
+                            f"QFrame {{ {ui_tokens.banner_style(ui_tokens.INFO)} }}")
+                    self._sync_busy_hints()
+
+                QTimer.singleShot(1500, _volta)
+            else:
+                self.progress_label.setText(texto)
+            return True
+
+        # --- servidor de separacao de falantes do lote (B1, 2026-09-02) ---
+        def _start_diarize_server(self, n_files: int) -> None:
+            """Um processo `diarize-serve` por LOTE em vez de um `diarize` por
+            arquivo: o modelo carrega uma vez, em paralelo com o preparo e a
+            transcricao do 1o arquivo (start() nao espera). Lote de 1
+            arquivo segue na rota antiga — nada a ganhar."""
+            self._stop_diarize_server()
+            if n_files < 2 or self.context is None:
+                return
+            try:
+                from .diarize_client import DiarizeServer
+                server = DiarizeServer(self.context.paths.project_root)
+                if server.start():
+                    self._diarize_server = server
+            except Exception as exc:  # noqa: BLE001 - sem servidor = rota por arquivo
+                _logger.warning("servidor de diarizacao nao abriu: %s", exc)
+
+        def _stop_diarize_server(self) -> None:
+            server = getattr(self, "_diarize_server", None)
+            self._diarize_server = None
+            if server is not None:
+                try:
+                    server.stop()
+                except Exception as exc:  # noqa: BLE001
+                    _logger.warning("servidor de diarizacao nao encerrou limpo: %s", exc)
+
+        # --- preparo dos audios em paralelo (B2, 2026-09-02) ---
+        def _prepare_batch(
+            self,
+            ids: list[str],
+            start_progress: int,
+            end_progress: int,
+            progress_callback: Callable[[dict[str, Any]], None] | None = None,
+            should_cancel: Callable[[], bool] | None = None,
+        ) -> app_service.JobResult:
+            """Um passo so para o lote, duas conversoes ffmpeg por vez.
+
+            Quem falha entra em self._prepare_failed e o passo de
+            transcricao DAQUELE arquivo levanta o erro — skip-and-continue
+            do worker, como sempre; os demais seguem. jobs.json e atualizado
+            SO por esta thread: as threads do pool apenas convertem.
+            """
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            self._prepare_failed = set()
+            context = self.context
+            total = len(ids)
+            agora = datetime.now().isoformat(timespec="seconds")
+            for iid in ids:
+                app_service.update_job(context, iid, {
+                    "status": "Rodando", "stage": "preparar audio", "progress": start_progress,
+                    "started_at": agora, "last_error": "", "estimated_finish_at": ""})
+
+            def _um(iid: str) -> tuple[str, int]:
+                try:
+                    return iid, int(app_service.prepare_interviews(context, ids=[iid]).failures)
+                except Exception as exc:  # noqa: BLE001 - falha do arquivo, nao do lote
+                    _logger.warning("preparo do audio de %s falhou: %s", iid, exc)
+                    return iid, 1
+
+            def _emit(done: int) -> None:
+                if progress_callback is not None:
+                    progress_callback({
+                        "event": "prepare_progress",
+                        "progress": int(100 * done / max(1, total)),
+                        "message": f"Preparando os áudios ({done} de {total})...",
+                    })
+
+            _emit(0)
+            done = 0
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                futures = {pool.submit(_um, iid): iid for iid in ids}
+                for future in as_completed(futures):
+                    iid, failures = future.result()
+                    done += 1
+                    if failures:
+                        self._prepare_failed.add(iid)
+                    else:
+                        app_service.update_job(context, iid, {
+                            "status": "Rodando", "stage": "preparar audio", "progress": end_progress})
+                    _emit(done)
+                    if should_cancel is not None and should_cancel():
+                        for pendente in futures:
+                            pendente.cancel()
+                        break
+            return app_service.JobResult("prepare-audio", 0)
+
+        def _transcribe_prepared(
+            self,
+            interview_id: str,
+            asr_model: str,
+            progress_callback: Callable[[dict[str, Any]], None] | None = None,
+            should_cancel: Callable[[], bool] | None = None,
+        ) -> app_service.JobResult:
+            """Passo de transcricao de um arquivo do lote: recusa quem falhou
+            no preparo em paralelo — o worker pula o resto DESTE arquivo e
+            segue com os outros."""
+            if interview_id in getattr(self, "_prepare_failed", set()):
+                raise RuntimeError(
+                    "não foi possível converter o áudio para WAV (ffmpeg) — "
+                    "veja a fila de processamento em Ferramentas")
+            return app_service.transcribe_interviews(
+                self.context,
+                ids=[interview_id],
+                # asr_model efetivo SEMPRE no override: igual a config no
+                # fluxo normal; o escolhido na rodada de "Transcrever
+                # novamente…".
+                overrides={"diarize": False, "asr_model": asr_model},
+                progress_callback=progress_callback,
+                should_cancel=should_cancel,
+            )
+
+        # --- vozes por identificar ao fim do lote (C, 2026-09-02) ---
+        def _turns_for_voice_check(self, interview_id: str) -> list[dict[str, Any]]:
+            if interview_id == self.current_interview_id and self.review:
+                return list(self.turns)
+            status = self.status_by_interview_id(interview_id)
+            if status is None or not status.review_exists or self.context is None:
+                return []
+            return review_store.review_turns(
+                app_service.load_review(self.context, interview_id, create=False))
+
+        def _update_voice_batch_banner(self) -> None:
+            """Recalcula as pendentes do ultimo lote e mostra/esconde a faixa."""
+            if not hasattr(self, "voice_batch_banner"):
+                return
+            ids = list(getattr(self, "_voice_batch_ids", []) or [])
+            busy = bool(self.worker and self.worker.isRunning())
+            pendentes: list[str] = []
+            if ids and self.context is not None and not busy:
+                pendentes = voice_naming_pending(
+                    ids, self.context.config, self.context.metadata, self._turns_for_voice_check)
+            self._voice_batch_ids = pendentes
+            if pendentes:
+                n = len(pendentes)
+                plural = "s" if n > 1 else ""
+                self.voice_batch_label.setText(
+                    f"🎙 {n} entrevista{plural} com vozes por identificar — diga "
+                    f"quem fala em cada uma, em sequência.")
+            self.voice_batch_banner.setVisible(bool(pendentes))
+
+        def _on_voice_batch_identify(self) -> None:
+            """Percorre as pendentes: abre a transcricao e pergunta "De quem é
+            esta voz?". Cancelar no dialogo interrompe a sequencia; a faixa
+            segue com o restante."""
+            if self._explain_busy("Identificar vozes"):
+                return
+            for iid in list(getattr(self, "_voice_batch_ids", []) or []):
+                self.open_review(iid)
+                if self.current_interview_id != iid:
+                    break
+                if self._review_has_speaker_edits():
+                    self._persist_confirmed_from_edits(iid)
+                    continue
+                if not self.open_voice_naming_dialog():
+                    break
+                self._update_voice_banner()
+            self._update_voice_batch_banner()
+
+        def _on_voice_batch_later(self) -> None:
+            self._voice_batch_ids = []
+            if hasattr(self, "voice_batch_banner"):
+                self.voice_batch_banner.setVisible(False)
 
         def _on_engine_offer_accept(self) -> None:
             if self.context is None:
@@ -8438,6 +8771,8 @@ if QT_IMPORT_ERROR is None:
 
         def open_explore(self) -> None:
             """Janela Explorar as entrevistas (botao da barra / menu)."""
+            if self._explain_busy("Perguntar às entrevistas com AI"):
+                return
             if self.context is None:
                 QMessageBox.information(self, "Abra um projeto", "Abra um projeto para explorar as entrevistas.")
                 return
@@ -8566,6 +8901,8 @@ if QT_IMPORT_ERROR is None:
                 return
             self._maybe_offer_voice_naming(interview_id)
             self._update_voice_banner()
+            # A faixa do lote sai da conta a transcricao recem-confirmada.
+            self._update_voice_batch_banner()
 
         def _review_has_speaker_edits(self) -> bool:
             return any(
@@ -9504,7 +9841,7 @@ if QT_IMPORT_ERROR is None:
             has_open_file = bool(self.current_interview_id)
             has_untranscribed_open_file = bool(self.current_interview_id and not self.review)
             has_turn = bool(has_review and self.current_turn_id)
-            reason_busy = "Aguarde a tarefa atual terminar."
+            reason_busy = busy_reason_text(self._busy_state_text() if busy else "")
             reason_project = "Abra ou crie um projeto primeiro."
             reason_select = "Selecione ao menos um arquivo na lista."
             reason_open = "Abra uma transcrição primeiro."
@@ -9589,28 +9926,31 @@ if QT_IMPORT_ERROR is None:
             resumo_aviso = self._capability_warning("resumo_perguntar")
             if not resumo_travado and resumo_aviso:
                 notas_resumo.append(f"Atenção: {resumo_aviso} — por sua conta e risco.")
+            # Durante um lote as acoes de AI continuam CLICAVEIS (decisao do
+            # usuario 2026-09-02): o clique nao executa — explica na faixa da
+            # lista (_explain_busy). A nota do tooltip diz o mesmo.
+            nota_lote = reason_busy if busy else ""
             self._set_action(
                 self.summarize_action,
-                not busy and has_review and not resumo_travado,
-                reason_busy if busy else (resumo_motivo if resumo_travado else reason_open),
-                enabled_note=" ".join(notas_resumo),
+                has_review and not resumo_travado,
+                resumo_motivo if resumo_travado else reason_open,
+                enabled_note=" ".join([nota_lote] + notas_resumo).strip(),
             )
             busca_estado, _busca_motivo, busca_gb = self._capability_state("busca_semantica")
-            self._set_action(self.explore_action, not busy and has_project,
-                             reason_busy if busy else reason_project,
-                             enabled_note=(f"Baixa um modelo de ~{busca_gb:.1f} GB na "
-                                           "primeira utilização."
-                                           if busca_estado == "instalavel" else ""))
+            self._set_action(self.explore_action, has_project, reason_project,
+                             enabled_note=" ".join([nota_lote, (
+                                 f"Baixa um modelo de ~{busca_gb:.1f} GB na primeira utilização."
+                                 if busca_estado == "instalavel" else "")]).strip())
             glos_estado, glos_motivo, glos_gb = self._capability_state("glossario_nomes")
             glos_travado = glos_estado == "incompativel"  # hoje impossivel (CPU basta); regra geral
             self._set_action(self.glossario_action,
-                             not busy and has_project and not glos_travado,
-                             reason_busy if busy else (glos_motivo if glos_travado else reason_project),
-                             enabled_note=(f"Baixa o modelo de nomes (~{glos_gb:.1f} GB) na "
-                                           "primeira utilização."
-                                           if glos_estado == "instalavel" else ""))
-            self._set_action(self.spelling_action, not busy and has_project,
-                             reason_busy if busy else reason_project)
+                             has_project and not glos_travado,
+                             glos_motivo if glos_travado else reason_project,
+                             enabled_note=" ".join([nota_lote, (
+                                 f"Baixa o modelo de nomes (~{glos_gb:.1f} GB) na primeira utilização."
+                                 if glos_estado == "instalavel" else "")]).strip())
+            self._set_action(self.spelling_action, has_project, reason_project,
+                             enabled_note=nota_lote)
             self.cancel_job_action.setEnabled(busy)
             if hasattr(self, "progress_bar"):
                 self.progress_bar.setVisible(busy)
@@ -9646,10 +9986,12 @@ if QT_IMPORT_ERROR is None:
                     # Mesma regra da acao: maquina incompativel desabilita o
                     # botao e explica no tooltip, em vez de deixar clicar
                     # para so entao dizer que nao da.
-                    self.generate_resumo_button.setEnabled(
-                        not busy and has_review and not resumo_travado)
+                    # Clicavel durante o lote (explica na faixa); tooltip proprio.
+                    self.generate_resumo_button.setEnabled(has_review and not resumo_travado)
                     self.generate_resumo_button.setToolTip(
-                        resumo_motivo if resumo_travado else self.summarize_action.toolTip())
+                        resumo_motivo if resumo_travado else
+                        (reason_busy if busy else self.summarize_action.toolTip()))
+            self._sync_busy_hints(busy)
 
         def restore_review_snapshot(self, snapshot: dict[str, Any], selected_turn_id: str | None = None) -> None:
             if not self.current_interview_id:
@@ -10855,29 +11197,38 @@ if QT_IMPORT_ERROR is None:
                     interview_id,
                     {"status": "Na fila", "stage": "aguardando", "progress": 0, "queued_at": datetime.now().isoformat(timespec="seconds"), "last_error": ""},
                 )
+            # B2 (2026-09-02): com 2+ arquivos, o preparo (ffmpeg) vira UM
+            # passo do lote, em paralelo (2 por vez), antes das transcricoes;
+            # o passo de transcricao recusa quem falhou (skip-and-continue).
+            self._prepare_failed = set()
+            preparo_em_lote = len(ids) >= 2
+            if preparo_em_lote:
+                steps.append((
+                    f"Preparando {len(ids)} áudios...",
+                    lambda progress, should_cancel, alvo=list(ids), lo=r[0], hi=r[1]: self._prepare_batch(
+                        alvo, lo, hi, progress, should_cancel),
+                    True,
+                ))
+                weights.append(max(1, w[0] * len(ids)))
             for index, interview_id in enumerate(ids, start=1):
                 prefix = f"{index}/{len(ids)} {interview_id}"
-                file_steps = [
-                    self.job_step(f"{prefix}: convertendo o áudio para WAV 16 kHz...", interview_id, "preparar audio", r[0], r[1], lambda item=interview_id: app_service.prepare_interviews(self.context, ids=[item])),
+                file_steps = []
+                if not preparo_em_lote:
+                    file_steps.append(
+                        self.job_step(f"{prefix}: convertendo o áudio para WAV 16 kHz...", interview_id, "preparar audio", r[0], r[1], lambda item=interview_id: app_service.prepare_interviews(self.context, ids=[item])),
+                    )
+                file_steps.append(
                     self.job_step(
                         f"{prefix}: transcrevendo com {motor_label}...",
                         interview_id,
                         "transcrever",
                         r[1],
                         r[2],
-                        lambda progress, should_cancel, item=interview_id: app_service.transcribe_interviews(
-                            self.context,
-                            ids=[item],
-                            # asr_model efetivo SEMPRE no override: igual a
-                            # config no fluxo normal; o escolhido na rodada
-                            # de "Transcrever novamente…".
-                            overrides={"diarize": False, "asr_model": asr_model},
-                            progress_callback=progress,
-                            should_cancel=should_cancel,
-                        ),
+                        lambda progress, should_cancel, item=interview_id: self._transcribe_prepared(
+                            item, asr_model, progress, should_cancel),
                         accepts_progress=True,
                     ),
-                ]
+                )
                 if do_diarize:
                     file_steps.append(
                         self.job_step(
@@ -10948,7 +11299,8 @@ if QT_IMPORT_ERROR is None:
                     self.job_step(f"{prefix}: verificando arquivos gerados...", interview_id, "verificar arquivos", r[6], r[7], lambda item=interview_id: app_service.qc_interviews(self.context, ids=[item])),
                 )
                 steps.extend(file_steps)
-                weights.extend(step_w)
+                # step_w[0] e o peso do preparo, ja contado no passo do lote.
+                weights.extend(step_w[1:] if preparo_em_lote else step_w)
             if self.current_interview_id and self.current_interview_id in ids:
                 # O job vai RECRIAR a review deste arquivo: congelar o editor
                 # fecha a corrida autosave x rebuild_review (texto digitado
@@ -10956,6 +11308,11 @@ if QT_IMPORT_ERROR is None:
                 # on_worker_done recarrega e reabilita; on_worker_failed idem.
                 self.set_editor_enabled(False)
             self.refresh_interviews()
+            # B1: servidor de separacao para o lote (abre agora, carrega em
+            # paralelo). C: as vozes destes arquivos entram na faixa ao fim.
+            if do_diarize:
+                self._start_diarize_server(len(ids))
+            self._voice_batch_ids = list(ids)
             self.start_worker(
                 f"Transcrever {len(ids)} arquivo(s)",
                 steps,
@@ -11233,6 +11590,23 @@ if QT_IMPORT_ERROR is None:
             for iid in id_list:
                 if should_cancel is not None and should_cancel():
                     break
+                # B1 (2026-09-02): servidor do lote quando existe (modelo ja
+                # carregado); se ele cair, fallback para o subprocesso por
+                # arquivo — a rota de sempre.
+                server = getattr(self, "_diarize_server", None)
+                if server is not None:
+                    resultado = server.run([iid], on_progress=progress_callback, should_cancel=should_cancel)
+                    if resultado is not None:
+                        failures += resultado
+                        if resultado:
+                            _logger.warning("diarizacao (servidor) de %s: %s falha(s)", iid, resultado)
+                        continue
+                    self._diarize_server = None
+                    server.stop()
+                    _logger.warning(
+                        "servidor de diarizacao indisponivel (%s); usando subprocesso por arquivo",
+                        server.failure_reason,
+                    )
 
                 def on_output(line: str) -> None:
                     detail = parse_progress_json_line(line)
@@ -11330,6 +11704,8 @@ if QT_IMPORT_ERROR is None:
                 "Atualizando transcrições editáveis...",
                 lambda alvo=list(ids): app_service.refresh_unedited_reviews(self.context, alvo),
             ))
+            self._start_diarize_server(len(ids))
+            self._voice_batch_ids = list(ids)
             self.start_worker("Identificar falantes", steps)
 
         def improve_speakers_current_file(self, *_args: Any) -> None:
@@ -11397,6 +11773,8 @@ if QT_IMPORT_ERROR is None:
 
         def run_summarize_job(self) -> None:
             """Resumo com indice tematico (fase 2.1) — analise 100% local."""
+            if self._explain_busy("Resumir a entrevista com AI"):
+                return
             if not self.save_current_turn():
                 return
             if not self._ensure_llm_model():
@@ -12011,6 +12389,8 @@ if QT_IMPORT_ERROR is None:
 
         def run_glossario_job(self) -> None:
             """Glossario de nomes do projeto (lote 6a) — varredura unica."""
+            if self._explain_busy("Glossário de nomes com AI"):
+                return
             if not self.save_current_turn():
                 return
             if self.context is None:
@@ -12076,6 +12456,8 @@ if QT_IMPORT_ERROR is None:
         def open_spelling_review(self) -> None:
             """Revisao de grafias (lote 6b): so aplica o que o usuario marcar."""
             from . import glossario as _gl
+            if self._explain_busy("Revisar grafias de nomes"):
+                return
             if self.context is None:
                 QMessageBox.information(self, "Abra um projeto", "Abra um projeto para revisar as grafias.")
                 return
@@ -12199,10 +12581,13 @@ if QT_IMPORT_ERROR is None:
 
         def start_worker(self, label: str, steps: list[tuple], weights: list[int] | None = None) -> None:
             if self.worker and self.worker.isRunning():
+                # Ultima defesa para caminhos nao-AI (as acoes de AI explicam
+                # na faixa via _explain_busy).
                 QMessageBox.information(
                     self,
                     "Tarefa em andamento",
-                    f"{self.current_job_label or 'Uma tarefa'} ainda esta em andamento. O aplicativo nao esta travado.",
+                    busy_click_text("Esta ação", self._busy_state_text())
+                    + "\n\nO aplicativo não está travado.",
                 )
                 return
             self.current_job_label = label
@@ -12262,6 +12647,7 @@ if QT_IMPORT_ERROR is None:
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(max(0, min(100, percent)))
             self._refresh_running_rows()
+            self._sync_busy_hints(True)
 
         def _refresh_running_rows(self, force: bool = False) -> None:
             """Coluna Transcrição por arquivo DURANTE o lote (2026-09-02).
@@ -12314,6 +12700,7 @@ if QT_IMPORT_ERROR is None:
 
         def on_worker_done(self, message: str) -> None:
             finished_label = self.current_job_label
+            self._stop_diarize_server()
             # Qualquer job pode ter mexido em modelos (Preparar modelos,
             # downloads no meio de acoes): invalidar o retrato de
             # capacidades evita tooltips/notas mentindo apos o download.
@@ -12332,6 +12719,7 @@ if QT_IMPORT_ERROR is None:
             self.current_job_label = ""
             self._reset_orphan_queue_jobs()
             self.refresh_interviews()
+            self._sync_busy_hints(False)
             # DEPOIS do refresh: ele termina sobrescrevendo o progress_label
             # com "N entrevista(s) na lista" — a mensagem de conclusao
             # ("concluído com N falhas", "Modelos prontos") nunca ficava
@@ -12394,6 +12782,9 @@ if QT_IMPORT_ERROR is None:
                     _logger.warning("Falha ao recarregar review de %s: %s", current_id, exc)
             self.update_action_states()
             self._update_voice_banner()
+            if interrompido:
+                self._voice_batch_ids = []
+            self._update_voice_batch_banner()
             pending_summaries = getattr(self, "_pending_summary_ids", None)
             self._pending_summary_ids = None
             if pending_summaries and not interrompido:
@@ -12427,6 +12818,8 @@ if QT_IMPORT_ERROR is None:
                 )
 
         def on_worker_failed(self, message: str) -> None:
+            self._stop_diarize_server()
+            self._voice_batch_ids = []
             self.progress_bar.setRange(0, 100)
             self.progress_label.setText("Falha.")
             self.progress_bar.setValue(0)
@@ -12479,6 +12872,8 @@ if QT_IMPORT_ERROR is None:
                     # em execucao quando a janela morre.
                     _ABANDONED_WORKERS.append(self.worker)
                     self.worker = None
+            # Servidor de separacao do lote (B1): nao sobreviver a janela.
+            self._stop_diarize_server()
             # Trash worker: NUNCA terminate() (pode corromper copy in-flight)
             if getattr(self, "_trash_worker", None) is not None and self._trash_worker.isRunning():
                 self._trash_worker.request_cancel()

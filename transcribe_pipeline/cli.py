@@ -8,7 +8,7 @@ import sys
 from . import model_manager, project_store
 from .audio import prepare_audio
 from .config import ensure_directories, load_config, make_paths, write_default_config
-from .diarization import run_pyannote_diarization
+from .diarization import diarize_rows, load_diarization_pipeline, run_pyannote_diarization
 from .manifest import build_manifest, read_manifest, selected_rows, write_manifest
 from .qc import run_qc
 from .render import render_outputs, write_empty_speaker_map
@@ -62,6 +62,13 @@ def main(argv: list[str] | None = None) -> int:
         help="Imprime linhas '@PROGRESS {json}' para consumo da GUI (subprocesso).",
     )
     diarize_parser.set_defaults(func=cmd_diarize)
+
+    serve_parser = subparsers.add_parser(
+        "diarize-serve",
+        help="Servidor de diarizacao para a GUI: carrega o modelo uma vez e atende "
+             "pedidos JSON pelo stdin ({\"ids\": [...]}; {\"quit\": true} encerra).",
+    )
+    serve_parser.set_defaults(func=cmd_diarize_serve)
 
     render_parser = subparsers.add_parser("render", help="Render canonical JSON, Markdown, DOCX and TSV.")
     add_ids_arg(render_parser)
@@ -347,6 +354,79 @@ def cmd_diarize(args: argparse.Namespace) -> int:
             progress_callback=progress_callback,
         )
     return failures
+
+
+def cmd_diarize_serve(args: argparse.Namespace) -> int:
+    """Servidor de diarizacao (2026-09-02): um processo por LOTE.
+
+    Protocolo (linhas, UTF-8):
+      stdout: @PROGRESS {json} (como --progress-json) durante a carga e cada
+              pedido; @READY {json} quando o modelo esta pronto; @DONE
+              {"ids": [...], "failures": n} ao fim de cada pedido; @DONE
+              {"error": "..."} se o modelo nao carregar (e sai com 1).
+      stdin:  uma linha JSON por pedido: {"ids": ["X"]}; {"quit": true} ou
+              EOF encerram.
+    Falha num pedido nao derruba o servidor: vira failures no @DONE.
+    Manifesto e metadados sao relidos a cada pedido (o lote pode ter
+    acabado de preparar o WAV / o usuario pode ter mexido nos falantes).
+    """
+    from .utils import DONE_JSON_PREFIX, PROGRESS_JSON_PREFIX, READY_JSON_PREFIX
+
+    def _line(prefix: str, payload: dict) -> None:
+        print(prefix + json.dumps(payload, ensure_ascii=False), flush=True)
+
+    def progress_callback(detail: dict) -> None:
+        _line(PROGRESS_JSON_PREFIX, detail)
+
+    try:
+        config, paths = load_context(args)
+        loaded = load_diarization_pipeline(config, progress_callback)
+    except Exception as exc:  # noqa: BLE001 - a GUI cai para o subprocesso por arquivo
+        _line(DONE_JSON_PREFIX, {"error": str(exc)[-500:]})
+        return 1
+    if loaded is None:
+        _line(DONE_JSON_PREFIX, {"error": "modelo de separação de falantes não carregou"})
+        return 1
+    _line(READY_JSON_PREFIX, {"device": loaded.device, "model": loaded.model_name})
+
+    for raw in sys.stdin:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            request = json.loads(raw)
+        except ValueError:
+            continue
+        if not isinstance(request, dict) or request.get("quit"):
+            break
+        ids = [str(item) for item in (request.get("ids") or []) if str(item)]
+        failures = 0
+        try:
+            rows = load_manifest_or_exit(paths)
+            pares = per_file_configs(config, paths, rows, ids)
+            # Id fora do manifesto conta como falha (nunca como "ok" silencioso).
+            failures += len(ids) - len(pares)
+            for interview_id, file_config in pares:
+                failures += diarize_rows(
+                    loaded, rows, file_config, paths, ids=[interview_id],
+                    progress_callback=progress_callback,
+                )
+        except SystemExit:
+            failures = len(ids) or 1
+        except Exception as exc:  # noqa: BLE001 - o pedido falha; o servidor segue
+            failures = len(ids) or 1
+            print(f"[diarize-serve] erro no pedido {ids}: {exc}", flush=True)
+        try:
+            # Memoria de GPU cacheada pelo torch entre pedidos: devolver ao
+            # motor de transcricao, que roda em paralelo no mesmo cartao.
+            # (torch ja esta em sys.modules depois da carga; nao importar.)
+            torch = sys.modules.get("torch")
+            if torch is not None and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:  # noqa: BLE001
+            pass
+        _line(DONE_JSON_PREFIX, {"ids": ids, "failures": failures})
+    return 0
 
 
 def cmd_render(args: argparse.Namespace) -> int:

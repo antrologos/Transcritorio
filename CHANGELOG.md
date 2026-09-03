@@ -1,5 +1,50 @@
 # Changelog
 
+## v0.2.8 — 2026-09-02
+
+Rodada de revisões de um lote real de 5 entrevistas (máquina com GPU):
+por que as ações ficam cinza, tempo do lote e as vozes das entrevistas que
+não estavam abertas.
+
+- **As ferramentas de AI não "sumiram" durante o lote — e agora o app diz
+  isso.** Durante uma transcrição em lote as análises com AI (e as demais
+  ações) ficavam desabilitadas com o motivo escondido num tooltip que um
+  item cinza de menu nem mostra; a leitura natural era "as ferramentas de AI
+  não vieram instaladas". Agora: uma faixa na lista de arquivos explica
+  ("⏳ Lote em andamento — Arquivo 3 de 5 · … As análises com AI e as
+  demais ações voltam sozinhas quando terminar"); o menu Analisar ganha uma
+  linha com o mesmo aviso; o tooltip de todo item cinza diz o estado do
+  lote; e os itens de AI continuam **clicáveis** — o clique explica na
+  própria faixa ("O Transcritório executa uma tarefa por vez. Em
+  andamento: … 'Resumir a entrevista com AI' fica disponível quando o
+  lote terminar — não é preciso fazer nada"), sem janela modal e sem
+  executar nada. O aviso modal das demais ações passa a dizer o estado do
+  lote e que o aplicativo não está travado.
+- **Separação de falantes num só processo por lote.** Cada arquivo abria um
+  processo novo só para separar as vozes, e ~35 s de cada um eram abrir o
+  Python, importar torch/pyannote e carregar o modelo — mais que a própria
+  separação numa entrevista de 50 min em GPU. Agora o lote abre **um**
+  servidor de separação (`transcritorio-cli diarize-serve`) no início, que
+  carrega o modelo uma vez, em paralelo com o preparo e a transcrição do
+  primeiro arquivo, e atende um pedido por arquivo. Se o servidor cair, o
+  arquivo segue pela rota antiga (um processo por arquivo), sem intervenção.
+  Lote de um arquivo continua como era. Entre um pedido e outro o servidor
+  devolve a memória de GPU em cache ao motor de transcrição.
+- **Áudios preparados em paralelo no início do lote.** Com dois ou mais
+  arquivos, a conversão para WAV (ffmpeg) vira um único passo do lote,
+  duas conversões por vez ("Preparando os áudios (2 de 5)"), antes das
+  transcrições. Um arquivo cuja conversão falha é pulado com a causa na fila
+  de processamento; os outros seguem.
+- **Vozes por identificar ao fim do lote.** Num lote de 5 entrevistas o app
+  perguntava "De quem é esta voz?" uma vez só — para a transcrição que
+  estava aberta; as outras perguntavam apenas quando abertas. Agora, ao fim
+  do lote, a lista mostra a faixa "🎙 N entrevistas com vozes por
+  identificar" com **Identificar agora…** (abre cada uma em sequência e
+  pergunta, com os nomes sugeridos pelo reconhecimento de vozes recorrentes;
+  cancelar numa delas interrompe a sequência e a faixa segue com o
+  restante) e **Depois** (cada entrevista continua perguntando ao ser
+  aberta).
+
 ## v0.2.7 — 2026-09-02
 
 - **Corrigido: caracteres "�" na barra de progresso** ("Separando falantes de
