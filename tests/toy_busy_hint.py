@@ -83,8 +83,11 @@ for acao in (win.explore_action, win.glossario_action, win.spelling_action):
     assert "Aguarde o lote terminar (Arquivo 3 de 5" in acao.toolTip(), acao.toolTip()
 assert not win.transcribe_action.isEnabled()
 assert "Aguarde o lote terminar (Arquivo 3 de 5" in win.transcribe_action.toolTip()
-assert not win.summarize_action.isEnabled()          # sem transcricao aberta: motivo proprio
-assert "Abra uma transcrição" in win.summarize_action.toolTip()
+# Sem transcricao aberta o Resumir fica cinza pelo motivo PROPRIO ("Abra uma
+# transcrição" aqui; no CI sem o modelo de análise, o motivo da capacidade) —
+# nunca pelo lote.
+assert not win.summarize_action.isEnabled()
+assert win.summarize_action.toolTip() and "Aguarde" not in win.summarize_action.toolTip(), win.summarize_action.toolTip()
 print("PASS: faixa + linha do menu + tooltips durante o lote")
 
 # clique numa acao de AI durante o lote: explica na faixa, nao abre nada, nao inicia worker
