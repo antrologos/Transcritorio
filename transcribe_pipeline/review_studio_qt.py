@@ -13468,7 +13468,7 @@ if QT_IMPORT_ERROR is None:
             if iid:
                 meta = (self.context.metadata.get(iid) or {})
                 titulo = str(meta.get("title") or iid)
-                alvo = self._export_target_dir()
+                alvo = self._results_folder_for_user()
                 for chave, rotulo, ext, frase in [
                     ("export_docx", "Transcrição final (Word)", "docx",
                      "ainda não exportada"),
