@@ -323,7 +323,8 @@ def diarize_rows(
                         pass
 
             try:
-                output = pipeline(audio_tensor, hook=_hook, **speaker_kwargs(config))
+                output = pipeline(audio_tensor, hook=_hook,
+                                  **speaker_kwargs(config, tensor_audio_seconds(audio_tensor)))
             finally:
                 heartbeat_stop.set()
                 heartbeat_thread.join(timeout=2)
@@ -468,10 +469,29 @@ def _custom_pipeline_params(config: dict) -> dict:
     return params
 
 
-def speaker_kwargs(config: dict) -> dict[str, int]:
+# Abaixo disto, a contagem exata de falantes vira uma FAIXA. Escolhido com
+# folga: medimos em 1 min (imposicao de 2 falantes erra 28-32% do tempo contra
+# 0,3% do automatico) e em 24 min (imposicao e automatico dao exatamente o
+# mesmo). O limiar fica no meio, do lado seguro — nada se perde por usar faixa
+# num audio de 4 min, e muito se perde por impor 2 num de 1 min.
+SHORT_AUDIO_SECONDS = 300.0
+
+
+def speaker_kwargs(config: dict, audio_seconds: float | None = None) -> dict[str, int]:
+    """Parametros de contagem de falantes para o pyannote (puro).
+
+    `num_speakers=N` e uma ORDEM, nao uma dica: o agrupamento e obrigado a
+    produzir N grupos. Num trecho curto em que so uma pessoa fala, isso parte a
+    mesma voz em duas — e nenhum modelo melhor resolveria, porque todos
+    obedecem ao parametro. Por isso, em audio curto a exigencia vira faixa
+    (1 a N): mantem a protecao de nunca inventar mais vozes do que o projeto
+    declara, e devolve ao modelo a decisao de quantas ha de fato."""
     num_speakers = config.get("diarization_num_speakers")
     if num_speakers is not None:
-        return {"num_speakers": int(num_speakers)}
+        alvo = int(num_speakers)
+        if audio_seconds is not None and 0 < float(audio_seconds) < SHORT_AUDIO_SECONDS:
+            return {"min_speakers": 1, "max_speakers": max(1, alvo)}
+        return {"num_speakers": alvo}
     result: dict[str, int] = {}
     if config.get("min_speakers") is not None:
         result["min_speakers"] = int(config["min_speakers"])

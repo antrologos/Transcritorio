@@ -1,5 +1,18 @@
 # Changelog
 
+## Em desenvolvimento (ramo beta)
+
+- **Áudio curto e a contagem de falantes.** Um teste com um recorte de 1 minuto voltou
+  com a separação de vozes "ruim": o app passava ao pyannote `num_speakers: 2`, que é uma
+  ordem e não uma dica — o agrupamento fica obrigado a devolver dois grupos e, num trecho
+  em que só uma pessoa fala, parte a mesma voz em duas. Nenhum modelo melhor resolveria
+  isso, porque todos obedecem ao parâmetro. Agora, abaixo de 5 minutos, a configuração
+  do projeto vira uma faixa (de 1 até o número declarado): o teto continua valendo, e
+  quantas vozes há de fato passa a ser decisão do modelo. Medido contra a diarização da
+  entrevista inteira: erro de 28% e 32% nos recortes de 1 minuto impondo 2 falantes,
+  contra 0,3% deixando contar; na entrevista de 24 minutos, imposto e automático dão
+  exatamente o mesmo resultado.
+
 ## 0.3.0b1 — 2026-09-03 (versão de teste, não publicada)
 
 Beta para uso lado a lado com a estável: `scripts\Instalar-Beta.bat` instala num
