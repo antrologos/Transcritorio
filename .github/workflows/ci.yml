@@ -2,7 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # `beta` tambem: e o canal de teste que outras pessoas instalam
+    # (scripts/Instalar-Beta.bat busca justamente esse ramo), entao ele
+    # precisa passar pelos mesmos gates nos tres sistemas.
+    branches: [main, beta]
   pull_request:
     branches: [main]
   workflow_dispatch:
