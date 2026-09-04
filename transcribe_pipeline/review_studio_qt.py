@@ -8563,13 +8563,13 @@ if QT_IMPORT_ERROR is None:
             if self.context is not None:
                 nome = str(self.context.project.get("project_name")
                            or self.context.paths.project_root.name)
-                self.setWindowTitle(f"{APP_NAME} — {nome}")
+                self.setWindowTitle(f"{APP_NAME} — {nome}{channel_suffix()}")
                 self.project_label.setToolTip(
                     f"Projeto: {self.context.paths.project_root}\n"
                     "Clique em \"Modelo\" ou \"Motor\" para configurar a "
                     "transcrição (modelo, dispositivo CUDA/CPU, idioma).")
             else:
-                self.setWindowTitle(APP_NAME)
+                self.setWindowTitle(APP_NAME + channel_suffix())
                 self.project_label.setToolTip("Nenhum projeto aberto.")
 
         def project_header_text(self) -> str:
