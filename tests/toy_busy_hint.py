@@ -97,7 +97,7 @@ win.start_worker = _boom  # type: ignore[method-assign]
 win.explore_action.trigger()
 app.processEvents()
 assert getattr(win, "_explore_dialog", None) is None, "abriu a janela Perguntar durante o lote"
-assert "\"Perguntar às entrevistas com AI\"" in win.busy_hint_label.text(), win.busy_hint_label.text()
+assert "\"Buscar por sentido e perguntar\"" in win.busy_hint_label.text(), win.busy_hint_label.text()
 assert "uma tarefa por vez" in win.busy_hint_label.text()
 win.run_glossario_job()
 assert "\"Glossário de nomes com AI\"" in win.busy_hint_label.text()

@@ -142,7 +142,18 @@ dlg.run_question()
 _wait_worker()
 assert "answer" not in chamadas and "NVIDIA" in dlg.status_label.text()
 assert dlg.results.count() == 4
-print("PASS: sem GPU os trechos aparecem e a resposta e explicada")
+# O rotulo do botao nao pode prometer o que esta maquina nao entrega
+# (relato de campo 2026-09-04: "nao entrega o que promete").
+dlg._announce_readiness()
+assert dlg.ask_button.text() == "✨ Buscar trechos", dlg.ask_button.text()
+assert "placa NVIDIA" in dlg.ask_button.toolTip()
+assert "resposta escrita" in dlg.state_label.text() and "NVIDIA" in dlg.state_label.text()
+# e volta a prometer quando a maquina entrega
+win._capability_state = lambda key: ("pronta", "", 8.7)  # type: ignore[method-assign]
+dlg._announce_readiness()
+assert dlg.ask_button.text() == "✨ Perguntar", dlg.ask_button.text()
+win._capability_state = lambda key: ("incompativel", "precisa de uma placa NVIDIA", 0.0) if key == "resumo_perguntar" else ("pronta", "", 0.0)  # type: ignore[method-assign]
+print("PASS: sem GPU os trechos aparecem, a resposta e explicada e o botao nao promete")
 
 # --- pergunta sobre o conjunto: sem resumos -> faixa + 'Resumir as N entrevistas agora' ---
 win._capability_state = lambda key: ("pronta", "", 0.0)  # type: ignore[method-assign]

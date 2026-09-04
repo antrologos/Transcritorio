@@ -2,6 +2,19 @@
 
 ## Em desenvolvimento (ramo beta)
 
+- **"Perguntar às entrevistas com AI" passou a se chamar "Buscar por sentido e
+  perguntar".** O nome antigo prometia a todo mundo uma resposta escrita que só roda com
+  placa NVIDIA — e a maioria dos computadores não tem. O nome novo diz primeiro o que a
+  função entrega sempre (os trechos das entrevistas que tratam do que você escreveu,
+  achados pelo sentido e não pelas palavras exatas, em qualquer computador) e depois o que
+  depende da máquina. O aviso da placa passou para o tooltip do menu e da barra, ou seja,
+  antes do clique; dentro da janela, onde a resposta escrita não roda, o botão passa a se
+  chamar "✨ Buscar trechos" — não promete o que não entrega. Corrigido também um erro no
+  site: a busca por sentido **não** usa o Qwen. Ela usa um *encoder* de recuperação
+  (`multilingual-e5`) com um reordenador opcional (`bge-reranker`), que são pequenos e
+  rodam no processador; o Qwen só entra no que precisa *escrever* (resumo, resposta,
+  nomes de tema).
+
 - **"Aplicar todos os temas como códigos".** Faltava o passo entre descobrir os temas e
   ter um codebook utilizável: era preciso ir tema a tema, marcando trecho a trecho. Agora
   um botão cria um código por tema — reaproveitando os que já existem com o mesmo nome,

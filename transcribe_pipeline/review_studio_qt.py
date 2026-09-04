@@ -3761,7 +3761,7 @@ if QT_IMPORT_ERROR is None:
         _scope_subject = "A AI"
 
         def __init__(self, window) -> None:
-            super().__init__(window, "✨ Perguntar às entrevistas com AI")
+            super().__init__(window, "✨ Buscar por sentido e perguntar")
             self.setMinimumSize(760, 560)
             self._last_result: dict[str, Any] | None = None
             self._current_query = ""
@@ -3769,9 +3769,10 @@ if QT_IMPORT_ERROR is None:
             self._row_by_n: dict[int, int] = {}
             layout = QVBoxLayout(self)
             intro = QLabel(
-                "Escreva uma pergunta ou um tema. Primeiro aparecem os trechos que "
-                "tratam disso; depois a AI escreve uma resposta citando-os [n]. "
-                "Tudo local — nada sai do seu computador.")
+                "Escreva uma pergunta ou um tema. Aparecem os trechos das entrevistas que "
+                "tratam disso — pelo sentido, mesmo sem as palavras exatas, e em qualquer "
+                "computador. Havendo placa NVIDIA, a AI também escreve uma resposta "
+                "citando-os [n]. Tudo local — nada sai do seu computador.")
             intro.setWordWrap(True)
             intro.setStyleSheet(_style_muted())
             layout.addWidget(intro)
@@ -3780,6 +3781,8 @@ if QT_IMPORT_ERROR is None:
             self.query_input.setPlaceholderText("uma pergunta ou um tema — ex.: dificuldade para entrar em condomínios")
             self.query_input.returnPressed.connect(self.run_question)
             row.addWidget(self.query_input, 1)
+            # O rótulo segue a máquina (_announce_readiness): onde a resposta
+            # escrita não roda, o botão não pode dizer "Perguntar".
             self.ask_button = QPushButton("✨ Perguntar")
             self.ask_button.setToolTip(
                 "Encontra os trechos em segundos e, quando o modelo de análise está "
@@ -3889,6 +3892,18 @@ if QT_IMPORT_ERROR is None:
             if resumo_estado != "incompativel" and aviso_resumo:
                 texto += f" Atenção: a resposta escrita {aviso_resumo} — por sua conta e risco."
             self.state_label.setText(texto)
+            # Onde a resposta escrita não roda, o botão promete só o que entrega.
+            if resumo_estado == "incompativel":
+                self.ask_button.setText("✨ Buscar trechos")
+                self.ask_button.setToolTip(
+                    "Encontra em segundos os trechos que tratam do que você escreveu.\n"
+                    "A resposta escrita precisa de placa NVIDIA — neste computador, "
+                    "ficam os trechos.")
+            else:
+                self.ask_button.setText("✨ Perguntar")
+                self.ask_button.setToolTip(
+                    "Encontra os trechos em segundos e, quando o modelo de análise está "
+                    "disponível, escreve a resposta citando-os.")
             self.ask_button.setEnabled(True)
             self.status_label.setText("")
 
@@ -7231,10 +7246,20 @@ if QT_IMPORT_ERROR is None:
                 "na janela, dá para restringir a entrevista aberta ou escolher quais entram.")
             self.project_search_action.triggered.connect(lambda: self.open_word_search())
 
-            self.explore_action = QAction("✨ Perguntar às entrevistas com AI…", self)
+            # O nome diz primeiro o que a função entrega SEMPRE (os trechos, em
+            # qualquer computador) e só depois o que depende da máquina (a
+            # resposta escrita). "Perguntar às entrevistas com AI" prometia a
+            # resposta a todo mundo — e a maioria dos computadores não tem
+            # placa NVIDIA. Relato de campo 2026-09-04: "continua não
+            # entregando o que promete; temos que mudar como nomeamos,
+            # explicamos e propagandeamos".
+            self.explore_action = QAction("✨ Buscar por sentido e perguntar…", self)
             self.explore_action.setToolTip(
-                "Faça perguntas e receba respostas citando os trechos, ou encontre\n"
-                "trechos pelo significado, mesmo sem as palavras exatas.\n"
+                "Escreva uma pergunta ou um tema e receba os trechos das entrevistas que\n"
+                "tratam disso — pelo sentido, mesmo sem as palavras exatas. Isso funciona\n"
+                "em qualquer computador.\n"
+                "A resposta escrita, citando os trechos, precisa de placa NVIDIA; sem ela,\n"
+                "ficam os trechos.\n"
                 "Lê as transcrições (não o áudio); o escopo é escolhível na janela:\n"
                 "todas, somente a entrevista aberta ou um conjunto escolhido.\n"
                 "AI local — nada sai do seu computador.")
@@ -10270,8 +10295,8 @@ if QT_IMPORT_ERROR is None:
             dialog.query_input.setFocus()
 
         def open_explore(self) -> None:
-            """Janela Explorar as entrevistas (botao da barra / menu)."""
-            if self._explain_busy("Perguntar às entrevistas com AI"):
+            """Janela Buscar por sentido e perguntar (botao da barra / menu)."""
+            if self._explain_busy("Buscar por sentido e perguntar"):
                 return
             if self.context is None:
                 QMessageBox.information(self, "Abra um projeto", "Abra um projeto para explorar as entrevistas.")
@@ -11453,7 +11478,7 @@ if QT_IMPORT_ERROR is None:
             busca_estado, _busca_motivo, busca_gb = self._capability_state("busca_semantica")
             self._set_action(self.explore_action, has_project, reason_project,
                              enabled_note=" ".join([nota_lote, (
-                                 f"Baixa um modelo de ~{busca_gb:.1f} GB na primeira utilização."
+                                 f"Baixa um modelo de ~{fmt_gb(busca_gb)} na primeira utilização."
                                  if busca_estado == "instalavel" else "")]).strip())
             self._set_action(self.themes_action, has_project, reason_project,
                              enabled_note=" ".join([nota_lote, (
@@ -11465,7 +11490,7 @@ if QT_IMPORT_ERROR is None:
                              has_project and not glos_travado,
                              glos_motivo if glos_travado else reason_project,
                              enabled_note=" ".join([nota_lote, (
-                                 f"Baixa o modelo de nomes (~{glos_gb:.1f} GB) na primeira utilização."
+                                 f"Baixa o modelo de nomes (~{fmt_gb(glos_gb)}) na primeira utilização."
                                  if glos_estado == "instalavel" else "")]).strip())
             self._set_action(self.spelling_action, has_project, reason_project,
                              enabled_note=nota_lote)
