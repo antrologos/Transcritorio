@@ -69,31 +69,46 @@ echo  [1/3] Preparando o ambiente da versão de teste...
 if errorlevel 1 goto ERRO
 
 rem -- 4) O código: pasta local (repositório) ou o ramo beta no GitHub ---------
+rem    Com placa NVIDIA, o extra [cuda] traz torch/torchaudio/torchvision do
+rem    índice cu128 (misturar cu128 com CPU quebra por ABI). Sem placa, o
+rem    conjunto padrão do PyPI já é o certo.
+set "EXTRA="
+where nvidia-smi >nul 2>nul && set "EXTRA=[cuda]"
+if defined EXTRA echo         placa NVIDIA encontrada — instalando com aceleração.
 if exist "%RAIZ%\pyproject.toml" (
     echo  [2/3] Instalando o código desta pasta ^(%RAIZ%^)...
-    set "ORIGEM=%RAIZ%"
+    rem  A compilação cria uma pasta "build" ao lado do código; dentro do
+    rem  Dropbox, a sincronização trava esses arquivos no meio do caminho
+    rem  ("o arquivo já está sendo usado por outro processo"). Por isso o
+    rem  código é copiado para fora antes de compilar.
+    set "STAGE=%LOCALAPPDATA%\Transcritorio\wheel-stage\beta-src"
+    if exist "!STAGE!" rmdir /s /q "!STAGE!"
+    mkdir "!STAGE!" 2>nul
+    robocopy "%RAIZ%" "!STAGE!" /e /njh /njs /ndl /nfl /nc /ns ^
+        /xd .git .github build dist site docs tests packaging __pycache__ .claude >nul
+    if not exist "!STAGE!\pyproject.toml" goto ERRO
+    set "ORIGEM=!STAGE!!EXTRA!"
 ) else (
     echo  [2/3] Baixando o ramo "beta" do GitHub...
-    set "ORIGEM=git+https://github.com/antrologos/Transcritorio@beta"
+    set "ORIGEM=transcritorio!EXTRA! @ git+https://github.com/antrologos/Transcritorio@beta"
 )
 "%UV_EXE%" pip install --python "%BETA_DIR%\Scripts\python.exe" "!ORIGEM!"
 if errorlevel 1 goto ERRO
 
 rem -- 5) Lançador do canal de teste ------------------------------------------
+rem    Arquivo pronto no repositório, apenas copiado: gerar um .cmd linha a
+rem    linha com `echo` exige escapar parênteses e %% e quebra fácil.
 echo  [3/3] Criando o atalho da versão de teste...
-> "%LANCADOR%" echo @echo off
->> "%LANCADOR%" echo rem Lancador da versao de TESTE do Transcritorio (gerado por Instalar-Beta.bat).
->> "%LANCADOR%" echo rem TRANSCRITORIO_CHANNEL separa a instancia unica da estavel e marca o titulo.
->> "%LANCADOR%" echo setlocal
->> "%LANCADOR%" echo set "TRANSCRITORIO_CHANNEL=beta"
->> "%LANCADOR%" echo set "PATH=%%LOCALAPPDATA%%\Microsoft\WinGet\Links;%%PATH%%"
->> "%LANCADOR%" echo for /d %%%%D in ("%%LOCALAPPDATA%%\Microsoft\WinGet\Packages\Gyan.FFmpeg*"^) do (
->> "%LANCADOR%" echo   for /d %%%%B in ("%%%%D\ffmpeg-*"^) do if exist "%%%%B\bin\ffmpeg.exe" set "PATH=%%PATH%%;%%%%B\bin"
->> "%LANCADOR%" echo ^)
->> "%LANCADOR%" echo start "" "%BETA_DIR%\Scripts\transcritorio.exe" %%*
+copy /y "%RAIZ%\scripts\Transcritorio-Beta.cmd" "%LANCADOR%" >nul
+if errorlevel 1 (
+    echo         [!] Não consegui criar o atalho. Abra a beta por:
+    echo             %BETA_DIR%\Scripts\transcritorio.exe
+    goto PRONTO
+)
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$s=(New-Object -ComObject WScript.Shell).CreateShortcut([Environment]::GetFolderPath('Desktop')+'\Transcritorio (beta).lnk'); $s.TargetPath='%LANCADOR%'; $s.WorkingDirectory='%LOCALAPPDATA%\Transcritorio'; $s.Description='Transcritorio - versao de teste'; $s.Save()" >nul 2>nul
 
+:PRONTO
 echo.
 echo  =========================================================
 echo   Pronto! A versão de teste está instalada.
