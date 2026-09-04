@@ -68,13 +68,75 @@ theme = {"id": "tema_001", "name": "Remuneração", "description": "Atrasos", "p
     {"interview_id": "E2", "t_from": 0, "t_to": 0, "text": "sem pagamento"},
     {"interview_id": "E2", "t_from": 5, "t_to": 6, "text": "atraso de meses"},
 ]}
-code, created = coding.apply_theme_as_code(codes, codings, theme, skip={("E2", 5, 6)})
-assert code["name"] == "Remuneração" and code["description"] == "Atrasos" and created == 2   # E1 3-4 e E2 0-0 (ja tinham c1; este e outro codigo)
+# As faixas e a citacao vem de FORA: so a janela sabe quem entra na analise.
+FAIXAS = {("E2", 5, 6): []}          # trecho so com fala de quem ficou de fora
+
+
+def ranges_for(p):
+    chave = (p["interview_id"], p["t_from"], p["t_to"])
+    return FAIXAS.get(chave, [(p["t_from"], p["t_to"])])
+
+
+def quote_for(iid, t_from, t_to):
+    return f"{iid} {t_from}-{t_to}"
+
+
+r = coding.apply_theme_as_code(codes, codings, theme, ranges_for, quote_for)
+code = r["code"]
+assert code["name"] == "Remuneração" and code["description"] == "Atrasos"
+assert r["novo"] is True and r["criadas"] == 2 and r["ja_tinham"] == 0
+assert r["sem_fala"] == 1, "trecho sem ninguem escolhido e CONTADO, nao ignorado em silencio"
 assert len(codes) == 3 and len(codings) == 4
-_same, created_again = coding.apply_theme_as_code(codes, codings, theme)
-assert _same is code and created_again == 1 and len(codings) == 5   # so E2 5-6 era novo
+assert codings[-1]["quote"] == "E2 0-0", "a citacao gravada e a que veio de fora"
+
+# de novo: nada novo, e o codigo nao e duplicado
+r2 = coding.apply_theme_as_code(codes, codings, theme, ranges_for, quote_for)
+assert r2["code"] is code and r2["novo"] is False
+assert r2["criadas"] == 0 and r2["ja_tinham"] == 2 and len(codings) == 4
 assert coding.codes_at(codings, "E1", 3, 4) == [c1["id"], code["id"]]   # dois codigos no mesmo trecho
+
+# a faixa liberada entra na proxima passada
+FAIXAS.pop(("E2", 5, 6))
+r3 = coding.apply_theme_as_code(codes, codings, theme, ranges_for, quote_for)
+assert r3["criadas"] == 1 and r3["sem_fala"] == 0 and len(codings) == 5
 print("PASS: apply_theme_as_code")
+
+# --- todos os temas de uma vez ---
+tema_b = {"id": "tema_002", "name": "Recepção", "description": "Portas", "passages": [
+    {"interview_id": "E1", "t_from": 3, "t_to": 4},      # trecho que ja tem outros codigos
+    {"interview_id": "E3", "t_from": 7, "t_to": 8},
+]}
+# Um tema cujo nome ja esta no codebook (veio do contexto_pesquisa.md ou de
+# uma rodada anterior): tem de REAPROVEITAR o codigo, nunca duplicar.
+tema_repetido = {"id": "tema_003", "name": "  PAGAMENTO atrasado ", "passages": [
+    {"interview_id": "E4", "t_from": 0, "t_to": 0},
+]}
+antes_codes, antes_codings = len(codes), len(codings)
+resumo = coding.apply_themes_as_codes(codes, codings, [theme, tema_b, tema_repetido],
+                                      ranges_for, quote_for)
+assert resumo["temas"] == 3
+assert resumo["criadas"] == 3 and resumo["ja_tinham"] == 3   # o tema ja aplicado nao repete
+assert resumo["codigos_novos"] == 1, "«Pagamento atrasado» ja existia no codebook: reaproveita"
+assert len(codes) == antes_codes + 1 and len(codings) == antes_codings + 3
+assert resumo["nomes"] == ["Remuneração", "Recepção", "Pagamento atrasado"]
+# idempotente: rodar de novo nao cria nada
+repetido = coding.apply_themes_as_codes(codes, codings, [theme, tema_b, tema_repetido],
+                                        ranges_for, quote_for)
+assert repetido["criadas"] == 0 and repetido["codigos_novos"] == 0
+assert len(codings) == antes_codings + 3
+print("PASS: apply_themes_as_codes")
+
+# --- o indice de chaves nao muda o resultado, so o custo ---
+c_lento: list[dict] = []
+c_rapido: list[dict] = []
+indice: set = set()
+for i in range(50):
+    coding.add_coding(c_lento, "E1", i, i, "code_x")
+    coding.add_coding(c_rapido, "E1", i, i, "code_x", known=indice)
+assert len(c_lento) == len(c_rapido) == 50
+assert coding.add_coding(c_rapido, "E1", 7, 7, "code_x", known=indice) is None, "indice pega a duplicata"
+assert indice == coding.coding_keys(c_rapido)
+print("PASS: coding_keys / known")
 
 # --- texto plano e offsets ---
 turns = [

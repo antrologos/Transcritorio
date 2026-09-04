@@ -4259,6 +4259,9 @@ if QT_IMPORT_ERROR is None:
             self._codes: list[dict[str, Any]] = []
             self._codings: list[dict[str, Any]] = []
             self._codes_dirty = False
+            # Retrato do codebook e da codificacao ANTES da ultima aplicacao em
+            # massa. Vale so para ela: qualquer outra mudanca o descarta.
+            self._bulk_undo: tuple[list[dict[str, Any]], list[dict[str, Any]]] | None = None
             self._naming = False
             self._speakers: list[str] | None = None   # None = todos os falantes
             self._inventory: list[dict[str, Any]] = []
@@ -4337,6 +4340,24 @@ if QT_IMPORT_ERROR is None:
             self.merge_button.clicked.connect(self._merge)
             left_buttons.addWidget(self.merge_button)
             left_layout.addLayout(left_buttons)
+            # O passo que faltava entre descobrir os temas e ter um codebook
+            # utilizável: aplicar tema por tema, marcando trecho por trecho,
+            # é o que o relato de campo chamou de "não dá para aplicar todos
+            # os códigos de uma só vez".
+            all_buttons = QHBoxLayout()
+            self.code_all_button = QPushButton("Aplicar todos os temas como códigos…")
+            self.code_all_button.setToolTip(
+                "Cria um código por tema (reaproveitando os que já existem com o mesmo nome)\n"
+                "e o aplica a todos os trechos daquele tema, de uma vez só.")
+            self.code_all_button.clicked.connect(self._apply_all_themes_as_codes)
+            all_buttons.addWidget(self.code_all_button)
+            self.undo_bulk_button = QPushButton("Desfazer")
+            self.undo_bulk_button.setToolTip(
+                "Devolve o codebook e a codificação ao que eram antes da última aplicação em massa.")
+            self.undo_bulk_button.setVisible(False)
+            self.undo_bulk_button.clicked.connect(self._undo_bulk_coding)
+            all_buttons.addWidget(self.undo_bulk_button)
+            left_layout.addLayout(all_buttons)
             splitter.addWidget(left)
             right = QWidget()
             right_layout = QVBoxLayout(right)
@@ -4456,6 +4477,9 @@ if QT_IMPORT_ERROR is None:
             self._payload = None
             self._codes = []
             self._codings = []
+            self._bulk_undo = None
+            if hasattr(self, "undo_bulk_button"):
+                self.undo_bulk_button.setVisible(False)
             self._speakers = None
             self._inventory = []
             self._sync_speakers_label()
@@ -5054,6 +5078,7 @@ if QT_IMPORT_ERROR is None:
                         criadas += 1
                     else:
                         ja_tinham += 1
+            self._forget_bulk_undo()
             self._save_coding()
             self._refresh_passages()
             self.status_label.setText(
@@ -5061,6 +5086,78 @@ if QT_IMPORT_ERROR is None:
                 + (f" ({ja_tinham} já o tinham)." if ja_tinham else ".")
                 + ("" if self._speakers is None
                    else f" Só a fala de {', '.join(self._speakers)}."))
+
+        def _apply_all_themes_as_codes(self) -> None:
+            """Um código por tema, aplicado a todos os trechos daquele tema."""
+            from . import coding as _coding
+            temas = self._themes()
+            if not temas:
+                self.status_label.setText(
+                    "Descubra os temas primeiro — depois dá para aplicar todos como códigos."
+                    if self._payload is None else "Nenhum tema para aplicar.")
+                return
+            trechos = sum(len(t.get("passages") or []) for t in temas)
+            escopo = ("" if self._speakers is None
+                      else "\nCada código pinta só a fala de "
+                           f"{', '.join(self._speakers)}; o resto do trecho fica no "
+                           "documento como contexto.")
+            resposta = QMessageBox.question(
+                self, "Aplicar todos os temas como códigos",
+                f"Isto cria um código para cada um dos {len(temas)} temas (reaproveitando os que já "
+                f"existem com o mesmo nome) e o aplica aos {trechos} trechos deles."
+                f"{escopo}\n\n«Sem tema definido» não entra. O botão «Desfazer», ao lado, "
+                "devolve tudo ao que era.\n\nAplicar agora?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes)
+            if resposta != QMessageBox.StandardButton.Yes:
+                return
+            antes = (deepcopy(self._codes), deepcopy(self._codings))
+            try:
+                resumo = _coding.apply_themes_as_codes(
+                    self._codes, self._codings, temas, self._passage_ranges, self._range_quote)
+            except Exception as exc:  # noqa: BLE001 - nunca deixa a janela num meio-termo
+                self._codes, self._codings = antes
+                self.status_label.setText(f"Não foi possível aplicar: {sanitize_message(str(exc))}")
+                return
+            # Só guarda o retrato quando algo mudou de fato: aplicar duas vezes
+            # seguidas não pode fazer o «Desfazer» apontar para uma aplicação
+            # que não alterou nada — e deixar de desfazer a que alterou.
+            if resumo["criadas"] or resumo["codigos_novos"]:
+                self._bulk_undo = antes
+                self.undo_bulk_button.setVisible(True)
+            self._save_coding()
+            self._refresh_passages()
+            partes = [f"{resumo['codigos_novos']} código(s) novo(s) e "
+                      f"{resumo['criadas']} trecho(s) codificado(s) em {resumo['temas']} temas."]
+            if resumo["ja_tinham"]:
+                partes.append(f"{resumo['ja_tinham']} já tinham o código do tema.")
+            if resumo["sem_fala"]:
+                partes.append(f"{resumo['sem_fala']} trecho(s) ficaram de fora: só têm fala de "
+                              "quem não entra na análise.")
+            self.status_label.setText(" ".join(partes))
+
+        def _undo_bulk_coding(self) -> None:
+            """Desfaz a última aplicação em massa. Só ela: o que veio depois,
+            manualmente, seria perdido — por isso o botão some assim que a
+            codificação muda por outro caminho."""
+            antes = getattr(self, "_bulk_undo", None)
+            if antes is None:
+                self.undo_bulk_button.setVisible(False)
+                return
+            self._codes, self._codings = antes
+            self._bulk_undo = None
+            self.undo_bulk_button.setVisible(False)
+            self._save_coding()
+            self._refresh_passages()
+            self.status_label.setText("Aplicação em massa desfeita: codebook e codificação "
+                                      "voltaram ao que eram.")
+
+        def _forget_bulk_undo(self) -> None:
+            """Qualquer outra mudança na codificação torna o desfazer em massa
+            perigoso (levaria junto o que foi feito depois)."""
+            if getattr(self, "_bulk_undo", None) is not None:
+                self._bulk_undo = None
+                self.undo_bulk_button.setVisible(False)
 
         def _passage_codes(self) -> None:
             from . import coding as _coding
@@ -5095,6 +5192,7 @@ if QT_IMPORT_ERROR is None:
                             and (int(c.get("t_from", -1)), int(c.get("t_to", -1))) in faixas]
                     for c in alvo:
                         _coding.remove_coding(self._codings, str(c["id"]))
+                    self._forget_bulk_undo()
                     self._save_coding()
                     self._refresh_passages()
                     self.status_label.setText(f"Código «{nome}» retirado do trecho.")
@@ -5108,6 +5206,7 @@ if QT_IMPORT_ERROR is None:
             if not criadas:
                 self.status_label.setText(f"O trecho já tem o código «{code['name']}».")
                 return
+            self._forget_bulk_undo()
             self._save_coding()
             self._refresh_passages()
             self.status_label.setText(f"Código «{code['name']}» acrescentado ao trecho.")

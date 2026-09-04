@@ -235,6 +235,75 @@ assert "retirado" in dlg.status_label.text() and len(coding.load_codings(ctx.pat
 assert dlg.passages.item(0).text().startswith("● Pagamento e atrasos\n")
 print("PASS: codigos por trecho")
 
+# --- aplicar TODOS os temas como codigos (uma confirmacao, um desfazer) ---
+perguntas: list[str] = []
+resposta_sim = [True]
+
+
+def fake_question(parent, titulo, texto, *a, **k):
+    perguntas.append(texto)
+    return (rs.QMessageBox.StandardButton.Yes if resposta_sim[0]
+            else rs.QMessageBox.StandardButton.No)
+
+
+rs.QMessageBox.question = staticmethod(fake_question)  # type: ignore[assignment]
+codes_antes = [dict(c) for c in coding.load_codebook(ctx.paths)]
+codings_antes = [dict(c) for c in coding.load_codings(ctx.paths)]
+assert len(codings_antes) == 2 and len(codes_antes) == 2
+
+# recusar nao muda nada
+resposta_sim[0] = False
+dlg._apply_all_themes_as_codes()
+assert len(perguntas) == 1 and "2 temas" in perguntas[0] and "5 trechos" in perguntas[0]
+assert len(coding.load_codings(ctx.paths)) == 2, "recusar a confirmacao nao pode aplicar nada"
+assert not dlg.undo_bulk_button.isVisible()
+
+# aceitar aplica de uma vez so
+resposta_sim[0] = True
+dlg._apply_all_themes_as_codes()
+assert len(perguntas) == 2
+texto = dlg.status_label.text()
+assert "1 código(s) novo(s)" in texto and "3 trecho(s) codificado(s) em 2 temas" in texto, texto
+assert "2 já tinham o código do tema" in texto, texto
+depois = coding.load_codings(ctx.paths)
+assert len(depois) == 5, len(depois)
+nomes_codes = [c["name"] for c in coding.load_codebook(ctx.paths)]
+assert nomes_codes == ["recepcao", "Pagamento e atrasos", "Formação dos recenseadores"], nomes_codes
+assert dlg.undo_bulk_button.isVisible(), "o desfazer tem de aparecer logo apos a aplicacao"
+
+# de novo: idempotente, e o «Desfazer» continua apontando para a aplicacao que
+# de fato mudou alguma coisa (senao ele desfaria um nada e perderia a outra)
+dlg._apply_all_themes_as_codes()
+assert len(coding.load_codings(ctx.paths)) == 5
+assert "0 código(s) novo(s) e 0 trecho(s)" in dlg.status_label.text(), dlg.status_label.text()
+assert dlg.undo_bulk_button.isVisible()
+
+# desfazer devolve codebook E codificacao ao que eram, no disco
+dlg._undo_bulk_coding()
+assert not dlg.undo_bulk_button.isVisible()
+assert "desfeita" in dlg.status_label.text()
+assert [c["name"] for c in coding.load_codebook(ctx.paths)] == [c["name"] for c in codes_antes]
+assert [c["id"] for c in coding.load_codings(ctx.paths)] == [c["id"] for c in codings_antes]
+
+# uma mudanca por outro caminho descarta o desfazer em massa (senao ele
+# levaria junto o que foi feito depois)
+dlg._apply_all_themes_as_codes()
+assert dlg.undo_bulk_button.isVisible()
+dlg.passages.setCurrentRow(0)
+rs.QInputDialog.getItem = staticmethod(lambda *a, **k: ("recepcao", True))  # type: ignore[assignment]
+dlg._passage_codes()
+assert not dlg.undo_bulk_button.isVisible(), "codificar a mao depois torna o desfazer em massa perigoso"
+# limpa para as secoes seguintes: tira o codigo manual e volta ao estado de antes
+dlg.passages.setCurrentRow(0)
+rs.QInputDialog.getItem = staticmethod(lambda *a, **k: ("✓ recepcao", True))  # type: ignore[assignment]
+dlg._passage_codes()
+dlg._codes = [dict(c) for c in codes_antes]
+dlg._codings = [dict(c) for c in codings_antes]
+dlg._save_coding()
+dlg._refresh_passages()
+assert len(coding.load_codings(ctx.paths)) == 2
+print("PASS: aplicar todos os temas como codigos")
+
 # --- «Sem tema definido» nao e um tema: o motivo tem de dizer isso ---
 dlg.themes_list.setCurrentRow(dlg.themes_list.count() - 1)
 assert "Sem tema definido" in dlg.themes_list.currentItem().text()

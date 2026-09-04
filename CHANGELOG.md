@@ -2,6 +2,15 @@
 
 ## Em desenvolvimento (ramo beta)
 
+- **"Aplicar todos os temas como códigos".** Faltava o passo entre descobrir os temas e
+  ter um codebook utilizável: era preciso ir tema a tema, marcando trecho a trecho. Agora
+  um botão cria um código por tema — reaproveitando os que já existem com o mesmo nome,
+  inclusive os que vieram do `contexto_pesquisa.md` — e o aplica a todos os trechos
+  daquele tema. Uma confirmação só, dizendo quantos temas e quantos trechos; "Sem tema
+  definido" não entra; e um "Desfazer" ao lado devolve codebook e codificação ao que
+  eram. Rodar duas vezes não duplica nada, e os trechos que só têm fala de quem ficou
+  de fora em "Quem entra" são contados na mensagem, não descartados em silêncio.
+
 - **O Estúdio de Transcrição sem tirar a mão do teclado.** Revisar era "muito clicar":
   uma hora de entrevista tem cerca de 219 blocos, e cada um custava idas ao mouse para
   ouvir, voltar, corrigir, juntar e seguir. Três coisas mudaram.

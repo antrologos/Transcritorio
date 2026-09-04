@@ -163,10 +163,22 @@ def coding_key(coding: dict[str, Any]) -> tuple[str, int, int, str]:
             int(coding.get("t_to", -1)), str(coding.get("code_id")))
 
 
+def coding_keys(codings: list[dict[str, Any]]) -> set[tuple[str, int, int, str]]:
+    """Indice das codificacoes ja existentes, para nao reler a lista a cada
+    insercao (puro)."""
+    return {coding_key(c) for c in codings}
+
+
 def add_coding(codings: list[dict[str, Any]], interview_id: str, t_from: int, t_to: int,
                code_id: str, quote: str = "", origem: str = "manual",
-               author: str = AUTHOR_DEFAULT, layer: str = LAYER_DEFAULT) -> dict[str, Any] | None:
-    """Aplica um codigo a uma faixa de turnos; None se ja existia (puro)."""
+               author: str = AUTHOR_DEFAULT, layer: str = LAYER_DEFAULT,
+               known: set[tuple[str, int, int, str]] | None = None) -> dict[str, Any] | None:
+    """Aplica um codigo a uma faixa de turnos; None se ja existia (puro).
+
+    `known`: indice das chaves ja usadas, mantido por quem chama em lote. Sem
+    ele cada insercao varre a lista inteira — o que num "aplicar todos os
+    temas" (dezenas de codigos x centenas de trechos) vira tempo quadratico.
+    Quando vem, a funcao le E atualiza o indice."""
     candidate = {
         "id": f"cod_{uuid.uuid4().hex[:8]}",
         "interview_id": str(interview_id),
@@ -180,9 +192,12 @@ def add_coding(codings: list[dict[str, Any]], interview_id: str, t_from: int, t_
         "created_at": datetime.now().isoformat(timespec="seconds"),
     }
     key = coding_key(candidate)
-    if any(coding_key(c) == key for c in codings):
+    indice = known if known is not None else coding_keys(codings)
+    if key in indice:
         return None
     codings.append(candidate)
+    if known is not None:
+        known.add(key)
     return candidate
 
 
@@ -243,21 +258,63 @@ def contiguous_ranges(turns: list[dict[str, Any]], t_from: int, t_to: int,
 
 
 def apply_theme_as_code(codes: list[dict[str, Any]], codings: list[dict[str, Any]],
-                        theme: dict[str, Any], skip: set[tuple[str, int, int]] = frozenset(),
-                        code_name: str | None = None) -> tuple[dict[str, Any], int]:
-    """Cria o codigo do tema (se preciso) e aplica a todas as passagens
-    (menos as em `skip`). Devolve (codigo, quantas codings novas). Puro."""
-    code = add_code(codes, code_name or theme.get("name") or theme.get("id"),
-                    description=str(theme.get("description") or ""))
-    created = 0
+                        theme: dict[str, Any],
+                        ranges_for: Callable[[dict[str, Any]], list[tuple[int, int]]],
+                        quote_for: Callable[[str, int, int], str],
+                        code_name: str | None = None,
+                        known: set[tuple[str, int, int, str]] | None = None) -> dict[str, Any]:
+    """Cria o codigo do tema (se preciso) e o aplica a TODAS as passagens dele.
+
+    `ranges_for` e `quote_for` vem de fora porque so a janela sabe quem entra
+    na analise: o codigo pinta so as falas escolhidas em "Quem entra", e um
+    trecho pergunta-resposta-pergunta-resposta vira duas faixas do mesmo
+    codigo. Uma passagem em que ninguem escolhido fala nao e codificada — e
+    contada em `sem_fala`, nunca ignorada em silencio. Puro."""
+    nome = " ".join(str(code_name or theme.get("name") or theme.get("id") or "").split())
+    novo = find_code(codes, nome) is None
+    code = add_code(codes, nome, description=str(theme.get("description") or ""))
+    if known is None:
+        known = coding_keys(codings)
+    criadas = ja_tinham = sem_fala = 0
     for p in theme.get("passages") or []:
-        key = (str(p["interview_id"]), int(p["t_from"]), int(p["t_to"]))
-        if key in skip:
+        interview_id = str(p.get("interview_id") or "")
+        faixas = ranges_for(p)
+        if not faixas:
+            sem_fala += 1
             continue
-        if add_coding(codings, p["interview_id"], p["t_from"], p["t_to"], code["id"],
-                      quote=str(p.get("text") or ""), origem="tema") is not None:
-            created += 1
-    return code, created
+        for t_from, t_to in faixas:
+            if add_coding(codings, interview_id, t_from, t_to, code["id"],
+                          quote=quote_for(interview_id, t_from, t_to),
+                          origem="tema", known=known) is not None:
+                criadas += 1
+            else:
+                ja_tinham += 1
+    return {"code": code, "novo": novo, "criadas": criadas,
+            "ja_tinham": ja_tinham, "sem_fala": sem_fala}
+
+
+def apply_themes_as_codes(codes: list[dict[str, Any]], codings: list[dict[str, Any]],
+                          themes: list[dict[str, Any]],
+                          ranges_for: Callable[[dict[str, Any]], list[tuple[int, int]]],
+                          quote_for: Callable[[str, int, int], str]) -> dict[str, Any]:
+    """Um codigo por tema, aplicado a todos os trechos daquele tema (puro).
+
+    E o "aplicar todos de uma vez": o passo que faltava entre descobrir os
+    temas e ter um codebook utilizavel. Reaproveita codigo de mesmo nome que ja
+    exista (nao duplica o codebook do contexto da pesquisa) e nunca cria a
+    mesma codificacao duas vezes."""
+    known = coding_keys(codings)
+    resumo: dict[str, Any] = {"temas": 0, "codigos_novos": 0, "criadas": 0,
+                              "ja_tinham": 0, "sem_fala": 0, "nomes": []}
+    for theme in themes:
+        parcial = apply_theme_as_code(codes, codings, theme, ranges_for, quote_for, known=known)
+        resumo["temas"] += 1
+        resumo["codigos_novos"] += 1 if parcial["novo"] else 0
+        resumo["criadas"] += parcial["criadas"]
+        resumo["ja_tinham"] += parcial["ja_tinham"]
+        resumo["sem_fala"] += parcial["sem_fala"]
+        resumo["nomes"].append(parcial["code"]["name"])
+    return resumo
 
 
 # ---------------------------------------------------------------------------
