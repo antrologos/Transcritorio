@@ -350,7 +350,9 @@ def diarize_rows(
             if exclusive is not None:
                 write_annotation_outputs(paths, interview_id, "exclusive", exclusive, model_name, audio_path)
             status = "ok" if exclusive is not None else "ok_no_exclusive"
-            log_job(paths, interview_id, status, model_name, audio_path, "")
+            log_job(paths, interview_id, status, model_name, audio_path, "",
+                    elapsed_s=time.monotonic() - t0,
+                    audio_seconds=tensor_audio_seconds(audio_tensor))
             print(f"[{_ts()}] [diarize] {interview_id} concluido: {status}", flush=True)
         except Exception as exc:  # noqa: BLE001 - preserve batch progress and log the failed file.
             failures += 1
@@ -558,16 +560,34 @@ def annotation_to_segments(annotation) -> list[dict[str, Any]]:
     return segments
 
 
-def log_job(paths: Paths, interview_id: str, status: str, model_name: str, audio_path: Path, message: str) -> None:
-    append_jsonl(
-        paths.manifest_dir / "jobs.jsonl",
-        {
-            "interview_id": interview_id,
-            "stage": "diarize",
-            "status": status,
-            "started_at": now_utc(),
-            "model": model_name,
-            "audio_path": str(audio_path),
-            "message": message,
-        },
-    )
+def tensor_audio_seconds(audio_tensor: Any) -> float | None:
+    """Duracao do audio carregado por `_load_wav_as_tensor`, em segundos.
+    Formato: {"waveform": (canais, amostras), "sample_rate": int}. None quando
+    nao da para saber — a duracao e opcional no registro (puro)."""
+    try:
+        forma = audio_tensor["waveform"].shape
+        taxa = float(audio_tensor["sample_rate"])
+        return float(forma[-1]) / taxa if taxa > 0 else None
+    except Exception:  # noqa: BLE001 - registro nunca derruba a diarizacao
+        return None
+
+
+def log_job(paths: Paths, interview_id: str, status: str, model_name: str, audio_path: Path,
+            message: str, elapsed_s: float | None = None, audio_seconds: float | None = None) -> None:
+    entry = {
+        "interview_id": interview_id,
+        "stage": "diarize",
+        "status": status,
+        "started_at": now_utc(),
+        "model": model_name,
+        "audio_path": str(audio_path),
+        "message": message,
+    }
+    # Quanto levou e sobre quanto audio: sem isso o app nao consegue aprender
+    # a velocidade DESTA maquina e a estimativa fica presa a uma tabela medida
+    # em outra (relato de 2026-09-04: prometeu ~16 min para um lote de 3 h 39).
+    if elapsed_s is not None:
+        entry["elapsed_s"] = round(float(elapsed_s), 2)
+    if audio_seconds is not None:
+        entry["audio_seconds"] = round(float(audio_seconds), 2)
+    append_jsonl(paths.manifest_dir / "jobs.jsonl", entry)

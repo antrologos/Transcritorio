@@ -9490,16 +9490,37 @@ if QT_IMPORT_ERROR is None:
             if engine == "parakeet_onnx" and device == "cuda":
                 from . import parakeet_runner as _pk_e
                 asr_dev = _pk_e.planned_device(device)   # CPU ate o onnx-gpu existir
+            # Historico DESTA maquina: depois das primeiras transcricoes ele
+            # vale mais que qualquer formula (a formula nao enxerga o clock nem
+            # a reducao termica de cada nucleo).
+            asr_hist: list[tuple[float, float]] = []
+            diar_hist: list[tuple[float, float]] = []
+            try:
+                entradas = project_store.read_jobs_log(self.context.paths)
+                duracoes = {}
+                for linha in (self.context.rows or []):
+                    try:
+                        duracoes[str(linha.get("interview_id"))] = float(linha.get("duration_sec") or 0)
+                    except (TypeError, ValueError):
+                        pass
+                asr_hist = project_store.stage_samples(entradas, "transcribe", duracoes)
+                diar_hist = project_store.stage_samples(entradas, "diarize", duracoes)
+            except Exception as exc:  # noqa: BLE001 - sem historico, vale a formula
+                _logger.debug("Sem historico para a estimativa: %s", exc)
             asr_s, diar_s = _caps_e.batch_time_estimate(
-                total, engine, device, _runtime_e.cpu_cores(), asr_device=asr_dev)
+                total, engine, device, _runtime_e.cpu_cores(), asr_device=asr_dev,
+                asr_samples=asr_hist, diar_samples=diar_hist)
+            medido = _caps_e.estimate_is_measured(asr_hist)
             onde = "sem placa de vídeo" if device != "cuda" else "com placa de vídeo"
             dica = ("A separação é a etapa demorada — dá para deixá-la para depois "
                     "(a lista oferece um botão) e já revisar o texto."
                     if diar_s > asr_s else
                     "Dá para deixar a separação para depois (a lista oferece um botão).")
+            base = ("com base no que este computador já levou nas transcrições anteriores"
+                    if medido else "estimativa aproximada — ela se ajusta depois da primeira transcrição")
             return (f"Neste computador ({onde}), para {_caps_e.describe_seconds(total)} "
                     f"de áudio: transcrição ≈ {_caps_e.describe_seconds(asr_s)} · separação de "
-                    f"falantes ≈ {_caps_e.describe_seconds(diar_s)}.\n{dica}")
+                    f"falantes ≈ {_caps_e.describe_seconds(diar_s)} ({base}).\n{dica}")
 
         def _apply_interview_filter(self) -> None:
             """Hide/show table rows based on status combo and text search."""

@@ -341,6 +341,17 @@ _ASR_SECONDS_PER_AUDIO_SECOND = {
     ("whisper", "cpu"): 1.1,
     ("whisper", "cuda"): 1 / 8.0,
 }
+# Como o TAGARELA escala com nucleos, MEDIDO nesta maquina de referencia com
+# 1 min de audio (segundos de maquina por segundo de audio): 1 thread 0,207;
+# 2 threads 0,107; 4 threads 0,093; 8 threads 0,080; 24 (referencia) 0,061.
+# Nao e linear — ele satura porque o gargalo e a banda de memoria (varre os
+# 2,4 GB de pesos a cada passada), nao a conta. Uma correcao 24/nucleos, como
+# a do Whisper, exageraria por 2-3x. A curva medida cai como uma potencia de
+# expoente ~0,25, e e isso que a formula usa.
+_PARAKEET_CORE_EXPONENT = 0.25
+# Numero minimo de transcricoes ja feitas para preferir a MEDICAO desta
+# maquina a qualquer formula (ver measured_asr_ratio).
+MIN_SAMPLES_FOR_MEASURED = 2
 
 
 def expected_diarization_seconds(audio_seconds: float, device: str, cores: int) -> float:
@@ -352,18 +363,47 @@ def expected_diarization_seconds(audio_seconds: float, device: str, cores: int) 
     return 45.0 + 0.06 * audio * escala
 
 
+def measured_ratio(samples: list[tuple[float, float]],
+                   minimo: int = MIN_SAMPLES_FOR_MEASURED) -> float | None:
+    """Segundos de maquina por segundo de audio, MEDIDOS nesta maquina (puro).
+
+    `samples` = [(segundos de audio, segundos que a etapa levou)] do historico
+    do proprio projeto. Devolve a MEDIANA (um arquivo atipico nao contamina) ou
+    None quando ha amostra de menos.
+
+    Existe porque nenhuma formula da conta: a correcao por numero de nucleos
+    nao enxerga a velocidade de cada nucleo. Um caso real (2026-09-04): um
+    i7-10610U de 15 W com 8 threads logicos entregou 0,46 s por segundo de
+    audio, contra 0,08 previstos pela contagem de nucleos — 5,7x de diferenca,
+    toda ela em clock, IPC e reducao termica. Depois da primeira transcricao a
+    maquina ja disse a verdade sobre si mesma; a formula so vale antes disso."""
+    razoes = sorted(
+        elapsed / audio for audio, elapsed in (samples or [])
+        if audio and audio > 0 and elapsed and elapsed > 0
+    )
+    if len(razoes) < max(1, int(minimo)):
+        return None
+    meio = len(razoes) // 2
+    return razoes[meio] if len(razoes) % 2 else (razoes[meio - 1] + razoes[meio]) / 2.0
+
+
 def batch_time_estimate(
     total_audio_s: float,
     engine: str | None,
     device: str,
     cores: int,
     asr_device: str | None = None,
+    asr_samples: list[tuple[float, float]] | None = None,
+    diar_samples: list[tuple[float, float]] | None = None,
 ) -> tuple[float, float]:
     """(segundos de transcricao, segundos de separacao de falantes) do lote.
 
     `asr_device` e o device REAL da transcricao quando difere do da maquina:
     o TAGARELA numa maquina CUDA roda em CPU ate o pacote onnx-gpu ser
     instalado (parakeet_runner.planned_device); a separacao usa `device`.
+
+    `asr_samples`/`diar_samples` sao o historico [(audio_s, levou_s)] DESTA
+    maquina: quando ha o bastante, mandam na estimativa (ver measured_ratio).
     """
     audio = max(0.0, float(total_audio_s))
     if audio == 0:
@@ -371,10 +411,26 @@ def batch_time_estimate(
     dev = "cuda" if device == "cuda" else "cpu"
     dev_asr = "cuda" if (asr_device or device) == "cuda" else "cpu"
     eng = "parakeet_onnx" if engine == "parakeet_onnx" else "whisper"
-    asr = audio * _ASR_SECONDS_PER_AUDIO_SECOND[(eng, dev_asr)]
-    if dev_asr == "cpu" and eng == "whisper":
-        asr *= _REF_LOGICAL_CORES / max(1, int(cores or 1))
-    return asr, expected_diarization_seconds(audio, dev, cores)
+    medido = measured_ratio(asr_samples or [])
+    if medido is not None:
+        asr = audio * medido
+    else:
+        asr = audio * _ASR_SECONDS_PER_AUDIO_SECOND[(eng, dev_asr)]
+        if dev_asr == "cpu":
+            escala = _REF_LOGICAL_CORES / max(1, int(cores or 1))
+            # Whisper escala quase linear com nucleos; o TAGARELA satura.
+            asr *= escala if eng == "whisper" else escala ** _PARAKEET_CORE_EXPONENT
+    diar_medido = measured_ratio(diar_samples or [])
+    diar = (45.0 + audio * diar_medido) if diar_medido is not None \
+        else expected_diarization_seconds(audio, dev, cores)
+    return asr, diar
+
+
+def estimate_is_measured(samples: list[tuple[float, float]] | None) -> bool:
+    """A estimativa veio da MEDICAO desta maquina? (puro) — a janela diz isso
+    ao usuario, porque "≈ 4 h" com base no historico e outra coisa que "≈ 4 h"
+    com base numa tabela de outra maquina."""
+    return measured_ratio(samples or []) is not None
 
 
 def describe_seconds(seconds: float) -> str:

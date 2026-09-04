@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 import csv
+import json
 
 from .config import Paths
 from .manifest import selected_rows
@@ -297,6 +298,60 @@ def project_path(paths: Paths) -> Path:
 
 def metadata_path(paths: Paths) -> Path:
     return paths.project_root / METADATA_FILENAME
+
+
+def stage_samples(entries: list[dict[str, Any]], stage: str,
+                  duration_by_id: dict[str, float]) -> list[tuple[float, float]]:
+    """[(segundos de audio, segundos que a etapa levou)] do historico (puro).
+
+    E o que faz a estimativa de tempo aprender a velocidade DESTA maquina em
+    vez de repetir a tabela medida na do desenvolvedor. So entram etapas que
+    terminaram bem e que registraram `elapsed_s`; a duracao do audio vem da
+    propria entrada (`audio_seconds`, gravado desde 2026-09-04) ou do manifest.
+    """
+    amostras: list[tuple[float, float]] = []
+    for entrada in entries or []:
+        if entrada.get("stage") != stage or not str(entrada.get("status", "")).startswith("ok"):
+            continue
+        try:
+            levou = float(entrada.get("elapsed_s") or 0)
+        except (TypeError, ValueError):
+            continue
+        if levou <= 0:
+            continue
+        audio = entrada.get("audio_seconds")
+        if audio is None:
+            audio = duration_by_id.get(str(entrada.get("interview_id") or ""))
+        try:
+            audio = float(audio or 0)
+        except (TypeError, ValueError):
+            continue
+        if audio > 0:
+            amostras.append((audio, levou))
+    return amostras
+
+
+def read_jobs_log(paths: Paths, limite: int = 400) -> list[dict[str, Any]]:
+    """Ultimas entradas do jobs.jsonl (linha ilegivel e pulada, nunca fatal)."""
+    caminho = paths.manifest_dir / "jobs.jsonl"
+    if not caminho.exists():
+        return []
+    entradas: list[dict[str, Any]] = []
+    try:
+        linhas = caminho.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    for linha in linhas[-max(1, int(limite)):]:
+        linha = linha.strip()
+        if not linha:
+            continue
+        try:
+            item = json.loads(linha)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(item, dict):
+            entradas.append(item)
+    return entradas
 
 
 def jobs_path(paths: Paths) -> Path:
