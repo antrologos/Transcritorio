@@ -124,17 +124,21 @@ def run_summarize(
                     "message": str(detail.get("message") or ""),
                 })
 
+        # Notas de tema por janela (2026-09-03) ficam ao lado do indice da
+        # busca: materia-prima da funcao de temas (nao muda o resumo).
+        from .search import index_dir as _index_dir
         command = [
             str(llm_env.llm_python()), "-B", str(worker),
             "--task", "sumario",
             "--review", str(source),
             "--out", str(resumo_path(paths, interview_id)),
+            "--notes-out", str(_index_dir(paths) / f"{interview_id}.temas.json"),
             "--model-repo", asset.repo_id,
             "--hf-cache", str(runtime.model_cache_dir()),
         ]
-        ctx = context_path(paths)
-        if ctx.exists():
-            command += ["--context-file", str(ctx)]
+        from .ask import context_worth_sending
+        if context_worth_sending(paths):
+            command += ["--context-file", str(context_path(paths))]
         if glossario_file is not None:
             command += ["--glossario-file", str(glossario_file)]
         completed = run_command_stream(command, on_output=on_output, should_cancel=should_cancel)

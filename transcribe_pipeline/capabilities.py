@@ -74,6 +74,15 @@ CAPABILITIES: tuple[Capability, ...] = (
         "encontra trechos pelo significado, sem as palavras exatas",
         models=("search_encoder",),
     ),
+    # v3 (2026-09-03): tier de qualidade — encoder maior + reordenador que
+    # le pergunta e trecho juntos. Roda em CPU (mais devagar); com placa de
+    # video fica imediato. Instalado => aplicado (search.active_encoder).
+    Capability(
+        "busca_qualidade",
+        "Busca por sentido — qualidade",
+        "trechos mais certeiros, reordenados pela leitura de pergunta e trecho juntos",
+        models=("search_encoder_hq", "search_reranker"),
+    ),
     Capability(
         "glossario_nomes",
         "Glossário de nomes",
@@ -100,7 +109,7 @@ PROFILES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
      ("transcrever", "separar_falantes", "tempos_por_palavra")),
     ("completo", "Completo",
      ("transcrever", "separar_falantes", "tempos_por_palavra",
-      "busca_semantica", "glossario_nomes", "resumo_perguntar")),
+      "busca_semantica", "busca_qualidade", "glossario_nomes", "resumo_perguntar")),
 )
 
 

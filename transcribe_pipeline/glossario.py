@@ -617,7 +617,19 @@ def run_glossario(
         "--hf-cache", str(runtime.model_cache_dir()),
     ]
 
+    # Resultado pelo stdout (@RESULT) com o arquivo como reserva: num
+    # llm-venv criado a partir do Python da Microsoft Store, o arquivo em
+    # %LOCALAPPDATA% cai na pasta virtualizada do pacote e o app nao o ve
+    # (2026-09-03 — a leitura "falhava" com o worker terminando bem).
+    from .utils import RESULT_JSON_PREFIX, parse_prefixed_json_line
+    captured: dict = {}
+
     def on_output(line: str) -> None:
+        result = parse_prefixed_json_line(line, RESULT_JSON_PREFIX)
+        if result is not None:
+            captured.clear()
+            captured.update(result)
+            return
         detail = parse_progress_json_line(line)
         if detail is not None and progress_callback is not None:
             inner = int(detail.get("progress") or 0)
@@ -629,10 +641,10 @@ def run_glossario(
 
     try:
         completed = run_command_stream(command, on_output=on_output, should_cancel=should_cancel)
-        if completed.returncode != 0 or not out_path.exists():
+        if completed.returncode != 0 or (not captured and not out_path.exists()):
             print(f"A leitura de nomes falhou (codigo {completed.returncode}).")
             return 1
-        payload = json.loads(out_path.read_text(encoding="utf-8"))
+        payload = dict(captured) if captured else json.loads(out_path.read_text(encoding="utf-8"))
     finally:
         for path in (alvos_path, out_path):
             try:

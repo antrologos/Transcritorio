@@ -1,5 +1,97 @@
 # Changelog
 
+## 0.3.0b1 — 2026-09-03 (versão de teste, não publicada)
+
+Beta para uso lado a lado com a estável: `scripts\Instalar-Beta.bat` instala num
+ambiente próprio (`%LOCALAPPDATA%\Transcritorio\beta-venv`), compartilhando os modelos já
+baixados e as preferências. As duas podem ficar abertas ao mesmo tempo — a janela da beta
+diz "versão de teste" no título. Para remover, basta apagar a pasta. Não está no site nem
+no PyPI.
+
+Busca por sentido e "Perguntar às entrevistas com AI" refeitos, depois de um teste com
+8 entrevistas reais e um gabarito de 12 perguntas julgado à mão.
+
+- **Por que a busca trazia trechos sem relação.** O modelo antigo era de paráfrase
+  ("estas frases dizem o mesmo?"), não de busca ("este trecho responde a esta
+  pergunta?"); cada turno era pontuado junto com pedaços dos vizinhos, mas a lista
+  mostrava o turno sozinho ("Autorizo." como "muito próximo"); e os rótulos eram
+  absolutos. Agora a unidade é a **passagem** (turnos contíguos de ~100 palavras, com
+  quem fala), o encoder é de recuperação (`multilingual-e5-small`, mesmo tamanho do
+  antigo; `multilingual-e5-large-instruct` como opção de qualidade, aplicado quando
+  instalado), os acertos literais entram na disputa, e um **reordenador**
+  (`bge-reranker-v2-m3`, opcional) lê pergunta e trecho juntos e decide o que
+  "Responde" e o que é só "Relacionado" — o resto some. Precisão dos 5 primeiros no
+  gabarito: 0,48 → 0,67. Índices em `.npy` (menores), refeitos automaticamente quando a
+  transcrição muda ou o modelo troca.
+- **Um só botão.** "Encontrar trechos" e "Perguntar" eram a mesma busca; agora
+  "Perguntar" mostra primeiro os trechos que tratam do tema (em segundos, em qualquer
+  máquina) e, quando o modelo de análise está disponível, escreve a resposta citando-os
+  com `[n]` clicáveis. Campo "até N trechos" (padrão 20) — vem menos quando menos
+  trechos tratam do tema, e o rodapé diz quantos ficaram de fora e por quê. "Cancelar a
+  resposta" mantém os trechos; cancelar a reordenação mostra a ordem por semelhança.
+- **Perguntas sobre o conjunto** ("do que falam as entrevistas?") não são busca: a AI
+  responde pelos resumos por entrevista, citando as entrevistas `[ID]`, com o escape
+  "responder pelos trechos mesmo assim"; sem resumos, oferece "Resumir as N entrevistas
+  agora". Quando nada responde, a AI não é chamada e a janela explica.
+- Linha "Nesta máquina: …" na abertura da janela; a resposta escrita continua exigindo
+  placa NVIDIA, os trechos não. `contexto_pesquisa.md` (roteiro, codebook, nomes) nasce
+  com o projeto. Recusa da AI reconhecida com acentos; geração com a receita do
+  fabricante do Qwen. Notas de tema do Resumir passam a ser guardadas (base da função
+  de temas). CLI `search`/`ask` com o mesmo pipeline da janela.
+- **Entrevista que sumia da busca.** Um arquivo de índice corrompido (sincronização
+  interrompida, disco cheio) continuava valendo como atual: não era refeito, e aquela
+  entrevista simplesmente deixava de aparecer nos resultados, sem aviso. Agora o índice só
+  passa por atual se abrir e tiver o tamanho certo.
+- **O modelo lia as instruções do formulário.** O `contexto_pesquisa.md` passou a nascer
+  com o projeto, e o texto de exemplo ("Preencha o que fizer sentido…") ia para a AI como
+  se fosse o contexto do estudo, em todas as perguntas e resumos. Agora só vai quando você
+  escreveu alguma coisa nele.
+- **"A AI local falhou" com o trabalho feito.** Quando o ambiente de análise era criado
+  a partir do Python da Microsoft Store, o Windows redireciona o que ele grava em
+  `%LOCALAPPDATA%` para uma pasta privada do pacote: a resposta era escrita, mas o
+  aplicativo procurava o arquivo no caminho real e não achava nada. Os resultados das
+  análises (perguntar, visão geral, glossário, temas) agora voltam pela saída do próprio
+  processo, com o arquivo como reserva.
+
+**Temas das entrevistas, codificação e exportação para o QualiLab** (menu Analisar →
+"✨ Temas das entrevistas…"): a segunda metade do que a busca por sentido tornou possível.
+
+- **Os temas mais tratados, sem pergunta nenhuma.** A janela agrupa *todos* os trechos
+  das entrevistas escolhidas por semelhança de sentido e lista os temas com **todos** os
+  trechos de cada um — sem teto. O agrupamento é aritmética (numpy): roda em qualquer
+  computador, em segundos, e não usa a AI que escreve. Um trecho pode entrar em **mais de
+  um tema** (assuntos não são caixas separadas), e o que não se parece com nada fica em
+  "sem tema definido" em vez de ser empurrado para o tema mais próximo. "Quantos temas"
+  é ajustável (automático, ou de 1 a 40).
+- **Quem entra na análise.** Em entrevistas não se costuma codificar quem pergunta; em
+  grupos focais, quem modera — e os nomes desses papéis mudam de pesquisa para pesquisa.
+  Então o app **pergunta**, uma vez por projeto, na primeira descoberta: a janela lista os
+  falantes com o peso de cada um (turnos, palavras, entrevistas) e marca como "sugerido de
+  fora" quem parece conduzir. Você decide, e pode inclusive manter todo mundo. A fala de
+  quem fica de fora **continua na transcrição e no arquivo exportado**, logo acima da
+  resposta, como contexto: ela só deixa de influenciar o agrupamento e de receber código.
+  Um trecho em que quem você escolheu quase não fala — a leitura do termo de consentimento,
+  um "tá bom" respondendo a uma pergunta longa — não entra nos temas: aparece em «sem tema
+  definido», onde continua visível e codificável. Sem esse piso, as respostas de cortesia
+  ao roteiro se pareciam entre si e formavam um tema grande de nada (medido na cópia de
+  teste: 54 trechos em todas as 10 entrevistas).
+- **Nomes: imediatos, e melhores depois.** Cada tema nasce com seus termos
+  característicos (o que aparece nele e não nos outros). Com o modelo de análise
+  instalado, a AI lê os trechos centrais e escreve nome e descrição de cada tema **em
+  segundo plano** — a janela nunca espera por ela, e um nome que você tenha dado nunca é
+  sobrescrito. Sem placa NVIDIA, ficam os termos, e a janela diz por quê.
+- **Codificar.** Um ou mais códigos por trecho (códigos não são exclusivos), aplicados de
+  uma vez aos trechos marcados de um tema ou um a um. O codebook nasce com os códigos que
+  você tiver escrito no `contexto_pesquisa.md`. Fica em `Transcricoes/08_codificacao/`, em
+  arquivos legíveis, separado da transcrição — nada é alterado no texto original.
+- **Exportar para o QualiLab** (`.qualilab`) ou para planilha (CSV, com `;` — o separador
+  que o Excel em português espera). Cada entrevista vira um documento com o texto em
+  blocos "[hh:mm:ss] Falante: texto", e cada código aponta para a posição exata do trecho
+  nesse texto — a citação e o texto apontado são o mesmo, por construção. Se você editar a
+  transcrição **depois** de codificar (dividir um bloco, por exemplo), os trechos que
+  deixaram de bater não são exportados com o texto errado: ficam de fora e a janela diz
+  quantos foram.
+
 ## v0.2.8 — 2026-09-02
 
 Rodada de revisões de um lote real de 5 entrevistas (máquina com GPU):

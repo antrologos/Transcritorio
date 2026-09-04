@@ -97,6 +97,7 @@ try:
         QTableWidget,
         QTableWidgetItem,
         QTabWidget,
+        QTextBrowser,
         QTextEdit,
         QToolButton,
         QTreeWidget,
@@ -174,16 +175,82 @@ def _promote_staging_to_files(
         raise last_error or OSError("nao foi possivel promover staging para files")
 
 
-def similarity_label(similarity: float) -> str:
+def fmt_gb(value: float) -> str:
+    """Tamanho em GB no formato do guia: virgula decimal, sem casa quando
+    inteiro ("8,7 GB", "3 GB")."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "? GB"
+    if abs(number - round(number)) < 0.05:
+        return f"{int(round(number))} GB"
+    return f"{number:.1f}".replace(".", ",") + " GB"
+
+
+def render_answer_html(resposta: str, n_trechos: int, ids: tuple[str, ...] = ()) -> str:
+    """Resposta da AI em HTML com as citacoes clicaveis (pura).
+
+    [n] com 1 <= n <= n_trechos vira <a href="trecho:n">; [ID] de uma
+    entrevista conhecida vira <a href="entrevista:ID">; o resto e escapado.
+    """
+    import html as _html
+    import re as _re
+
+    known = {str(i) for i in ids}
+
+    def _sub(match: "_re.Match[str]") -> str:
+        inner = match.group(1)
+        if inner.isdigit() and 1 <= int(inner) <= int(n_trechos):
+            return f'<a href="trecho:{int(inner)}">[{inner}]</a>'
+        if inner in known:
+            return f'<a href="entrevista:{_html.escape(inner)}">[{_html.escape(inner)}]</a>'
+        return f"[{_html.escape(inner)}]"
+
+    escaped = _html.escape(str(resposta or ""))
+    linked = _re.sub(r"\[([^\[\]\n]{1,80})\]", _sub, escaped)
+    return "<p>" + linked.replace("\n\n", "</p><p>").replace("\n", "<br>") + "</p>"
+
+
+def results_footer_text(result: dict[str, Any]) -> str:
+    """Rodape honesto da busca (pura): quantos trechos tratam do tema, de
+    ate quantos, e se o corte veio do reordenador ou so da semelhanca."""
+    hits = result.get("hits") or []
+    n = len(hits)
+    max_results = int(result.get("max_results") or 0)
+    considered = int(result.get("considered") or 0)
+    if n == 0:
+        base = "Nenhum trecho trata disso de perto."
+    else:
+        plural = n != 1
+        base = f"{n} trecho{'s' if plural else ''} trata{'m' if plural else ''} disso"
+        if max_results:
+            base += f" (de até {max_results})"
+        base += "."
+        if considered > n:
+            base += " O restante ficou fora por não tratar do tema."
+    if not result.get("reranked"):
+        base += (" Ordenados só pela semelhança — a busca de qualidade (Gerenciar modelos) "
+                 "faz um corte mais certeiro.")
+    return base
+
+
+def relevance_label(hit: dict[str, Any]) -> str:
     """Grau de proximidade em linguagem simples (nunca numeros na UI).
 
-    Limiares dos dados reais de 2026-08-26: hits certeiros vieram a
-    0,56-0,64; a cauda relacionada a 0,35-0,45.
+    v3 (2026-09-03): RELATIVO ao escopo — `z` = desvios acima da media dos
+    cossenos de todas as passagens consultadas (search.rank_semantic). Um
+    piso absoluto nao separa nada num encoder de recuperacao (cossenos
+    comprimidos em 0,7-0,9), e os limiares antigos (0,55) rotulavam tudo
+    "muito proximo". O reordenador (etapa seguinte) refina isto.
     """
-    if similarity >= 0.55:
-        return "muito proximo"
-    if similarity >= 0.45:
-        return "proximo"
+    try:
+        z = float(hit.get("z", 0) or 0)
+    except (TypeError, ValueError):
+        z = 0.0
+    if z >= 3.0:
+        return "muito próximo"
+    if z >= 2.0:
+        return "próximo"
     return "relacionado"
 
 
@@ -236,6 +303,16 @@ def boundary_flagged_rows(turns: list[dict[str, Any]]) -> list[int]:
             rows.append(index)
     return rows
 APP_NAME = "Transcrit\u00f3rio"
+
+
+def channel_suffix(channel: str | None = None) -> str:
+    """Sufixo do titulo quando o app roda num canal de teste (puro).
+    "" no canal normal; " \u2014 vers\u00e3o de teste (beta 0.3.0b1)" na beta."""
+    from . import __version__
+    nome = (channel if channel is not None else os.environ.get("TRANSCRITORIO_CHANNEL", "")).strip()
+    if not nome:
+        return ""
+    return f" \u2014 vers\u00e3o de teste ({nome} {__version__})"
 APP_CREDITS = "Rog\u00e9rio Jer\u00f4nimo Barbosa - https://antrologos.github.io/"
 APP_ICON_FILE = "transcritorio_icon.svg"
 WAVEFORM_CACHE_VERSION = 1
@@ -3368,17 +3445,35 @@ if QT_IMPORT_ERROR is None:
 
 
     class CallableWorker(QThread):
-        """Roda um callable em thread; progresso e resultado viram sinais."""
+        """Roda um callable em thread; progresso e resultado viram sinais.
+
+        Cancelavel (2026-09-03): fn pode aceitar um segundo parametro
+        `should_cancel` (callable -> bool); request_cancel() aciona o
+        Event — run_ask/run_visao_geral ja honram e matam o subprocesso."""
         progress = Signal(dict)
         done = Signal(object, str)
 
         def __init__(self, fn, parent=None) -> None:
             super().__init__(parent)
-            self._fn = fn  # fn(progress_emit) -> result
+            import threading as _threading
+            self._fn = fn  # fn(progress_emit[, should_cancel]) -> result
+            self.cancelled = _threading.Event()
+
+        def request_cancel(self) -> None:
+            self.cancelled.set()
 
         def run(self) -> None:  # noqa: D102
+            import inspect as _inspect
             try:
-                self.done.emit(self._fn(self.progress.emit), "")
+                try:
+                    aceita_cancel = len(_inspect.signature(self._fn).parameters) >= 2
+                except (TypeError, ValueError):
+                    aceita_cancel = False
+                if aceita_cancel:
+                    result = self._fn(self.progress.emit, self.cancelled.is_set)
+                else:
+                    result = self._fn(self.progress.emit)
+                self.done.emit(result, "")
             except Exception as exc:  # noqa: BLE001 - GUI boundary
                 self.done.emit(None, str(exc)[:500])
 
@@ -3560,15 +3655,33 @@ if QT_IMPORT_ERROR is None:
                 self._window.open_search_hit(str(interview_id), float(start))
 
         def _start_worker(self, fn, on_done, on_progress=None) -> None:
-            self._worker = CallableWorker(fn, self)
+            worker = CallableWorker(fn, self)
+            self._worker = worker
             if on_progress is not None:
-                self._worker.progress.connect(on_progress)
-            self._worker.done.connect(on_done)
-            self._worker.start()
+                worker.progress.connect(on_progress)
+            worker.done.connect(on_done)
+            # Sem isto, cada etapa deixava um QThread terminado como filho do
+            # dialogo (que fica cacheado pela sessao inteira) e, com ele, a
+            # closure — na janela de temas, uma copia inteira das passagens.
+            # `done` e emitido antes de `finished`, entao os tratadores ainda
+            # veem self._worker.
+            worker.finished.connect(lambda: self._retire_worker(worker))
+            worker.start()
+
+        def _retire_worker(self, worker) -> None:
+            if self._worker is worker:
+                self._worker = None
+            worker.deleteLater()
 
         def closeEvent(self, event) -> None:  # noqa: N802 - assinatura Qt
             worker = self._worker
             if worker is not None and worker.isRunning():
+                # Fechar cancela a etapa em curso (o Qwen nao fica rodando
+                # na placa depois que a janela sumiu).
+                try:
+                    worker.request_cancel()
+                except AttributeError:
+                    pass
                 try:
                     worker.done.disconnect()
                     worker.progress.disconnect()
@@ -3635,120 +3748,162 @@ if QT_IMPORT_ERROR is None:
 
 
     class ExploreDialog(_SearchDialogBase):
-        """Explorar as entrevistas (identidade B): busca por SENTIDO, com
-        preparo/download do modelo vivendo aqui — e o futuro lar das
-        perguntas com respostas citadas (fase 2.7)."""
+        """Perguntar às entrevistas (identidade B), v3 (2026-09-03): UM gesto em
+        dois estagios. Estagio 1: os trechos que tratam do tema (busca por
+        sentido v3 — passagens, encoder de recuperacao, hibrido com o literal,
+        reordenador quando instalado, corte de relevancia), em segundos e em
+        qualquer maquina. Estagio 2, so com o modelo de analise: a resposta
+        escrita citando [n], cancelavel — os trechos ficam. Perguntas sobre o
+        CONJUNTO (ask.question_kind) vao pelos resumos (visao geral), com o
+        escape "responder pelos trechos mesmo assim". O botao "Encontrar
+        trechos" morreu: era a mesma busca sem a redacao (decisao do usuario)."""
 
         _scope_subject = "A AI"
 
         def __init__(self, window) -> None:
             super().__init__(window, "✨ Perguntar às entrevistas com AI")
-            self.setMinimumSize(720, 500)
+            self.setMinimumSize(760, 560)
+            self._last_result: dict[str, Any] | None = None
+            self._current_query = ""
+            self._current_ids: list[str] = []
+            self._row_by_n: dict[int, int] = {}
             layout = QVBoxLayout(self)
             intro = QLabel(
-                "Faça uma pergunta e receba a resposta citando os trechos [n] — ou "
-                "descreva um tema para encontrá-los pelo significado.\n"
-                "AI 100% local — nada sai do seu computador.")
+                "Escreva uma pergunta ou um tema. Primeiro aparecem os trechos que "
+                "tratam disso; depois a AI escreve uma resposta citando-os [n]. "
+                "Tudo local — nada sai do seu computador.")
             intro.setWordWrap(True)
             intro.setStyleSheet(_style_muted())
             layout.addWidget(intro)
             row = QHBoxLayout()
             self.query_input = QLineEdit()
-            self.query_input.setPlaceholderText("uma pergunta, um tema, uma situação…")
+            self.query_input.setPlaceholderText("uma pergunta ou um tema — ex.: dificuldade para entrar em condomínios")
             self.query_input.returnPressed.connect(self.run_question)
             row.addWidget(self.query_input, 1)
             self.ask_button = QPushButton("✨ Perguntar")
-            self.ask_button.setToolTip("A AI responde com base nos trechos, citando-os (pode levar ~1 min).")
-            self._ask_tooltip_base = self.ask_button.toolTip()
+            self.ask_button.setToolTip(
+                "Encontra os trechos em segundos e, quando o modelo de análise está "
+                "disponível, escreve a resposta citando-os.")
             self.ask_button.clicked.connect(self.run_question)
             row.addWidget(self.ask_button)
-            explore_button = QPushButton("Encontrar trechos")
-            explore_button.setToolTip("Só encontra os trechos pelo significado, sem compor resposta (rápido).")
-            explore_button.clicked.connect(self.run_explore)
-            row.addWidget(explore_button)
+            row.addWidget(QLabel("até"))
+            from . import app_settings as _settings_n
+            self.max_results_spin = QSpinBox()
+            lo, hi = _settings_n.SEARCH_MAX_RESULTS_RANGE
+            self.max_results_spin.setRange(lo, hi)
+            self.max_results_spin.setValue(_settings_n.search_max_results())
+            self.max_results_spin.setToolTip(
+                "Quantos trechos no máximo. A busca só devolve os que tratam do tema — "
+                "pode vir menos.")
+            self.max_results_spin.valueChanged.connect(self._save_max_results)
+            row.addWidget(self.max_results_spin)
+            row.addWidget(QLabel("trechos"))
             layout.addLayout(row)
             self._build_scope_widgets(layout)
-            self.answer_view = QTextEdit()
-            self.answer_view.setReadOnly(True)
+            # "Nesta máquina: …" — o que roda aqui, dito na abertura.
+            self.state_label = QLabel("")
+            self.state_label.setWordWrap(True)
+            self.state_label.setStyleSheet(_style_muted())
+            layout.addWidget(self.state_label)
+            # Faixa de rota: pergunta sobre o conjunto / nada responde.
+            self.route_banner = QFrame()
+            self.route_banner.setVisible(False)
+            self.route_banner.setStyleSheet(f"QFrame {{ {ui_tokens.banner_style(ui_tokens.INFO)} }}")
+            route_layout = QHBoxLayout(self.route_banner)
+            route_layout.setContentsMargins(10, 6, 10, 6)
+            self.route_label = QLabel("")
+            self.route_label.setWordWrap(True)
+            route_layout.addWidget(self.route_label, 1)
+            self.route_button = QPushButton("")
+            self.route_button.setVisible(False)
+            route_layout.addWidget(self.route_button)
+            layout.addWidget(self.route_banner)
+            self.answer_view = QTextBrowser()
+            self.answer_view.setOpenLinks(False)
+            self.answer_view.setOpenExternalLinks(False)
+            self.answer_view.anchorClicked.connect(self._on_answer_anchor)
             self.answer_view.setVisible(False)
-            self.answer_view.setMaximumHeight(180)
+            self.answer_view.setMaximumHeight(220)
             layout.addWidget(self.answer_view)
             self.results = self._make_results_list()
+            self.results.setWordWrap(True)
             layout.addWidget(self.results, 1)
             self.prepare_button = QPushButton("Preparar")
             self.prepare_button.setVisible(False)
             self.prepare_button.clicked.connect(self._prepare)
             layout.addWidget(self.prepare_button)
-            self.exact_hint_button = QPushButton("")
-            self.exact_hint_button.setFlat(True)
-            self.exact_hint_button.setVisible(False)
-            self.exact_hint_button.clicked.connect(self._open_word_search)
-            layout.addWidget(self.exact_hint_button)
             bottom = QHBoxLayout()
             self.status_label = QLabel("")
             self.status_label.setWordWrap(True)
             bottom.addWidget(self.status_label, 1)
+            self.cancel_answer_button = QPushButton("Cancelar a resposta (os trechos ficam)")
+            self.cancel_answer_button.setVisible(False)
+            self.cancel_answer_button.clicked.connect(self._cancel_answer)
+            bottom.addWidget(self.cancel_answer_button)
             close_button = QPushButton("Fechar")
             close_button.clicked.connect(self.close)
             bottom.addWidget(close_button)
             layout.addLayout(bottom)
             self._announce_readiness()
 
-        def _announce_readiness(self) -> None:
-            """Estado visivel JA NA ABERTURA (feedback 2026-08-30, 2a
-            rodada): sem isto a janela parecia identica com e sem os
-            modelos instalados — o usuario so descobria o que falta
-            clicando. Incompativel desabilita o Perguntar com motivo;
-            instalavel anuncia o download que o clique vai oferecer.
-
-            IDEMPOTENTE: o dialogo e cacheado pela janela, entao cada
-            reabertura re-anuncia — comecar limpando o estado anterior
-            (botao, tooltip, rodape) para nada grudar."""
+        # ---- estado na abertura -------------------------------------------
+        def _llm_state(self) -> tuple[str, str, float]:
             try:
-                resumo_estado, resumo_motivo, resumo_gb = (
-                    self._window._capability_state("resumo_perguntar"))
-                busca_estado, _busca_motivo, busca_gb = (
-                    self._window._capability_state("busca_semantica"))
+                return self._window._capability_state("resumo_perguntar")
             except Exception:  # noqa: BLE001 - sonda nunca derruba a janela
-                return
-            self.ask_button.setEnabled(True)
-            self.ask_button.setToolTip(getattr(
-                self, "_ask_tooltip_base", self.ask_button.toolTip()))
-            self.status_label.setText("")
+                return "pronta", "", 0.0
+
+        def _announce_readiness(self) -> None:
+            """Estado visivel JA NA ABERTURA (feedback 2026-08-30): uma linha
+            "Nesta máquina: …" com os dois estagios. O botao nunca fica cinza —
+            os trechos funcionam em qualquer maquina; so a resposta escrita
+            depende do modelo de analise (placa NVIDIA). IDEMPOTENTE: o dialogo
+            e cacheado pela janela e cada reabertura re-anuncia."""
+            from . import search as _search
+            resumo_estado, resumo_motivo, resumo_gb = self._llm_state()
+            try:
+                encoder_ok = _search.encoder_cached()
+                reranker_ok = _search.reranker_cached()
+                _busca_estado, _m, busca_gb = self._window._capability_state("busca_semantica")
+            except Exception:  # noqa: BLE001
+                encoder_ok, reranker_ok, busca_gb = True, False, 0.5
             partes: list[str] = []
+            if encoder_ok:
+                partes.append("trechos pelo sentido — pronta"
+                              + (" (com reordenador)" if reranker_ok else ""))
+            else:
+                partes.append(f"trechos pelo sentido — falta baixar (~{fmt_gb(busca_gb)}; o clique oferece)")
             if resumo_estado == "incompativel":
-                self.ask_button.setEnabled(False)
-                self.ask_button.setToolTip(resumo_motivo)
-                partes.append(
-                    f"\"Perguntar\" não está disponível nesta máquina "
-                    f"({resumo_motivo}) — \"Encontrar trechos\" funciona normalmente.")
+                partes.append("resposta escrita — não roda neste computador: precisa de placa "
+                              "NVIDIA (os trechos funcionam normalmente)")
             elif resumo_estado == "instalavel":
-                partes.append(
-                    f"\"Perguntar\" usa o modelo de análise (~{resumo_gb:.1f} GB), "
-                    "ainda não instalado neste computador — o clique oferece o download.")
+                partes.append(f"resposta escrita — falta baixar o modelo de análise "
+                              f"(~{fmt_gb(resumo_gb)}; o clique oferece)")
+            else:
+                partes.append("resposta escrita — pronta (cerca de 1 min)")
             try:
                 aviso_resumo = self._window._capability_warning("resumo_perguntar")
             except Exception:  # noqa: BLE001
                 aviso_resumo = ""
+            texto = "Nesta máquina: " + " · ".join(partes) + "."
             if resumo_estado != "incompativel" and aviso_resumo:
-                partes.append(f"Atenção: \"Perguntar\" {aviso_resumo} — "
-                              "por sua conta e risco.")
-            from . import search as _search
-            try:
-                encoder_ok = _search.encoder_cached()
-            except Exception:  # noqa: BLE001
-                encoder_ok = True
-            if busca_estado == "instalavel" and not encoder_ok:
-                partes.append(
-                    f"\"Encontrar trechos\" baixa um modelo de ~{busca_gb:.1f} GB "
-                    "na primeira utilização.")
-            if partes:
-                self.status_label.setText("\n".join(partes))
+                texto += f" Atenção: a resposta escrita {aviso_resumo} — por sua conta e risco."
+            self.state_label.setText(texto)
+            self.ask_button.setEnabled(True)
+            self.status_label.setText("")
 
+        def _save_max_results(self, value: int) -> None:
+            from . import app_settings as _settings_n
+            try:
+                _settings_n.save({"search_max_results": int(value)})
+            except Exception as exc:  # noqa: BLE001 - preferencia nunca bloqueia
+                _logger.warning("Nao foi possivel guardar 'até N trechos': %s", exc)
+
+        # ---- gating comum ----------------------------------------------------
         def _ready_query(self) -> tuple[list[str], str] | None:
-            """Gating comum de perguntar/explorar: contexto, consulta, escopo
-            com transcricao, encoder baixado e indices frescos. None = ainda
-            nao da — sempre com o motivo visivel, nunca clique-morto."""
+            """Contexto, consulta, escopo com transcricao e encoder baixado.
+            None = ainda nao da — sempre com o motivo visivel, nunca clique
+            morto. Indices desatualizados sao refeitos DENTRO da busca."""
             from . import search as _search
             ctx = self._window.context
             query = self.query_input.text().strip()
@@ -3756,14 +3911,8 @@ if QT_IMPORT_ERROR is None:
                 return None
             self._refresh_scope()
             ids = self._scope_ids()
-            self.results.clear()
-            self.answer_view.setVisible(False)
-            self.prepare_button.setVisible(False)
-            self.exact_hint_button.setVisible(False)
-            self.status_label.setText("")
+            self._clear_results()
             if not ids:
-                # Antes de oferecer download de modelo: sem transcricao no
-                # escopo, nada ha o que preparar.
                 self.status_label.setText(self._scope_text())
                 return None
             if not _search.encoder_cached():
@@ -3772,117 +3921,280 @@ if QT_IMPORT_ERROR is None:
                 self.status_label.setText(
                     "Esta janela usa um modelo pequeno e local que ainda não foi baixado.")
                 return None
-            stale = [iid for iid in ids if not _search.index_is_fresh(ctx.paths, iid)]
-            if stale:
-                self.prepare_button.setText(f"Preparar ({len(stale)} arquivo(s), ~1 min)")
-                self.prepare_button.setVisible(True)
-            if len(stale) >= len(ids):
-                return None
             return ids, query
 
-        def run_explore(self) -> None:
-            from . import search as _search
-            if not self.query_input.text().strip():
-                self.status_label.setText(
-                    "Descreva um tema ou faça uma pergunta antes de buscar.")
-                return
-            if self._worker and self._worker.isRunning():
-                self.status_label.setText("Aguarde a consulta atual terminar.")
-                return
-            ready = self._ready_query()
-            if ready is None:
-                return
-            ids, query = ready
-            paths = self._window.context.paths
-            self.status_label.setText("Explorando…")
+        def _clear_results(self) -> None:
+            self.results.clear()
+            self._row_by_n = {}
+            self.answer_view.clear()
+            self.answer_view.setVisible(False)
+            self.route_banner.setVisible(False)
+            self.route_button.setVisible(False)
+            self.prepare_button.setVisible(False)
+            self.cancel_answer_button.setVisible(False)
+            self.status_label.setText("")
 
-            def fn(_emit):
-                similar = _search.project_semantic_search(paths, ids, query)
-                exact_count = len(_search.project_literal_search(paths, ids, query))
-                return similar, exact_count
-
-            self._start_worker(fn, self._on_explore_done)
-
+        # ---- estagio 1: trechos ---------------------------------------------
         def run_question(self) -> None:
             from . import ask as _ask
             if not self.query_input.text().strip():
-                # Antes: return None silencioso — clique morto.
-                self.status_label.setText(
-                    "Digite uma pergunta antes de clicar em Perguntar.")
+                self.status_label.setText("Escreva uma pergunta ou um tema antes de perguntar.")
                 return
             if self._worker and self._worker.isRunning():
                 self.status_label.setText("Aguarde a consulta atual terminar.")
-                return
-            if not self.ask_button.isEnabled():
-                # Enter contornava o botao desabilitado (maquina
-                # incompativel): repetir o motivo no rodape, sem modal.
-                self.status_label.setText(self.ask_button.toolTip())
-                return
-            # Gate da LLM ANTES do preparo do encoder: na ordem antiga a
-            # instalacao essencial via so o "Preparar (~0,5 GB)" e a
-            # oferta do modelo de analise nunca disparava (bug relatado
-            # no teste real de 2026-08-30).
-            if not self._window._ensure_llm_model():
-                self.status_label.setText(
-                    "A resposta com AI não está disponível — use "
-                    "\"Encontrar trechos\", que funciona nesta máquina.")
                 return
             ready = self._ready_query()
             if ready is None:
                 return
             ids, query = ready
+            self._current_ids, self._current_query = ids, query
             paths = self._window.context.paths
-            self.status_label.setText("Perguntando à AI local (pode levar ~1 minuto)…")
+            max_results = int(self.max_results_spin.value())
+            self.status_label.setText("Procurando os trechos que tratam disso…")
+            # Cancelar durante a reordenacao devolve a lista por semelhanca
+            # (ja calculada) em vez de esperar 10-40 s numa maquina sem placa.
+            self.cancel_answer_button.setText("Cancelar a reordenação (mostrar só por semelhança)")
+            self.cancel_answer_button.setVisible(True)
 
-            def fn(emit):
-                return _ask.run_ask(paths, ids, query, progress_callback=emit)
+            def fn(emit, should_cancel):
+                return _ask.retrieve(paths, ids, query, max_results=max_results,
+                                     progress_callback=emit, should_cancel=should_cancel)
 
             self._start_worker(
-                fn, self._on_question_done,
+                fn, self._on_retrieve_done,
                 on_progress=lambda d: self.status_label.setText(str(d.get("message") or "")))
 
-        def _on_question_done(self, result, error: str) -> None:
-            self.status_label.setText("")
+        def _on_retrieve_done(self, result, error: str) -> None:
+            self.cancel_answer_button.setVisible(False)
+            self.cancel_answer_button.setText("Cancelar a resposta (os trechos ficam)")
             if error:
-                self.status_label.setText(f"Não foi possível responder: {error}")
+                self.status_label.setText(f"Busca indisponível: {error}")
+                return
+            result = result or {}
+            self._last_result = result
+            self._render_sections(result)
+            self.status_label.setText(results_footer_text(result))
+            if result.get("rerank_cancelled"):
+                self.status_label.setText(
+                    results_footer_text(result) + " Reordenação cancelada: ordem só por semelhança.")
+                return
+            if result.get("kind") == "global":
+                self._route_global(result)
+                return
+            self._maybe_answer(result)
+
+        def _render_sections(self, result: dict[str, Any]) -> None:
+            self.results.clear()
+            self._row_by_n = {}
+            n = 0
+            for section in result.get("sections") or []:
+                if section.get("weak"):
+                    titulo = "Nada realmente próximo — os trechos abaixo são só os menos distantes"
+                else:
+                    titulo = f"{section.get('label')} ({len(section.get('hits') or [])})"
+                header = QListWidgetItem(titulo)
+                header.setFlags(Qt.ItemFlag.NoItemFlags)
+                fonte = header.font()
+                fonte.setBold(True)
+                header.setFont(fonte)
+                self.results.addItem(header)
+                for hit in section.get("hits") or []:
+                    n += 1
+                    self._add_passage(n, hit)
+
+        def _add_passage(self, n: int, hit: dict[str, Any]) -> None:
+            titulo = self._friendly_title(str(hit.get("interview_id") or ""))
+            texto = " ".join(str(hit.get("text") or "").split())
+            item = QListWidgetItem(f"[{n}]  {titulo} · {format_clock(float(hit.get('start', 0) or 0))}\n{texto}")
+            item.setData(Qt.ItemDataRole.UserRole, (hit.get("interview_id"), hit.get("start", 0)))
+            self.results.addItem(item)
+            self._row_by_n[n] = self.results.count() - 1
+
+        # ---- estagio 2: resposta ----------------------------------------------
+        def _maybe_answer(self, result: dict[str, Any]) -> None:
+            from . import ask as _ask
+            if not result.get("trechos"):
+                return
+            if not result.get("worth_answer"):
+                # Nao gastar ~1 min de AI com trechos que nao respondem.
+                self.status_label.setText(results_footer_text(result) + " " + _ask.SEM_TRECHOS)
+                return
+            estado, _motivo, _gb = self._llm_state()
+            if estado == "incompativel":
+                self.status_label.setText(
+                    results_footer_text(result) + " Nesta máquina a AI encontra os trechos, "
+                    "mas não escreve a resposta (precisa de placa NVIDIA).")
+                return
+            if estado == "instalavel" and not self._window._ensure_llm_model():
+                self.status_label.setText(
+                    results_footer_text(result) + " A resposta escrita fica para quando o "
+                    "modelo de análise estiver instalado.")
+                return
+            self._start_answer(result)
+
+        def _start_answer(self, result: dict[str, Any]) -> None:
+            from . import ask as _ask
+            paths = self._window.context.paths
+            question = self._current_query
+            trechos = list(result.get("trechos") or [])
+            self.cancel_answer_button.setVisible(True)
+            self.status_label.setText("Escrevendo a resposta com base nos trechos (cerca de 1 min)…")
+
+            def fn(emit, should_cancel):
+                return _ask.answer_from_trechos(paths, question, trechos,
+                                                progress_callback=emit, should_cancel=should_cancel)
+
+            self._start_worker(
+                fn, self._on_answer_done,
+                on_progress=lambda d: self.status_label.setText(str(d.get("message") or "")))
+
+        def _cancel_answer(self) -> None:
+            worker = self._worker
+            if worker is not None and worker.isRunning():
+                worker.request_cancel()
+                self.status_label.setText("Cancelando a resposta…")
+
+        def _on_answer_done(self, result, error: str) -> None:
+            self.cancel_answer_button.setVisible(False)
+            rodape = results_footer_text(self._last_result or {})
+            worker = self._worker
+            if worker is not None and worker.cancelled.is_set():
+                self.status_label.setText("Resposta cancelada — os trechos acima continuam válidos.")
+                return
+            if error:
+                self.status_label.setText(f"{rodape} Não foi possível responder: {error}")
+                return
+            payload = result or {}
+            if payload.get("erro"):
+                self.status_label.setText(f"{rodape} {payload['erro']}")
+                return
+            resposta = str(payload.get("resposta") or "")
+            n = len((self._last_result or {}).get("trechos") or [])
+            self.answer_view.setHtml(render_answer_html(resposta, n))
+            self.answer_view.setVisible(True)
+            self.status_label.setText(rodape)
+
+        def _on_answer_anchor(self, url) -> None:
+            alvo = str(url.toString() if hasattr(url, "toString") else url)
+            if alvo.startswith("trecho:"):
+                try:
+                    n = int(alvo.split(":", 1)[1])
+                except ValueError:
+                    return
+                row = self._row_by_n.get(n)
+                if row is not None:
+                    self.results.setCurrentRow(row)
+                    self.results.scrollToItem(self.results.item(row))
+            elif alvo.startswith("entrevista:"):
+                self._window.open_search_hit(alvo.split(":", 1)[1], 0.0)
+
+        # ---- pergunta sobre o conjunto ---------------------------------------
+        def _route_global(self, result: dict[str, Any]) -> None:
+            from . import ask as _ask
+            ctx = self._window.context
+            ids = list(self._current_ids)
+            titles = {iid: self._friendly_title(iid) for iid in ids}
+            resumos = _ask.resumos_for_scope(ctx.paths, ids, titles)
+            com, total = len(resumos), len(ids)
+            estado, _motivo, _gb = self._llm_state()
+            self.route_banner.setVisible(True)
+            slot = getattr(self, "_route_slot", None)
+            if slot is not None:
+                try:
+                    self.route_button.clicked.disconnect(slot)
+                except (RuntimeError, TypeError):
+                    pass
+                self._route_slot = None
+            if com == 0:
+                self.route_label.setText(
+                    "Pergunta sobre o conjunto: para responder, a AI usa os resumos por "
+                    f"entrevista — nenhuma das {total} tem resumo ainda. Os trechos abaixo "
+                    "são só os menos distantes.")
+                if estado != "incompativel":
+                    self.route_button.setText(f"Resumir as {total} entrevistas agora")
+                    self.route_button.setVisible(True)
+                    self._route_slot = lambda: self._window.run_summarize_job(ids=ids)
+                    self.route_button.clicked.connect(self._route_slot)
+                return
+            if estado == "incompativel":
+                self.route_label.setText(
+                    f"Pergunta sobre o conjunto: a AI responderia pelos resumos ({com} das {total} "
+                    "têm resumo), mas nesta máquina a resposta escrita não roda (precisa de placa "
+                    "NVIDIA). Os trechos abaixo são só os menos distantes.")
+                return
+            if estado == "instalavel" and not self._window._ensure_llm_model():
+                self.route_label.setText(
+                    "Pergunta sobre o conjunto: a AI responde pelos resumos quando o modelo de "
+                    "análise estiver instalado.")
+                return
+            self.route_label.setText(
+                f"Pergunta sobre o conjunto: a AI responde pelos resumos ({com} das {total} "
+                "têm resumo).")
+            self.route_button.setText("Responder pelos trechos mesmo assim")
+            self.route_button.setVisible(True)
+            self._route_slot = lambda: self._answer_by_passages_anyway(result)
+            self.route_button.clicked.connect(self._route_slot)
+            self._start_visao_geral(ids, titles)
+
+        def _answer_by_passages_anyway(self, result: dict[str, Any]) -> None:
+            if self._worker and self._worker.isRunning():
+                self._worker.request_cancel()
+            self.route_banner.setVisible(False)
+            self.route_button.setVisible(False)
+            self._maybe_answer(result)
+
+        def _start_visao_geral(self, ids: list[str], titles: dict[str, str]) -> None:
+            from . import ask as _ask
+            paths = self._window.context.paths
+            question = self._current_query
+            self.cancel_answer_button.setVisible(True)
+            self.status_label.setText("Lendo os resumos das entrevistas…")
+
+            def fn(emit, should_cancel):
+                return _ask.run_visao_geral(paths, ids, question, progress_callback=emit,
+                                            should_cancel=should_cancel, titles=titles)
+
+            self._start_worker(
+                fn, self._on_visao_done,
+                on_progress=lambda d: self.status_label.setText(str(d.get("message") or "")))
+
+        def _on_visao_done(self, result, error: str) -> None:
+            self.cancel_answer_button.setVisible(False)
+            worker = self._worker
+            if worker is not None and worker.cancelled.is_set():
+                self.status_label.setText("Visão geral cancelada — os trechos acima continuam válidos.")
+                return
+            if error:
+                self.status_label.setText(f"Não foi possível responder pelos resumos: {error}")
                 return
             payload = result or {}
             if payload.get("erro"):
                 self.status_label.setText(str(payload["erro"]))
                 return
-            self.answer_view.setPlainText(str(payload.get("resposta") or ""))
+            citadas = [str(c) for c in (payload.get("citadas") or [])]
+            self.answer_view.setHtml(render_answer_html(str(payload.get("resposta") or ""), 0, tuple(citadas)))
             self.answer_view.setVisible(True)
-            for trecho in payload.get("trechos") or []:
-                self._add_hit(self.results, f"[{trecho['n']}]  ", {
-                    "interview_id": trecho["interview_id"],
-                    "start": trecho["start"],
-                    "label": trecho["label"],
-                    "text": trecho["text"],
-                })
-            if not payload.get("trechos"):
-                self.status_label.setText(
-                    "Nenhum trecho próximo o suficiente — a resposta acima reflete isso.")
+            self.results.clear()
+            self._row_by_n = {}
+            if citadas:
+                header = QListWidgetItem(f"Entrevistas citadas ({len(citadas)})")
+                header.setFlags(Qt.ItemFlag.NoItemFlags)
+                fonte = header.font()
+                fonte.setBold(True)
+                header.setFont(fonte)
+                self.results.addItem(header)
+                for iid in citadas:
+                    item = QListWidgetItem(f"[{iid}]  {self._friendly_title(iid)}")
+                    item.setData(Qt.ItemDataRole.UserRole, (iid, 0.0))
+                    self.results.addItem(item)
+            sem = payload.get("sem_resumo") or []
+            com = payload.get("com_resumo") or []
+            nota = f"Com base nos resumos de {len(com)} entrevista(s)."
+            if sem:
+                nota += f" {len(sem)} sem resumo ficaram de fora."
+            self.status_label.setText(nota)
 
-        def _on_explore_done(self, result, error: str) -> None:
-            self.status_label.setText("")
-            if error:
-                self.status_label.setText(f"Exploração indisponível: {error}")
-                return
-            hits, exact_count = result or ([], 0)
-            for hit in hits:
-                prefix = f"[{similarity_label(hit.get('similarity', 0))}]  "
-                self._add_hit(self.results, prefix, hit)
-            if not hits:
-                self.status_label.setText("Nenhum trecho próximo do que você descreveu.")
-            if exact_count:
-                plural = "s" if exact_count != 1 else ""
-                self.exact_hint_button.setText(
-                    f"Há também {exact_count} ocorrência{plural} exata{plural} — ver em Buscar palavras")
-                self.exact_hint_button.setVisible(True)
-
-        def _open_word_search(self) -> None:
-            self._window.open_word_search(self.query_input.text().strip())
-
+        # ---- preparo do encoder ------------------------------------------------
         def _prepare(self) -> None:
             from . import search as _search
             ctx = self._window.context
@@ -3922,8 +4234,951 @@ if QT_IMPORT_ERROR is None:
                 self._announce_readiness()
             except Exception:  # noqa: BLE001 - estado da janela nunca derruba o preparo
                 pass
-            self.status_label.setText("Exploração pronta.")
-            self.run_explore()
+            self.status_label.setText("Busca pronta.")
+            self.run_question()
+
+
+    class ThemesDialog(_SearchDialogBase):
+        """Temas das entrevistas (Parte B, 2026-09-03): agrupa TODAS as
+        passagens do escopo por semelhanca de sentido (themes.discover —
+        numpy, qualquer maquina, segundos) e lista os temas mais tratados com
+        todos os seus trechos, sem teto. Nomes: termos caracteristicos na
+        hora; com o modelo de analise, nomes e descricoes pela AI em SEGUNDO
+        PLANO (a janela nunca espera pela LLM — regra do plano de camadas).
+        Codificacao (coding.py): um ou mais codigos por trecho, tema inteiro
+        como codigo, exportacao .qualilab (QualiLab) ou CSV. Duplo clique no
+        trecho abre a entrevista no ponto."""
+
+        _scope_subject = "A descoberta de temas"
+        OUTROS_ID = "__outros__"
+
+        def __init__(self, window) -> None:
+            super().__init__(window, "✨ Temas das entrevistas")
+            self.setMinimumSize(980, 640)
+            self._payload: dict[str, Any] | None = None
+            self._codes: list[dict[str, Any]] = []
+            self._codings: list[dict[str, Any]] = []
+            self._codes_dirty = False
+            self._naming = False
+            self._speakers: list[str] | None = None   # None = todos os falantes
+            self._inventory: list[dict[str, Any]] = []
+            layout = QVBoxLayout(self)
+            intro = QLabel(
+                "Agrupa os trechos das entrevistas por semelhança de sentido e lista os temas "
+                "mais tratados, cada um com todos os seus trechos. Dá para renomear, juntar, "
+                "aplicar códigos (um ou mais por trecho) e exportar para o QualiLab. "
+                "Tudo local — nada sai do seu computador.")
+            intro.setWordWrap(True)
+            intro.setStyleSheet(_style_muted())
+            layout.addWidget(intro)
+            self._build_scope_widgets(layout)
+            # "Quem entra": em entrevista não se codifica quem pergunta, em
+            # grupo focal não se codifica quem modera — e os nomes desses
+            # papéis variam. O app pergunta (decisão do usuário 2026-09-03).
+            quem_row = QHBoxLayout()
+            quem_row.addWidget(QLabel("Quem entra:"))
+            self.speakers_label = QLabel("todos os falantes")
+            self.speakers_label.setWordWrap(True)
+            quem_row.addWidget(self.speakers_label, 1)
+            self.speakers_button = QPushButton("Escolher…")
+            self.speakers_button.setToolTip(
+                "Escolha os falantes que contam nos temas e na codificação. A fala de quem "
+                "ficar de fora continua na transcrição e no arquivo exportado, como contexto — "
+                "só não influencia o agrupamento nem recebe código.")
+            self.speakers_button.clicked.connect(self._choose_speakers)
+            quem_row.addWidget(self.speakers_button)
+            layout.addLayout(quem_row)
+            row = QHBoxLayout()
+            row.addWidget(QLabel("Quantos temas:"))
+            self.n_themes_spin = QSpinBox()
+            self.n_themes_spin.setRange(0, 40)
+            self.n_themes_spin.setSpecialValueText("automático")
+            self.n_themes_spin.setValue(0)
+            self.n_themes_spin.setToolTip(
+                "Automático depende da quantidade de trechos. Menos temas = mais amplos; "
+                "mais temas = mais finos. Grupos com menos de 3 trechos — ou com menos de 6 "
+                "quando todos vêm de uma única entrevista — viram «sem tema definido», por "
+                "isso podem aparecer menos temas do que você pediu.")
+            row.addWidget(self.n_themes_spin)
+            self.discover_button = QPushButton("Descobrir os temas")
+            self.discover_button.setToolTip(
+                "Lê os trechos de todas as entrevistas do escopo e agrupa por semelhança "
+                "(segundos; a primeira vez prepara o índice de busca).")
+            self.discover_button.clicked.connect(self.run_discover)
+            row.addWidget(self.discover_button)
+            self.names_button = QPushButton("✨ Nomear os temas com a AI")
+            self.names_button.setVisible(False)
+            self.names_button.clicked.connect(lambda: self._start_naming(user_click=True))
+            row.addWidget(self.names_button)
+            self.cancel_button = QPushButton("Cancelar")
+            self.cancel_button.setVisible(False)
+            self.cancel_button.clicked.connect(self._cancel)
+            row.addWidget(self.cancel_button)
+            row.addStretch(1)
+            layout.addLayout(row)
+            self.state_label = QLabel("")
+            self.state_label.setWordWrap(True)
+            self.state_label.setStyleSheet(_style_muted())
+            layout.addWidget(self.state_label)
+
+            splitter = QSplitter(Qt.Orientation.Horizontal)
+            left = QWidget()
+            left_layout = QVBoxLayout(left)
+            left_layout.setContentsMargins(0, 0, 0, 0)
+            self.themes_list = QListWidget()
+            self.themes_list.setWordWrap(True)
+            self.themes_list.currentRowChanged.connect(self._on_theme_selected)
+            left_layout.addWidget(self.themes_list, 1)
+            left_buttons = QHBoxLayout()
+            self.rename_button = QPushButton("Renomear…")
+            self.rename_button.clicked.connect(self._rename)
+            left_buttons.addWidget(self.rename_button)
+            self.merge_button = QPushButton("Juntar com outro tema…")
+            self.merge_button.clicked.connect(self._merge)
+            left_buttons.addWidget(self.merge_button)
+            left_layout.addLayout(left_buttons)
+            splitter.addWidget(left)
+            right = QWidget()
+            right_layout = QVBoxLayout(right)
+            right_layout.setContentsMargins(0, 0, 0, 0)
+            self.theme_title = QLabel("")
+            self.theme_title.setWordWrap(True)
+            fonte = self.theme_title.font()
+            fonte.setBold(True)
+            self.theme_title.setFont(fonte)
+            right_layout.addWidget(self.theme_title)
+            self.theme_desc = QLabel("")
+            self.theme_desc.setWordWrap(True)
+            self.theme_desc.setStyleSheet(_style_muted())
+            right_layout.addWidget(self.theme_desc)
+            self.passages = QListWidget()
+            self.passages.setWordWrap(True)
+            self.passages.setToolTip(
+                "Duplo clique abre a entrevista neste trecho; a caixa marca o trecho para codificar.")
+            self.passages.itemActivated.connect(self._open_hit)
+            right_layout.addWidget(self.passages, 1)
+            right_buttons = QHBoxLayout()
+            self.code_theme_button = QPushButton("Aplicar código aos trechos marcados…")
+            self.code_theme_button.setToolTip(
+                "Cria (ou reutiliza) um código e o aplica a todos os trechos marcados deste tema.")
+            self.code_theme_button.clicked.connect(self._apply_code_to_checked)
+            right_buttons.addWidget(self.code_theme_button)
+            self.passage_codes_button = QPushButton("Códigos deste trecho…")
+            self.passage_codes_button.setToolTip(
+                "Acrescenta ou tira um código do trecho selecionado (um trecho pode ter vários).")
+            self.passage_codes_button.clicked.connect(self._passage_codes)
+            right_buttons.addWidget(self.passage_codes_button)
+            self.export_button = QPushButton("Exportar codificação…")
+            self.export_button.setToolTip(
+                "Grava um projeto do QualiLab (.qualilab: um documento por entrevista, códigos e "
+                "trechos codificados) ou uma planilha CSV.")
+            self.export_button.clicked.connect(self._export)
+            right_buttons.addWidget(self.export_button)
+            right_layout.addLayout(right_buttons)
+            splitter.addWidget(right)
+            splitter.setSizes([340, 640])
+            layout.addWidget(splitter, 1)
+            bottom = QHBoxLayout()
+            self.status_label = QLabel("")
+            self.status_label.setWordWrap(True)
+            bottom.addWidget(self.status_label, 1)
+            close_button = QPushButton("Fechar")
+            close_button.clicked.connect(self.close)
+            bottom.addWidget(close_button)
+            layout.addLayout(bottom)
+            self._announce_readiness()
+
+        # ---- estado ---------------------------------------------------------
+        def _paths(self):
+            ctx = self._window.context
+            return ctx.paths if ctx is not None else None
+
+        def _llm_state(self) -> tuple[str, str, float]:
+            try:
+                return self._window._capability_state("resumo_perguntar")
+            except Exception:  # noqa: BLE001 - sonda nunca derruba a janela
+                return "pronta", "", 0.0
+
+        def _announce_readiness(self) -> None:
+            """Uma linha "Nesta máquina: …" na abertura, idempotente. O
+            agrupamento roda em qualquer maquina; so os NOMES pela AI dependem
+            do modelo de analise (placa NVIDIA)."""
+            from . import search as _search
+            try:
+                encoder_ok = _search.encoder_cached()
+                _e, _m, busca_gb = self._window._capability_state("busca_semantica")
+            except Exception:  # noqa: BLE001
+                encoder_ok, busca_gb = True, 0.5
+            estado, _motivo, resumo_gb = self._llm_state()
+            partes = ["temas por semelhança — pronta (segundos)" if encoder_ok else
+                      f"temas por semelhança — falta baixar (~{fmt_gb(busca_gb)}; o clique oferece)"]
+            if estado == "incompativel":
+                partes.append("nomes pela AI — não roda neste computador (precisa de placa NVIDIA); "
+                              "os temas ficam com os termos característicos")
+            elif estado == "instalavel":
+                partes.append(f"nomes pela AI — falta baixar o modelo de análise (~{fmt_gb(resumo_gb)})")
+            else:
+                partes.append("nomes pela AI — pronta (alguns minutos, em segundo plano)")
+            self.state_label.setText("Nesta máquina: " + " · ".join(partes) + ".")
+
+        def showEvent(self, event) -> None:  # noqa: N802 - assinatura Qt
+            super().showEvent(event)
+            if self._payload is None and self._window.context is not None:
+                self._load_existing()
+
+        def closeEvent(self, event) -> None:  # noqa: N802 - assinatura Qt
+            # A base cancela o worker e desliga os sinais — o tratador de fim
+            # nao roda mais, entao os botoes tem de voltar AQUI: senao
+            # "Descobrir os temas" ficava cinza para sempre (a janela e
+            # cacheada) e o "Cancelar" seguia visivel sem efeito.
+            super().closeEvent(event)
+            self._idle_buttons()
+
+        def _idle_buttons(self) -> None:
+            self.discover_button.setEnabled(True)
+            self.cancel_button.setVisible(False)
+            self._naming = False
+
+        def reset_for_project(self) -> None:
+            """Esquece temas e códigos do projeto ANTERIOR (a janela é cacheada
+            pela janela principal). Sem isto, renomear um tema depois de trocar
+            de projeto gravaria os temas do projeto antigo dentro do novo —
+            `_save_themes`/`_save_coding` escrevem sempre no projeto ATUAL."""
+            worker = self._worker
+            if worker is not None and worker.isRunning():
+                try:
+                    worker.request_cancel()
+                    worker.done.disconnect()
+                    worker.progress.disconnect()
+                except (RuntimeError, TypeError, AttributeError):
+                    pass
+            self._worker = None
+            self._payload = None
+            self._codes = []
+            self._codings = []
+            self._speakers = None
+            self._inventory = []
+            self._sync_speakers_label()
+            self.themes_list.clear()
+            self.passages.clear()
+            self.theme_title.setText("")
+            self.theme_desc.setText("")
+            self.names_button.setVisible(False)
+            self._idle_buttons()
+            self.status_label.setText("")
+            self._announce_readiness()
+            if self.isVisible() and self._window.context is not None:
+                self._load_existing()
+
+        def _load_existing(self) -> None:
+            from . import themes as _themes
+            paths = self._paths()
+            if paths is None:
+                return
+            self._load_coding()
+            self._load_speakers_choice()
+            payload = _themes.load_themes(paths)
+            if not payload:
+                # Primeira vez: dizer qual e o primeiro passo, senao a janela
+                # abre com duas listas vazias e nenhuma orientacao.
+                self.status_label.setText(
+                    "Comece por «Descobrir os temas» — os trechos de cada tema aparecem à "
+                    "direita, e aí dá para aplicar códigos e exportar.")
+                return
+            self._payload = payload
+            self._render()
+            quando = str(payload.get("created_at") or "").replace("T", " ")
+            n_ids = len(payload.get("interview_ids") or [])
+            self.status_label.setText(
+                f"Temas descobertos{' em ' + quando if quando else ''} para {n_ids} entrevista(s). "
+                "«Descobrir os temas» refaz com o escopo atual.")
+            # Ao ABRIR, a AI nunca começa sozinha: ocupar a placa por minutos
+            # sem o usuário ter pedido nada contraria "dizer o custo antes do
+            # clique" (e ainda bloquearia «Descobrir os temas»). Só oferece.
+            self._maybe_offer_naming(auto=False)
+
+        def _load_coding(self) -> None:
+            from . import coding as _coding
+            from . import research_context as _rc
+            paths = self._paths()
+            if paths is None:
+                return
+            self._codes = _coding.load_codebook(paths)
+            self._codings = _coding.load_codings(paths)
+            self._codes_dirty = False
+            if not self._codes:
+                # Sementes do "## Codebook inicial" do contexto da pesquisa
+                # (em memoria; gravadas na primeira codificacao).
+                try:
+                    for name, desc in _coding.parse_codebook_seed(_rc.load_research_context(paths)):
+                        _coding.add_code(self._codes, name, desc)
+                except Exception:  # noqa: BLE001 - contexto ausente/ilegivel = sem sementes
+                    pass
+
+        # ---- quem entra (falantes) --------------------------------------------
+        def _speakers_set(self) -> set[str] | None:
+            return None if self._speakers is None else set(self._speakers)
+
+        def _load_speakers_choice(self) -> None:
+            """Lê a escolha gravada no projeto. Ausente = ainda não perguntado."""
+            ctx = self._window.context
+            escolha = (ctx.project.get("coding_speakers") if ctx is not None else None)
+            self._speakers = [str(s) for s in escolha] if isinstance(escolha, list) else None
+            self._sync_speakers_label()
+
+        def _save_speakers_choice(self) -> None:
+            ctx = self._window.context
+            if ctx is None:
+                return
+            ctx.project["coding_speakers"] = list(self._speakers) if self._speakers is not None else None
+            ctx.project["coding_speakers_asked"] = True
+            try:
+                app_service.save_project_metadata(ctx)
+            except Exception as exc:  # noqa: BLE001 - escolha nunca derruba a janela
+                _logger.warning("Nao foi possivel guardar 'quem entra': %s", exc)
+
+        def _speaker_inventory(self) -> list[dict[str, Any]]:
+            """Falantes do escopo, com o peso de cada um (relê a cada abertura:
+            identificar vozes muda os rótulos por fora desta janela)."""
+            from . import search as _search
+            from . import speakers as _speakers
+            paths = self._paths()
+            if paths is None:
+                return []
+            self._refresh_scope()
+            ids = self._scope_ids() or self._project_ids()
+            turns_by_id = {iid: _search.load_source_turns(paths, iid) for iid in ids}
+            self._inventory = _speakers.speaker_inventory(turns_by_id)
+            return self._inventory
+
+        def _sync_speakers_label(self) -> None:
+            from . import speakers as _speakers
+            self.speakers_label.setText(
+                _speakers.describe_selection(self._inventory, self._speakers))
+
+        def _choose_speakers(self, primeira_vez: bool = False) -> bool:
+            """Janela de escolha; True se o usuário confirmou."""
+            from . import speakers as _speakers
+            inventario = self._speaker_inventory()
+            if not inventario:
+                self.status_label.setText(
+                    "Nenhuma transcrição no escopo para ler os falantes.")
+                return False
+            rotulos = [i["label"] for i in inventario]
+            marcados = set(self._speakers) if self._speakers is not None else (
+                set(_speakers.default_selection(rotulos)) if primeira_vez else set(rotulos))
+            dialogo = QDialog(self)
+            dialogo.setWindowTitle("Quem entra na análise")
+            dlayout = QVBoxLayout(dialogo)
+            explicacao = QLabel(
+                "Marque os falantes que contam nos temas e na codificação. Em entrevistas "
+                "não se costuma codificar quem pergunta; em grupos focais, quem modera — "
+                "mas a decisão é sua.\n\nA fala de quem ficar de fora continua na "
+                "transcrição e no arquivo exportado, como contexto: ela só deixa de "
+                "influenciar o agrupamento e de receber código.")
+            explicacao.setWordWrap(True)
+            dlayout.addWidget(explicacao)
+            lista = QListWidget()
+            sugeridos = _speakers.suggest_excluded(rotulos)
+            for item_inv in inventario:
+                rotulo = item_inv["label"]
+                texto = (f"{rotulo} — {item_inv['turns']} turnos, {item_inv['words']} palavras, "
+                         f"{item_inv['interviews']} entrevista(s)")
+                if rotulo in sugeridos:
+                    texto += "  · sugerido de fora (parece quem conduz)"
+                item = QListWidgetItem(texto)
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setData(Qt.ItemDataRole.UserRole, rotulo)
+                item.setCheckState(Qt.CheckState.Checked if rotulo in marcados
+                                   else Qt.CheckState.Unchecked)
+                lista.addItem(item)
+            dlayout.addWidget(lista, 1)
+            aviso = QLabel("")
+            aviso.setWordWrap(True)
+            aviso.setStyleSheet(f"color: {ui_tokens.WARN};")
+            dlayout.addWidget(aviso)
+            botoes = QHBoxLayout()
+            botoes.addStretch(1)
+            cancelar = QPushButton("Cancelar")
+            cancelar.clicked.connect(dialogo.reject)
+            botoes.addWidget(cancelar)
+            confirmar = QPushButton("Usar estes falantes")
+            confirmar.setDefault(True)
+            botoes.addWidget(confirmar)
+            dlayout.addLayout(botoes)
+
+            def _confirmar() -> None:
+                escolhidos = [str(lista.item(r).data(Qt.ItemDataRole.UserRole))
+                              for r in range(lista.count())
+                              if lista.item(r).checkState() == Qt.CheckState.Checked]
+                if not escolhidos:
+                    aviso.setText("Marque ao menos um falante — sem nenhum não há o que agrupar.")
+                    return
+                dialogo._escolhidos = escolhidos  # type: ignore[attr-defined]
+                dialogo.accept()
+
+            confirmar.clicked.connect(_confirmar)
+            if dialogo.exec() != QDialog.DialogCode.Accepted:
+                return False
+            escolhidos = list(getattr(dialogo, "_escolhidos", rotulos))
+            # Todos marcados = "todos os falantes" (None), para o índice não
+            # ganhar um escopo que não muda nada.
+            self._speakers = None if set(escolhidos) == set(rotulos) else escolhidos
+            self._save_speakers_choice()
+            self._sync_speakers_label()
+            return True
+
+        def _save_coding(self) -> None:
+            from . import coding as _coding
+            paths = self._paths()
+            if paths is None:
+                return
+            _coding.save_codebook(paths, self._codes)
+            _coding.save_codings(paths, self._codings)
+            self._codes_dirty = False
+
+        def _save_themes(self) -> None:
+            from . import themes as _themes
+            paths = self._paths()
+            if paths is not None and self._payload is not None:
+                _themes.save_themes(paths, self._payload)
+
+        # ---- descoberta ------------------------------------------------------
+        def run_discover(self) -> None:
+            from . import search as _search
+            from . import themes as _themes
+            ctx = self._window.context
+            if ctx is None:
+                return
+            if self._worker and self._worker.isRunning():
+                self.status_label.setText("Aguarde a etapa atual terminar (ou cancele).")
+                return
+            self._refresh_scope()
+            ids = self._scope_ids()
+            if not ids:
+                self.status_label.setText(self._scope_text())
+                return
+            if not _search.encoder_cached() and not self._window._ensure_optional_model(
+                    "search_encoder", "o modelo de busca por sentido",
+                    "Os temas são descobertos pelo sentido dos trechos — para isso o "
+                    "Transcritório usa o modelo de busca por sentido, que ainda não está "
+                    "instalado neste computador."):
+                return
+            self._load_coding()
+            # Primeira descoberta do projeto: PERGUNTAR quem entra antes de
+            # rodar, em vez de decidir por conta própria.
+            if not bool(ctx.project.get("coding_speakers_asked")):
+                if not self._choose_speakers(primeira_vez=True):
+                    self.status_label.setText(
+                        "Escolha quem entra na análise para descobrir os temas.")
+                    return
+            n = int(self.n_themes_spin.value()) or None
+            speakers = list(self._speakers) if self._speakers is not None else None
+            paths = ctx.paths
+            self.names_button.setVisible(False)
+            self.cancel_button.setText("Cancelar")
+            self.cancel_button.setVisible(True)
+            self.discover_button.setEnabled(False)
+            self.status_label.setText("Lendo os trechos das entrevistas…")
+
+            def fn(emit, should_cancel):
+                return _themes.discover(paths, ids, n_themes=n, progress_callback=emit,
+                                        should_cancel=should_cancel, speakers=speakers)
+
+            self._start_worker(
+                fn, self._on_discover_done,
+                on_progress=lambda d: self.status_label.setText(str(d.get("message") or "")))
+
+        def _on_discover_done(self, result, error: str) -> None:
+            self._idle_buttons()
+            worker = self._worker
+            payload = result or {}
+            if payload.get("cancelado") or (worker is not None and worker.cancelled.is_set()):
+                self.status_label.setText(
+                    "Descoberta cancelada — os temas anteriores continuam valendo.")
+                return
+            if error:
+                self.status_label.setText(f"Não foi possível descobrir os temas: {error}")
+                return
+            if not payload.get("themes") and not payload.get("outros"):
+                self.status_label.setText(
+                    "Nenhum trecho para agrupar — as entrevistas do escopo ainda não têm índice de busca.")
+                return
+            self._payload = payload
+            self._render()
+            temas = payload.get("themes") or []
+            outros = payload.get("outros") or []
+            self.status_label.setText(
+                f"{len(temas)} tema(s) em {int(payload.get('n_passages') or 0)} trechos de "
+                f"{len(payload.get('interview_ids') or [])} entrevista(s); {len(outros)} trecho(s) sem tema definido.")
+            self._maybe_offer_naming()
+
+        def _cancel(self) -> None:
+            worker = self._worker
+            if worker is not None and worker.isRunning():
+                worker.request_cancel()
+                self.status_label.setText("Cancelando…")
+
+        # ---- nomes pela AI (segundo plano) ------------------------------------
+        def _needs_names(self) -> bool:
+            return any(t.get("name_source") == "termos" for t in (self._payload or {}).get("themes") or [])
+
+        def _maybe_offer_naming(self, auto: bool = True) -> None:
+            """Com o modelo de analise pronto, nomeia sozinho em segundo plano
+            LOGO APOS uma descoberta pedida pelo usuario (auto=True); ao abrir a
+            janela (auto=False), so oferece o botao. Modelo instalavel: botao
+            com o tamanho do download. Incompativel: diz por que os nomes ficam
+            pelos termos."""
+            if not self._needs_names():
+                self.names_button.setVisible(False)
+                return
+            estado, _motivo, gb = self._llm_state()
+            if estado == "incompativel":
+                self.names_button.setVisible(False)
+                self.status_label.setText(
+                    self.status_label.text() + " Nomes pelos termos característicos — a AI que nomeia "
+                    "precisa de placa NVIDIA.")
+                return
+            if estado == "instalavel":
+                self.names_button.setText(f"✨ Nomear os temas com a AI (baixa ~{fmt_gb(gb)})")
+                self.names_button.setVisible(True)
+                return
+            self.names_button.setText("✨ Nomear os temas com a AI")
+            if not auto:
+                self.names_button.setVisible(True)
+                return
+            self._start_naming(user_click=False)
+
+        def _start_naming(self, user_click: bool = False) -> None:
+            import copy as _copy
+            from . import themes as _themes
+            if self._payload is None or (self._worker and self._worker.isRunning()):
+                return
+            estado, _motivo, _gb = self._llm_state()
+            if estado == "incompativel":
+                return
+            if estado == "instalavel" and (not user_click or not self._window._ensure_llm_model()):
+                return
+            paths = self._paths()
+            if paths is None:
+                return
+            snapshot = _copy.deepcopy(self._payload)   # a thread nunca toca no payload da janela
+            self._naming = True
+            self.names_button.setVisible(False)
+            self.cancel_button.setText("Cancelar os nomes pela AI (os temas ficam)")
+            self.cancel_button.setVisible(True)
+            self.status_label.setText(
+                self.status_label.text() + " Nomeando os temas com a AI em segundo plano (alguns minutos)…")
+
+            def fn(emit, should_cancel):
+                return _themes.name_with_llm(paths, snapshot, progress_callback=emit,
+                                             should_cancel=should_cancel)
+
+            self._start_worker(fn, self._on_naming_done)
+
+        def _on_naming_done(self, result, error: str) -> None:
+            from . import themes as _themes
+            self._naming = False
+            self.cancel_button.setVisible(False)
+            worker = self._worker
+            if worker is not None and worker.cancelled.is_set():
+                self.status_label.setText("Nomes pela AI cancelados — os temas continuam com os termos.")
+                self.names_button.setVisible(self._needs_names())
+                return
+            payload = result or {}
+            if error or payload.get("erro"):
+                self.status_label.setText(f"A AI não conseguiu nomear os temas: {error or payload.get('erro')}")
+                self.names_button.setVisible(self._needs_names())
+                return
+            if self._payload is None:
+                return
+            n = _themes.apply_names(self._payload, payload.get("nomes") or [])
+            self._save_themes()
+            # A nomeação roda por minutos JUSTAMENTE para o usuário continuar
+            # trabalhando: reconstruir a lista de trechos apagaria as caixas
+            # que ele desmarcou nesse intervalo — e o código seguinte iria
+            # para trechos que ele tinha excluído de propósito.
+            self._render(keep_marks=True)
+            if n == 0:
+                # Sem saída era o pior caso: JSON malformado ou ids inventados
+                # deixavam a janela sem botão para tentar de novo.
+                self.status_label.setText(
+                    "A AI não conseguiu nomear os temas desta vez — eles continuam com os "
+                    "termos característicos. Dá para tentar de novo.")
+            else:
+                faltam = sum(1 for t in self._themes() if t.get("name_source") == "termos")
+                self.status_label.setText(
+                    f"A AI nomeou {n} tema(s)."
+                    + (f" {faltam} continuam com os termos característicos." if faltam else ""))
+            self.names_button.setVisible(self._needs_names())
+
+        # ---- lista de temas e trechos -----------------------------------------
+        def _themes(self) -> list[dict[str, Any]]:
+            return list((self._payload or {}).get("themes") or [])
+
+        def _current_theme(self) -> dict[str, Any] | None:
+            item = self.themes_list.currentItem()
+            if item is None:
+                return None
+            theme_id = str(item.data(Qt.ItemDataRole.UserRole) or "")
+            for theme in self._themes():
+                if theme.get("id") == theme_id:
+                    return theme
+            return None
+
+        @staticmethod
+        def _passage_key(passage: dict[str, Any]) -> tuple[str, int, int]:
+            return (str(passage.get("interview_id") or ""),
+                    int(passage.get("t_from", 0)), int(passage.get("t_to", 0)))
+
+        def _current_marks(self) -> dict[tuple[str, int, int], Any]:
+            """Marcações atuais por TRECHO (não por linha): a lista pode mudar
+            de tamanho entre uma reconstrução e outra."""
+            marks: dict[tuple[str, int, int], Any] = {}
+            for row in range(self.passages.count()):
+                item = self.passages.item(row)
+                passage = item.data(Qt.ItemDataRole.UserRole + 1) or {}
+                if passage:
+                    marks[self._passage_key(passage)] = item.checkState()
+            return marks
+
+        def _render(self, keep_marks: bool = False) -> None:
+            marks = self._current_marks() if keep_marks else None
+            current = self.themes_list.currentItem()
+            keep_id = str(current.data(Qt.ItemDataRole.UserRole)) if current is not None else ""
+            self.themes_list.blockSignals(True)
+            self.themes_list.clear()
+            for theme in self._themes():
+                item = QListWidgetItem(
+                    f"{theme.get('name') or theme.get('id')}  —  {int(theme.get('n_passages') or 0)} trechos · "
+                    f"{int(theme.get('n_interviews') or 0)} entrevistas")
+                item.setData(Qt.ItemDataRole.UserRole, theme.get("id"))
+                self.themes_list.addItem(item)
+            outros = (self._payload or {}).get("outros") or []
+            if outros:
+                item = QListWidgetItem(f"Sem tema definido  —  {len(outros)} trechos")
+                item.setData(Qt.ItemDataRole.UserRole, self.OUTROS_ID)
+                self.themes_list.addItem(item)
+            self.themes_list.blockSignals(False)
+            row = 0
+            for index in range(self.themes_list.count()):
+                if str(self.themes_list.item(index).data(Qt.ItemDataRole.UserRole)) == keep_id:
+                    row = index
+                    break
+            if self.themes_list.count():
+                self.themes_list.setCurrentRow(row)
+                self._on_theme_selected(row, marks)
+            else:
+                self._on_theme_selected(-1)
+
+        def _turns_for(self, interview_id: str) -> list[dict[str, Any]]:
+            """Turnos da entrevista, com cache por sessão da janela."""
+            from . import search as _search
+            cache = getattr(self, "_turns_cache", None)
+            if cache is None:
+                cache = self._turns_cache = {}
+            if interview_id not in cache:
+                paths = self._paths()
+                cache[interview_id] = _search.load_source_turns(paths, interview_id) if paths else []
+            return cache[interview_id]
+
+        def _passage_ranges(self, passage: dict[str, Any]) -> list[tuple[int, int]]:
+            """As faixas de turnos que o código pinta neste trecho: só as
+            falas de quem está marcado em "Quem entra"."""
+            from . import coding as _coding
+            iid = str(passage.get("interview_id") or "")
+            return _coding.contiguous_ranges(
+                self._turns_for(iid), int(passage.get("t_from", 0)),
+                int(passage.get("t_to", 0)), self._speakers_set())
+
+        def _range_quote(self, interview_id: str, t_from: int, t_to: int) -> str:
+            from . import search as _search
+            faixa = {"t_from": t_from, "t_to": t_to, "c_from": 0, "c_to": -1}
+            return _search.passage_scope_text(self._turns_for(interview_id), faixa, None)
+
+        def _code_names_for(self, passage: dict[str, Any]) -> list[str]:
+            from . import coding as _coding
+            by_id = {c["id"]: c["name"] for c in self._codes}
+            iid = str(passage.get("interview_id") or "")
+            nomes: list[str] = []
+            for t_from, t_to in self._passage_ranges(passage):
+                for code_id in _coding.codes_at(self._codings, iid, t_from, t_to):
+                    nome = by_id.get(code_id)
+                    if nome and nome not in nomes:
+                        nomes.append(nome)
+            return nomes
+
+        def _on_theme_selected(self, row: int, marks: dict | None = None) -> None:
+            self.passages.clear()
+            if row < 0 or self._payload is None:
+                self.theme_title.setText("")
+                self.theme_desc.setText("")
+                return
+            item = self.themes_list.item(row)
+            theme_id = str(item.data(Qt.ItemDataRole.UserRole) or "") if item is not None else ""
+            if theme_id == self.OUTROS_ID:
+                lista = list(self._payload.get("outros") or [])
+                self.theme_title.setText(f"Sem tema definido ({len(lista)} trechos)")
+                self.theme_desc.setText(
+                    "Trechos que não se pareceram o bastante com nenhum tema. Dá para codificá-los mesmo assim.")
+            else:
+                theme = self._current_theme() or {}
+                lista = list(theme.get("passages") or [])
+                self.theme_title.setText(str(theme.get("name") or theme_id))
+                termos = ", ".join(theme.get("terms") or [])
+                desc = str(theme.get("description") or "")
+                self.theme_desc.setText(
+                    desc + (f"\nTermos característicos: {termos}" if termos else ""))
+            for passage in lista:
+                self._add_passage(passage, marks)
+
+        def _add_passage(self, passage: dict[str, Any], marks: dict | None = None) -> None:
+            iid = str(passage.get("interview_id") or "")
+            codigos = self._code_names_for(passage)
+            prefixo = ("● " + "; ".join(codigos) + "\n") if codigos else ""
+            texto = " ".join(str(passage.get("text") or "").split())
+            item = QListWidgetItem(
+                f"{prefixo}{self._friendly_title(iid)} · {format_clock(float(passage.get('start', 0) or 0))}\n{texto}")
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState((marks or {}).get(self._passage_key(passage), Qt.CheckState.Checked))
+            item.setData(Qt.ItemDataRole.UserRole, (iid, float(passage.get("start", 0) or 0)))
+            item.setData(Qt.ItemDataRole.UserRole + 1, passage)
+            self.passages.addItem(item)
+
+        def _refresh_passages(self) -> None:
+            """Reescreve os rotulos de codigo preservando as marcacoes."""
+            marks = self._current_marks()
+            atual = self.passages.currentRow()
+            self._on_theme_selected(self.themes_list.currentRow(), marks)
+            if 0 <= atual < self.passages.count():
+                self.passages.setCurrentRow(atual)
+
+        def _checked_passages(self) -> list[dict[str, Any]]:
+            out: list[dict[str, Any]] = []
+            for row in range(self.passages.count()):
+                item = self.passages.item(row)
+                if item.checkState() == Qt.CheckState.Checked:
+                    out.append(item.data(Qt.ItemDataRole.UserRole + 1))
+            return out
+
+        # ---- renomear / juntar ------------------------------------------------
+        def _selection_is_outros(self) -> bool:
+            item = self.themes_list.currentItem()
+            return item is not None and str(item.data(Qt.ItemDataRole.UserRole) or "") == self.OUTROS_ID
+
+        def _no_theme_reason(self, acao: str) -> str:
+            """Motivo certo para renomear/juntar sem um TEMA escolhido — a
+            linha «Sem tema definido» está na lista mas não é um tema, e
+            mandar "escolha um tema" para quem acabou de escolher uma linha
+            não explica nada."""
+            if self._payload is None:
+                return f"Descubra os temas primeiro — depois dá para {acao}."
+            if self._selection_is_outros():
+                return ("«Sem tema definido» não é um tema — são os trechos que sobraram. "
+                        f"Escolha um tema da lista para {acao}.")
+            return f"Escolha um tema na lista para {acao}."
+
+        def _rename(self) -> None:
+            from . import themes as _themes
+            theme = self._current_theme()
+            if theme is None or self._payload is None:
+                self.status_label.setText(self._no_theme_reason("renomear"))
+                return
+            nome, ok = QInputDialog.getText(self, "Renomear tema", "Nome do tema:",
+                                            text=str(theme.get("name") or ""))
+            nome = " ".join(str(nome or "").split())
+            if not ok or not nome:
+                return
+            _themes.rename_theme(self._payload, str(theme["id"]), nome)
+            self._save_themes()
+            self._render()
+            self.status_label.setText(f"Tema renomeado para «{nome}».")
+
+        def _merge(self) -> None:
+            from . import themes as _themes
+            theme = self._current_theme()
+            if theme is None or self._payload is None:
+                self.status_label.setText(self._no_theme_reason("juntar"))
+                return
+            outros = [t for t in self._themes() if t is not theme]
+            if not outros:
+                self.status_label.setText("Só há um tema.")
+                return
+            nomes = [str(t.get("name") or t.get("id")) for t in outros]
+            escolha, ok = QInputDialog.getItem(
+                self, "Juntar temas", f"Juntar «{theme.get('name')}» com:", nomes, 0, False)
+            if not ok or escolha not in nomes:
+                return
+            absorvido = outros[nomes.index(escolha)]
+            _themes.merge_themes(self._payload, str(theme["id"]), str(absorvido["id"]))
+            self._save_themes()
+            self._render()
+            self.status_label.setText(
+                f"«{escolha}» entrou em «{theme.get('name')}» ({int(theme.get('n_passages') or 0)} trechos).")
+
+        # ---- codificacao -------------------------------------------------------
+        def _code_names(self) -> list[str]:
+            return [str(c.get("name") or "") for c in self._codes]
+
+        def _apply_code_to_checked(self) -> None:
+            from . import coding as _coding
+            theme = self._current_theme()
+            marcados = self._checked_passages()
+            if not marcados:
+                self.status_label.setText(
+                    "Marque ao menos um trecho para aplicar um código." if self._payload is not None
+                    else "Descubra os temas primeiro — depois marque os trechos e aplique um código.")
+                return
+            nomes = self._code_names()
+            sugerido = str(theme.get("name") or "") if theme else ""
+            atual = nomes.index(sugerido) if sugerido in nomes else (len(nomes) if sugerido else 0)
+            escolha, ok = QInputDialog.getItem(
+                self, "Aplicar código", "Código (escolha um ou escreva um novo):",
+                nomes + ([sugerido] if sugerido and sugerido not in nomes else []), atual, True)
+            escolha = " ".join(str(escolha or "").split())
+            if not ok or not escolha:
+                return
+            novo = _coding.find_code(self._codes, escolha) is None
+            code = _coding.add_code(self._codes, escolha,
+                                    description=str(theme.get("description") or "") if (theme and novo) else "")
+            # O código pinta SÓ as falas de quem está em "Quem entra": um
+            # trecho pergunta-resposta-pergunta-resposta vira duas faixas do
+            # mesmo código, e a pergunta fica no documento como contexto.
+            criadas, ja_tinham = 0, 0
+            for p in marcados:
+                iid = str(p["interview_id"])
+                for t_from, t_to in self._passage_ranges(p):
+                    if _coding.add_coding(self._codings, iid, t_from, t_to, code["id"],
+                                          quote=self._range_quote(iid, t_from, t_to),
+                                          origem="tema") is not None:
+                        criadas += 1
+                    else:
+                        ja_tinham += 1
+            self._save_coding()
+            self._refresh_passages()
+            self.status_label.setText(
+                f"Código «{code['name']}» aplicado a {criadas} trecho(s)"
+                + (f" ({ja_tinham} já o tinham)." if ja_tinham else ".")
+                + ("" if self._speakers is None
+                   else f" Só a fala de {', '.join(self._speakers)}."))
+
+        def _passage_codes(self) -> None:
+            from . import coding as _coding
+            item = self.passages.currentItem()
+            if item is None:
+                self.status_label.setText(
+                    "Selecione um trecho para ver ou mudar os códigos dele." if self._payload is not None
+                    else "Descubra os temas primeiro — os trechos de cada tema aparecem à direita.")
+                return
+            passage = item.data(Qt.ItemDataRole.UserRole + 1) or {}
+            aplicados = self._code_names_for(passage)
+            opcoes = [("✓ " + n) if n in aplicados else n for n in self._code_names()]
+            escolha, ok = QInputDialog.getItem(
+                self, "Códigos deste trecho",
+                "Escolha um código para acrescentar, um marcado (✓) para tirar, ou escreva um novo:",
+                opcoes, 0, True)
+            escolha = " ".join(str(escolha or "").split())
+            if not ok or not escolha:
+                return
+            iid = str(passage["interview_id"])
+            faixas = self._passage_ranges(passage)
+            if not faixas:
+                self.status_label.setText(
+                    "Este trecho só tem fala de quem ficou de fora em «Quem entra».")
+                return
+            if escolha.startswith("✓ "):
+                nome = escolha[2:].strip()
+                code = _coding.find_code(self._codes, nome)
+                if code is not None:
+                    alvo = [c for c in self._codings
+                            if c.get("interview_id") == iid and c.get("code_id") == code["id"]
+                            and (int(c.get("t_from", -1)), int(c.get("t_to", -1))) in faixas]
+                    for c in alvo:
+                        _coding.remove_coding(self._codings, str(c["id"]))
+                    self._save_coding()
+                    self._refresh_passages()
+                    self.status_label.setText(f"Código «{nome}» retirado do trecho.")
+                return
+            code = _coding.add_code(self._codes, escolha)
+            criadas = sum(
+                1 for t_from, t_to in faixas
+                if _coding.add_coding(self._codings, iid, t_from, t_to, code["id"],
+                                      quote=self._range_quote(iid, t_from, t_to),
+                                      origem="manual") is not None)
+            if not criadas:
+                self.status_label.setText(f"O trecho já tem o código «{code['name']}».")
+                return
+            self._save_coding()
+            self._refresh_passages()
+            self.status_label.setText(f"Código «{code['name']}» acrescentado ao trecho.")
+
+        def _export_ids(self) -> list[str]:
+            """Entrevistas que entram na exportação: TODAS as que têm alguma
+            codificação, mais as do escopo dos temas.
+
+            Nunca o combo "Onde:" — ele descreve a descoberta, e usá-lo aqui
+            fazia o arquivo sair sem parte da codificação, em silêncio."""
+            from . import coding as _coding
+            transcritas = self._project_ids()
+            ids = list(_coding.coded_interview_ids(self._codings))
+            for iid in (self._payload or {}).get("interview_ids") or []:
+                if iid not in ids:
+                    ids.append(str(iid))
+            return [i for i in ids if i in transcritas]
+
+        def _export(self) -> None:
+            from . import coding as _coding
+            from . import search as _search
+            ctx = self._window.context
+            if ctx is None:
+                return
+            if not self._codings:
+                self.status_label.setText("Nenhum código aplicado ainda — codifique trechos antes de exportar.")
+                return
+            paths = ctx.paths
+            ids = self._export_ids()
+            if not ids:
+                self.status_label.setText(
+                    "As entrevistas codificadas não têm transcrição neste projeto — nada a exportar.")
+                return
+            nome = str(ctx.project.get("project_name") or paths.project_root.name)
+            padrao = _coding.coding_dir(paths) / f"{nome}.qualilab"
+            destino, _filtro = QFileDialog.getSaveFileName(
+                self, f"Exportar a codificação de {len(ids)} entrevista(s)", str(padrao),
+                "Projeto QualiLab (*.qualilab);;Planilha CSV (*.csv)")
+            if not destino:
+                return
+            titulos = {iid: self._friendly_title(iid) for iid in ids}
+            out = Path(destino)
+            try:
+                if out.suffix.lower() == ".csv":
+                    contagem = _coding.export_csv(
+                        paths, ids, out, lambda iid: _search.load_source_turns(paths, iid))
+                    self.status_label.setText(
+                        f"Planilha gravada em {out} ({contagem['linhas']} trecho(s) codificado(s))."
+                        + self._desancoradas_text(contagem))
+                else:
+                    if out.suffix.lower() != ".qualilab":
+                        out = out.with_suffix(".qualilab")
+                    contagem = _coding.export_qualilab(
+                        paths, ids, out, nome, lambda iid: _search.load_source_turns(paths, iid), titles=titulos)
+                    self.status_label.setText(
+                        f"Projeto do QualiLab gravado em {out} ({contagem['documents']} documento(s), "
+                        f"{contagem['codes']} código(s), {contagem['codings']} trecho(s) codificado(s))."
+                        + self._desancoradas_text(contagem))
+            except Exception as exc:  # noqa: BLE001 - GUI boundary
+                self.status_label.setText(f"Não foi possível exportar: {exc}")
+
+        @staticmethod
+        def _desancoradas_text(contagem: dict[str, int]) -> str:
+            """Perda NUNCA silenciosa: se a transcrição mudou depois da
+            codificação, os trechos que não puderam ser localizados ficam de
+            fora — e o usuário precisa saber."""
+            n = int(contagem.get("desancoradas") or 0)
+            if not n:
+                return ""
+            return (f" {n} trecho(s) codificado(s) não entraram: a transcrição mudou depois "
+                    "da codificação e eles não foram encontrados onde estavam.")
 
 
     class EngineSettingsDialog(QDialog):
@@ -5583,7 +6838,10 @@ if QT_IMPORT_ERROR is None:
     class ReviewStudioWindow(QMainWindow):
         def __init__(self, project_root: Path | None = None) -> None:
             super().__init__()
-            self.setWindowTitle(APP_NAME)
+            # Canal de teste visivel no titulo: a beta e a estavel podem ficar
+            # abertas ao mesmo tempo, e confundir as duas seria pior do que
+            # nao ter beta nenhuma.
+            self.setWindowTitle(APP_NAME + channel_suffix())
             icon_path = app_asset_path(APP_ICON_FILE)
             if icon_path.exists():
                 self.setWindowIcon(QIcon(str(icon_path)))
@@ -5883,6 +7141,15 @@ if QT_IMPORT_ERROR is None:
                 "AI local — nada sai do seu computador.")
             self.explore_action.triggered.connect(self.open_explore)
 
+            self.themes_action = QAction("✨ Temas das entrevistas…", self)
+            self.themes_action.setToolTip(
+                "Agrupa os trechos de todas as entrevistas por semelhança de sentido e lista\n"
+                "os temas mais tratados, com todos os trechos de cada um. Dá para renomear,\n"
+                "juntar, aplicar códigos (um ou mais por trecho) e exportar para o QualiLab\n"
+                "(.qualilab) ou CSV. Lê as transcrições (não o áudio); o escopo é escolhível\n"
+                "na janela. AI local — nada sai do seu computador.")
+            self.themes_action.triggered.connect(self.open_themes)
+
             self.summarize_action = QAction("✨ Resumir a entrevista com AI", self)
             self.summarize_action.setToolTip(
                 "Gera um resumo com indice tematico da entrevista aberta — ou de\n"
@@ -6150,6 +7417,7 @@ if QT_IMPORT_ERROR is None:
             analisar_menu.addAction(self.busy_menu_hint_separator)
             analisar_menu.addAction(self.project_search_action)
             analisar_menu.addAction(self.explore_action)
+            analisar_menu.addAction(self.themes_action)
             analisar_menu.addSeparator()
             analisar_menu.addAction(self.summarize_action)
             analisar_menu.addAction(self.glossario_action)
@@ -8451,6 +9719,11 @@ if QT_IMPORT_ERROR is None:
             # R4: sucesso anunciado pertence ao projeto ANTERIOR.
             if getattr(self, "docs_panel", None) is not None:
                 self.docs_panel.clear_success()
+            # Janelas cacheadas com estado POR PROJETO (temas e códigos): sem
+            # esquecer, uma ação depois da troca gravaria no projeto errado.
+            temas = getattr(self, "_themes_dialog", None)
+            if temas is not None:
+                temas.reset_for_project()
             self.review = None
             self.current_interview_id = None
             self.current_turn_id = None
@@ -8785,6 +10058,20 @@ if QT_IMPORT_ERROR is None:
             self._explore_dialog.show()
             self._explore_dialog.raise_()
             self._explore_dialog.query_input.setFocus()
+
+        def open_themes(self) -> None:
+            """Janela Temas das entrevistas (Parte B) — cacheada como a Perguntar."""
+            if self._explain_busy("Temas das entrevistas"):
+                return
+            if self.context is None:
+                QMessageBox.information(self, "Abra um projeto", "Abra um projeto para ver os temas das entrevistas.")
+                return
+            if getattr(self, "_themes_dialog", None) is None:
+                self._themes_dialog = ThemesDialog(self)
+            else:
+                self._themes_dialog._announce_readiness()
+            self._themes_dialog.show()
+            self._themes_dialog.raise_()
 
         def open_search_hit(self, interview_id: str, start: float) -> None:
             """Abre a entrevista no bloco mais proximo do tempo dado (busca)."""
@@ -9940,6 +11227,10 @@ if QT_IMPORT_ERROR is None:
             self._set_action(self.explore_action, has_project, reason_project,
                              enabled_note=" ".join([nota_lote, (
                                  f"Baixa um modelo de ~{busca_gb:.1f} GB na primeira utilização."
+                                 if busca_estado == "instalavel" else "")]).strip())
+            self._set_action(self.themes_action, has_project, reason_project,
+                             enabled_note=" ".join([nota_lote, (
+                                 f"Baixa um modelo de ~{fmt_gb(busca_gb)} na primeira utilização."
                                  if busca_estado == "instalavel" else "")]).strip())
             glos_estado, glos_motivo, glos_gb = self._capability_state("glossario_nomes")
             glos_travado = glos_estado == "incompativel"  # hoje impossivel (CPU basta); regra geral
@@ -11771,15 +13062,17 @@ if QT_IMPORT_ERROR is None:
             self.set_editor_enabled(False)
             self.start_worker(f"Melhorar falantes de {interview_id}", steps, weights=[70, 25, 5])
 
-        def run_summarize_job(self) -> None:
-            """Resumo com indice tematico (fase 2.1) — analise 100% local."""
+        def run_summarize_job(self, *_args: Any, ids: list[str] | None = None) -> None:
+            """Resumo com indice tematico (fase 2.1) — analise 100% local.
+            ids: escopo explicito (a janela Perguntar oferece "Resumir as N
+            entrevistas agora" para a visao geral); sem ids, a selecao."""
             if self._explain_busy("Resumir a entrevista com AI"):
                 return
             if not self.save_current_turn():
                 return
             if not self._ensure_llm_model():
                 return
-            ids = self.selected_ids_for_job(fallback_current=True)
+            ids = list(ids) if ids else self.selected_ids_for_job(fallback_current=True)
             if not ids:
                 QMessageBox.information(self, "Selecione uma entrevista", "Abra ou selecione uma entrevista transcrita para gerar o resumo.")
                 return

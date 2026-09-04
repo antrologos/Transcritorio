@@ -386,13 +386,41 @@ _OPTIONAL_MODELS: tuple[ModelAsset, ...] = (
         companion_repo="microsoft/mdeberta-v3-base",
         companion_revision="a0484667b22365f84929a935b5e50a51f71f159d",
     ),
+    # Busca por sentido v3 (2026-09-03): encoder de RECUPERACAO
+    # (pergunta -> trecho) no lugar do MiniLM de parafrase, que pontuava
+    # 0,02 em busca pt-BR (MTEB-BR) e casava a forma da pergunta, nao o
+    # tema. O e5-small tem a MESMA arquitetura e o MESMO download (470 MB)
+    # do antigo; o granite e o tier de qualidade (instalado => aplicado);
+    # o reordenador (cross-encoder) decide o que realmente responde.
     ModelAsset(
         "search_encoder",
-        "Busca por sentido (encoder multilingue)",
-        "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
-        "encontrar trechos por significado nas transcricoes",
+        "Busca por sentido (leve)",
+        "intfloat/multilingual-e5-small",
+        "encontrar trechos por significado nas transcricoes (qualquer maquina)",
         estimated_gb=0.5,
-        revision="86741b4e3f5cb7765a600d3a3d55a0f6a6cb443d",
+        revision="614241f622f53c4eeff9890bdc4f31cfecc418b3",
+        download_exclude=("pytorch_model.bin", "onnx/*", "openvino/*", ".eval_results/*"),
+    ),
+    # Gabarito de 2026-09-03 (8 entrevistas, 12 consultas): e5-large-instruct
+    # hit@1 0,92 / P@5 0,82 contra 0,83 / 0,75 do granite-311m e 0,67 / 0,60
+    # do e5-small — vira o tier de qualidade (1,1 GB, MIT, instrucao em pt).
+    ModelAsset(
+        "search_encoder_hq",
+        "Busca por sentido (qualidade)",
+        "intfloat/multilingual-e5-large-instruct",
+        "trechos mais certeiros; ~10x o custo do leve em CPU (ideal com placa de video)",
+        estimated_gb=1.1,
+        revision="274baa43b0e13e37fafa6428dbc7938e62e5c439",
+        download_exclude=("onnx/*", "openvino/*", "pytorch_model.bin"),
+    ),
+    ModelAsset(
+        "search_reranker",
+        "Reordenador da busca (cross-encoder)",
+        "BAAI/bge-reranker-v2-m3",
+        "le pergunta e trecho juntos e diz o que realmente responde",
+        estimated_gb=2.3,
+        revision="953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e",
+        download_exclude=("assets/*",),
     ),
 )
 

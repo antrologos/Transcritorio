@@ -28,7 +28,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 _tmp = Path(tempfile.mkdtemp(prefix="toy_diarize_serve_"))
-os.environ["TRANSCRITORIO_APP_DATA"] = str(_tmp / "appdata")
+os.environ["TRANSCRITORIO_HOME"] = str(_tmp / "appdata")
 os.environ["TRANSCRITORIO_MODEL_CACHE"] = str(_tmp / "models")
 
 try:

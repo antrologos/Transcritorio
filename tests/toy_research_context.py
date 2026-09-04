@@ -42,4 +42,23 @@ with tempfile.TemporaryDirectory() as tmp:
     assert rc.known_names(text) == ["Carlos Alberto", "IBGE"]
     print("PASS: known_names")
 
+    # is_filled: o template intocado NAO vai para os prompts da AI
+    assert rc.is_filled("") is False
+    assert rc.is_filled(rc.TEMPLATE) is False, "template puro nao e contexto"
+    assert rc.is_filled(rc.TEMPLATE + "\n") is False
+    assert rc.is_filled(rc.TEMPLATE.replace(
+        "(Descreva em poucas linhas: tema, objetivo, populacao entrevistada.)",
+        "Entrevistas com recenseadores do Censo 2022.")) is True
+    assert rc.is_filled("## Nomes conhecidos\n- IBGE\n") is True
+    assert rc.is_filled("# So um titulo\n\n(so instrucao)\n") is False
+    print("PASS: is_filled")
+
+    # e o comando do worker so leva --context-file quando ha conteudo
+    from transcribe_pipeline import ask as _ask
+    rc.context_path(paths).write_text(rc.TEMPLATE, encoding="utf-8")
+    assert _ask.context_worth_sending(paths) is False
+    rc.context_path(paths).write_text(rc.TEMPLATE + "\nEstudo sobre o Censo.\n", encoding="utf-8")
+    assert _ask.context_worth_sending(paths) is True
+    print("PASS: context_worth_sending")
+
 print("PASS: toy_research_context")

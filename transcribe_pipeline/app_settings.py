@@ -86,6 +86,24 @@ def alignment_default() -> bool:
     return install_profile() != "essencial"
 
 
+SEARCH_MAX_RESULTS_DEFAULT = 20
+SEARCH_MAX_RESULTS_RANGE = (5, 100)
+
+
+def search_max_results() -> int:
+    """Quantos trechos a janela Perguntar traz NO MAXIMO (por maquina).
+
+    Padrao 20 (decisao do usuario 2026-09-03: mais que os 8 antigos), mas
+    a busca so devolve os que tratam do tema — pode vir menos.
+    """
+    try:
+        valor = int(load().get("search_max_results", SEARCH_MAX_RESULTS_DEFAULT))
+    except (TypeError, ValueError):
+        return SEARCH_MAX_RESULTS_DEFAULT
+    lo, hi = SEARCH_MAX_RESULTS_RANGE
+    return max(lo, min(hi, valor))
+
+
 def language_default() -> str:
     """Idioma default de projetos NOVOS (escolha do assistente, etapa 4).
 

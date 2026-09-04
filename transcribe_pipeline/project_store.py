@@ -609,6 +609,14 @@ def normalize_project(project: dict[str, Any], paths: Paths, config: dict[str, A
     result["defaults"] = defaults
     result.setdefault("interview_order", [])
     result.setdefault("manual_order_active", False)
+    # Quem entra na analise (temas e codificacao): None = todos os falantes,
+    # lista = os rotulos que contam. `coding_speakers_asked` distingue "o
+    # usuario escolheu todos" de "ainda nao perguntamos" — a janela de temas
+    # pergunta uma vez, na primeira descoberta. Dado do PROJETO, nao
+    # preferencia do app: muda com o desenho da pesquisa (entrevista, grupo
+    # focal) e vale para todas as entrevistas dele.
+    result.setdefault("coding_speakers", None)
+    result.setdefault("coding_speakers_asked", False)
     return result
 
 
