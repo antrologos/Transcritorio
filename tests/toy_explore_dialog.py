@@ -51,6 +51,9 @@ win.refresh_interviews()
 app.processEvents()
 search.encoder_cached = lambda *a, **k: True  # type: ignore[assignment]
 search.reranker_cached = lambda: True  # type: ignore[assignment]
+# O rotulo do botao segue a maquina (desde 2026-09-04). A maquina do teste tem
+# de ser declarada, senao o resultado depende de haver placa NVIDIA no runner.
+win._capability_state = lambda key: ("pronta", "", 8.7)  # type: ignore[method-assign]
 dlg = ExploreDialog(win)
 dlg.show()
 app.processEvents()
