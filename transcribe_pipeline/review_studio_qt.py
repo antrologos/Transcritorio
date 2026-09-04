@@ -7215,15 +7215,104 @@ if QT_IMPORT_ERROR is None:
             self.play_action.triggered.connect(self.toggle_playback)
             self.addAction(self.play_action)
 
-            self.seek_back_action = QAction("Voltar 5s", self)
+            self.seek_back_action = QAction("Voltar 5 segundos", self)
             self.seek_back_action.setShortcut(QKeySequence("Ctrl+Left"))
             self.seek_back_action.triggered.connect(lambda: self.seek_relative(-5))
             self.addAction(self.seek_back_action)
 
-            self.seek_forward_action = QAction("Avancar 5s", self)
+            self.seek_forward_action = QAction("Avançar 5 segundos", self)
             self.seek_forward_action.setShortcut(QKeySequence("Ctrl+Right"))
             self.seek_forward_action.triggered.connect(lambda: self.seek_relative(5))
             self.addAction(self.seek_forward_action)
+
+            # --- Atalhos do Estúdio (2026-09-04) ---------------------------
+            # Uma hora de entrevista tem ~219 blocos, e cada um custava idas ao
+            # mouse: ouvir, voltar, corrigir, juntar, seguir. O problema é que
+            # com o cursor DENTRO do texto o QTextEdit consome Espaço, Ctrl+←
+            # e Ctrl+→ (sonda empírica) — os três atalhos de player que já
+            # existiam nunca chegavam a quem estava digitando. A família Alt e
+            # as teclas F sobrevivem: daí a segunda tecla nas ações do player e
+            # o conjunto abaixo, todo ele utilizável sem tirar a mão do texto.
+            self.play_action.setText("Reproduzir/Pausar")
+            self.play_action.setShortcuts([QKeySequence(Qt.Key.Key_Space), QKeySequence("F4")])
+            self.play_action.setToolTip("Reproduz ou pausa. (Espaço; F4 também funciona com o cursor no texto)")
+            self.seek_back_action.setShortcuts([QKeySequence("Ctrl+Left"), QKeySequence("Alt+Left")])
+            self.seek_back_action.setToolTip("Volta 5 segundos. (Ctrl+← ; Alt+← com o cursor no texto)")
+            self.seek_forward_action.setShortcuts([QKeySequence("Ctrl+Right"), QKeySequence("Alt+Right")])
+            self.seek_forward_action.setToolTip("Avança 5 segundos. (Ctrl+→ ; Alt+→ com o cursor no texto)")
+
+            self.seek_back_short_action = QAction("Voltar 2 segundos", self)
+            self.seek_back_short_action.setShortcut(QKeySequence("Alt+Shift+Left"))
+            self.seek_back_short_action.setToolTip("Volta 2 segundos — o passo curto de quem está conferindo uma palavra. (Alt+Shift+←)")
+            self.seek_back_short_action.triggered.connect(lambda: self.seek_relative(-2))
+            self.addAction(self.seek_back_short_action)
+
+            self.seek_forward_short_action = QAction("Avançar 2 segundos", self)
+            self.seek_forward_short_action.setShortcut(QKeySequence("Alt+Shift+Right"))
+            self.seek_forward_short_action.setToolTip("Avança 2 segundos. (Alt+Shift+→)")
+            self.seek_forward_short_action.triggered.connect(lambda: self.seek_relative(2))
+            self.addAction(self.seek_forward_short_action)
+
+            self.repeat_turn_action = QAction("Repetir o bloco", self)
+            self.repeat_turn_action.setShortcut(QKeySequence("F3"))
+            self.repeat_turn_action.setToolTip("Volta ao início do bloco atual e reproduz de novo. (F3)")
+            self.repeat_turn_action.triggered.connect(self.repeat_current_turn)
+
+            self.speed_down_action = QAction("Reproduzir mais devagar", self)
+            self.speed_down_action.setShortcut(QKeySequence("F7"))
+            self.speed_down_action.setToolTip("Um passo mais devagar na velocidade de reprodução. (F7)")
+            self.speed_down_action.triggered.connect(lambda: self._step_playback_speed(-1))
+            self.addAction(self.speed_down_action)
+
+            self.speed_up_action = QAction("Reproduzir mais rápido", self)
+            self.speed_up_action.setShortcut(QKeySequence("F8"))
+            self.speed_up_action.setToolTip("Um passo mais rápido na velocidade de reprodução. (F8)")
+            self.speed_up_action.triggered.connect(lambda: self._step_playback_speed(1))
+            self.addAction(self.speed_up_action)
+
+            self.next_block_action = QAction("Bloco seguinte", self)
+            self.next_block_action.setShortcut(QKeySequence("Alt+Down"))
+            self.next_block_action.setToolTip("Vai para o próximo bloco, leva o áudio junto e deixa o cursor no texto. (Alt+↓)")
+            self.next_block_action.triggered.connect(lambda: self._step_block(1))
+
+            self.prev_block_action = QAction("Bloco anterior", self)
+            self.prev_block_action.setShortcut(QKeySequence("Alt+Up"))
+            self.prev_block_action.setToolTip("Volta ao bloco anterior, leva o áudio junto e deixa o cursor no texto. (Alt+↑)")
+            self.prev_block_action.triggered.connect(lambda: self._step_block(-1))
+
+            self.next_flagged_action = QAction("Próximo bloco marcado", self)
+            self.next_flagged_action.setShortcut(QKeySequence("Alt+Shift+Down"))
+            self.next_flagged_action.setToolTip("Pula para o próximo bloco marcado para conferir. (Alt+Shift+↓)")
+            self.next_flagged_action.triggered.connect(lambda: self._step_flagged(1))
+
+            self.prev_flagged_action = QAction("Bloco marcado anterior", self)
+            self.prev_flagged_action.setShortcut(QKeySequence("Alt+Shift+Up"))
+            self.prev_flagged_action.setToolTip("Volta ao bloco marcado anterior. (Alt+Shift+↑)")
+            self.prev_flagged_action.triggered.connect(lambda: self._step_flagged(-1))
+
+            self.focus_toggle_action = QAction("Alternar foco: lista de blocos / texto", self)
+            self.focus_toggle_action.setShortcut(QKeySequence("F6"))
+            self.focus_toggle_action.setToolTip("Passa o foco do texto para a lista de blocos e de volta. (F6)")
+            self.focus_toggle_action.triggered.connect(self._toggle_studio_focus)
+
+            self.merge_prev_block_action = QAction("Juntar com anterior", self)
+            self.merge_prev_block_action.setShortcut(QKeySequence("Alt+Shift+J"))
+            self.merge_prev_block_action.setToolTip(
+                "Junta este bloco ao bloco de cima quando os falantes forem iguais. (Alt+Shift+J)")
+            self.merge_prev_block_action.triggered.connect(self.merge_current_turn_with_previous)
+
+            self.merge_block_action = QAction("Juntar com próximo", self)
+            self.merge_block_action.setShortcut(QKeySequence("Alt+J"))
+            self.merge_block_action.setToolTip(
+                "Junta este bloco ao bloco seguinte quando os falantes forem iguais. (Alt+J)")
+            self.merge_block_action.triggered.connect(self.merge_current_turn)
+
+            self.split_block_action = QAction("Dividir bloco", self)
+            self.split_block_action.setShortcut(QKeySequence("Alt+D"))
+            self.split_block_action.setToolTip(
+                "Divide o bloco pelo cursor de edição na onda, pela posição do player\n"
+                "ou no tempo exato da palavra sob o cursor do texto. (Alt+D)")
+            self.split_block_action.triggered.connect(self.split_current_turn)
 
         def action_button(self, action: QAction, primary: bool = False) -> QPushButton:
             button = QPushButton(action.text())
@@ -7374,6 +7463,28 @@ if QT_IMPORT_ERROR is None:
             editar_menu.addAction(self.redo_action)
             editar_menu.addSeparator()
             editar_menu.addAction(self.find_action)
+            editar_menu.addSeparator()
+            # Submenu "Bloco e reprodução": é aqui que os atalhos do Estúdio
+            # ficam VISÍVEIS. Atalho que ninguém descobre não economiza clique.
+            bloco_menu = editar_menu.addMenu("Bloco e reprodução")
+            bloco_menu.addAction(self.play_action)
+            bloco_menu.addAction(self.repeat_turn_action)
+            bloco_menu.addAction(self.seek_back_action)
+            bloco_menu.addAction(self.seek_forward_action)
+            bloco_menu.addAction(self.seek_back_short_action)
+            bloco_menu.addAction(self.seek_forward_short_action)
+            bloco_menu.addAction(self.speed_down_action)
+            bloco_menu.addAction(self.speed_up_action)
+            bloco_menu.addSeparator()
+            bloco_menu.addAction(self.prev_block_action)
+            bloco_menu.addAction(self.next_block_action)
+            bloco_menu.addAction(self.prev_flagged_action)
+            bloco_menu.addAction(self.next_flagged_action)
+            bloco_menu.addAction(self.focus_toggle_action)
+            bloco_menu.addSeparator()
+            bloco_menu.addAction(self.merge_prev_block_action)
+            bloco_menu.addAction(self.merge_block_action)
+            bloco_menu.addAction(self.split_block_action)
 
             # --- Entrevista: tudo sobre a entrevista (abrir, transcrever,
             # falantes, propriedades, lista, destrutivas) ---
@@ -8722,7 +8833,7 @@ if QT_IMPORT_ERROR is None:
             self.play_button = QPushButton("Reproduzir")
             self.play_button.setAccessibleName("Reproduzir ou pausar")
             self.play_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
-            self.play_button.setToolTip("Reproduzir ou pausar o áudio da entrevista. (Espaço)")
+            self.play_button.setToolTip("Reproduzir ou pausar o áudio da entrevista. (Espaço; F4 com o cursor no texto)")
             self.play_button.clicked.connect(self.toggle_playback)
             media_controls.addWidget(self.play_button)
             stop_button = QPushButton("Parar")
@@ -8732,18 +8843,15 @@ if QT_IMPORT_ERROR is None:
             media_controls.addWidget(stop_button)
             back_button = QPushButton("-5s")
             back_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaSeekBackward))
-            back_button.setToolTip("Voltar 5 segundos no áudio. (Ctrl+Esquerda)")
+            back_button.setToolTip("Voltar 5 segundos no áudio. (Ctrl+Esquerda; Alt+Esquerda com o cursor no texto)")
             back_button.clicked.connect(lambda: self.seek_relative(-5))
             media_controls.addWidget(back_button)
             forward_button = QPushButton("+5s")
             forward_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaSeekForward))
-            forward_button.setToolTip("Avançar 5 segundos no áudio. (Ctrl+Direita)")
+            forward_button.setToolTip("Avançar 5 segundos no áudio. (Ctrl+Direita; Alt+Direita com o cursor no texto)")
             forward_button.clicked.connect(lambda: self.seek_relative(5))
             media_controls.addWidget(forward_button)
-            repeat_button = QPushButton("Repetir bloco")
-            repeat_button.setToolTip("Reproduzir novamente o trecho do bloco selecionado na tabela.")
-            repeat_button.clicked.connect(self.repeat_current_turn)
-            media_controls.addWidget(repeat_button)
+            media_controls.addWidget(self.action_button(self.repeat_turn_action))
             self.position_slider = QSlider(Qt.Orientation.Horizontal)
             self.position_slider.setAccessibleName("Posição do áudio")
             self.position_slider.setToolTip("Arraste para navegar no áudio da entrevista.")
@@ -8754,7 +8862,7 @@ if QT_IMPORT_ERROR is None:
             media_controls.addWidget(self.time_label)
             self.speed_combo = QComboBox()
             self.speed_combo.setAccessibleName("Velocidade de reprodução")
-            self.speed_combo.setToolTip("Velocidade de reprodução do áudio (0.75x a 2.0x).")
+            self.speed_combo.setToolTip("Velocidade de reprodução do áudio (0.75x a 2.0x). F7 diminui, F8 aumenta.")
             for label, rate in [("0.75x", 0.75), ("1.0x", 1.0), ("1.25x", 1.25), ("1.5x", 1.5), ("2.0x", 2.0)]:
                 self.speed_combo.addItem(label, rate)
             self.speed_combo.setCurrentIndex(1)
@@ -9023,15 +9131,14 @@ if QT_IMPORT_ERROR is None:
             self.save_block_button.setToolTip("Salva as alterações do bloco atual. Trocar de bloco também salva automaticamente.")
             self.save_block_button.clicked.connect(lambda _checked=False: self.save_current_turn(force=True))
             button_row.addWidget(self.save_block_button)
-            self.merge_button = QPushButton("Juntar com próximo")
-            self.merge_button.setToolTip("Junta este bloco ao bloco seguinte quando os falantes forem iguais.")
-            self.merge_button.clicked.connect(self.merge_current_turn)
+            # Ordem de leitura: anterior à esquerda, próximo à direita. Os três
+            # são espelhos das ações (action_button): um só estado, um só
+            # tooltip, e o atalho aparece escrito no botão que o usuário já usa.
+            self.merge_prev_button = self.action_button(self.merge_prev_block_action)
+            button_row.addWidget(self.merge_prev_button)
+            self.merge_button = self.action_button(self.merge_block_action)
             button_row.addWidget(self.merge_button)
-            self.split_button = QPushButton("Dividir bloco")
-            self.split_button.setToolTip(
-                "Divide o bloco pelo cursor de edição na onda, pela posição do player\n"
-                "ou no tempo exato da palavra sob o cursor do texto.")
-            self.split_button.clicked.connect(self.split_current_turn)
+            self.split_button = self.action_button(self.split_block_action)
             button_row.addWidget(self.split_button)
             button_row.addStretch()
             grid.addLayout(button_row, 3, 0, 1, 4)
@@ -11274,10 +11381,15 @@ if QT_IMPORT_ERROR is None:
                              reason_busy if busy else reason_project)
             if hasattr(self, "save_block_button"):
                 self.save_block_button.setEnabled(not busy and has_turn)
-            if hasattr(self, "merge_button"):
-                self.merge_button.setEnabled(not busy and has_turn)
-            if hasattr(self, "split_button"):
-                self.split_button.setEnabled(not busy and has_turn)
+            # Bloco aberto: as ações e os três botões que as espelham. O motivo
+            # vai no tooltip — botão cinza sem explicação foi reclamação de campo.
+            motivo_bloco = reason_busy if busy else "Abra uma entrevista e escolha um bloco."
+            for acao_bloco in (self.merge_prev_block_action, self.merge_block_action,
+                               self.split_block_action, self.repeat_turn_action,
+                               self.next_block_action, self.prev_block_action,
+                               self.next_flagged_action, self.prev_flagged_action,
+                               self.focus_toggle_action):
+                self._set_action(acao_bloco, not busy and has_turn, motivo_bloco)
             if hasattr(self, "transcribe_current_button"):
                 self.transcribe_current_button.setVisible(has_untranscribed_open_file)
                 self.transcribe_current_button.setEnabled(not busy and has_untranscribed_open_file)
@@ -11343,48 +11455,67 @@ if QT_IMPORT_ERROR is None:
             self.turn_table.item(index, 2).setToolTip(text)
             self.turn_table.item(index, 3).setText(display_flags(turn))
 
-        def merge_current_turn(self) -> None:
+        def _back_to_text(self, mensagem: str) -> None:
+            """Anuncia na linha de estado e DEVOLVE O FOCO ao texto.
+
+            O foco importa mais do que parece: depois de clicar num botão de
+            bloco ele ficava no botão, e daí o Ctrl+Z escapava do editor (ver
+            `_undo_belongs_to_editor`). Devolver o foco também deixa o próximo
+            atalho de teclado funcionar sem passar pelo mouse."""
+            self.progress_label.setText(mensagem)
+            if hasattr(self, "text_edit"):
+                self.text_edit.setFocus()
+
+        def _edit_warning(self, mensagem: str) -> None:
+            """Erro de edição de bloco na faixa de estado, não em janela modal
+            (padrão da R4). Pisca em WARN e volta ao normal."""
+            self.progress_label.setText(mensagem)
+            try:
+                self.progress_label.setStyleSheet(f"color: {ui_tokens.WARN}; font-weight: 600;")
+                QTimer.singleShot(2500, lambda: self.progress_label.setStyleSheet(""))
+            except Exception:  # noqa: BLE001 - aviso nunca derruba a edicao
+                pass
+            if hasattr(self, "text_edit"):
+                self.text_edit.setFocus()
+
+        def merge_current_turn_with_previous(self) -> None:
+            """Junta com o bloco de cima. O contorno — subir um bloco e juntar
+            para a frente — troca o bloco aberto e faz perder o cursor."""
+            self.merge_current_turn(para_tras=True)
+
+        def merge_current_turn(self, *_args: object, para_tras: bool = False) -> None:
             if not self.review or not self.current_interview_id or not self.current_turn_id:
                 return
-            reply = QMessageBox.question(
-                self, "Juntar blocos",
-                "Isso vai juntar este bloco com o próximo, removendo a divisão entre eles.\n\nDeseja continuar?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if reply != QMessageBox.StandardButton.Yes:
-                return
+            # Sem confirmação (2026-09-04): juntar não apaga nada, não perde
+            # texto e tem desfazer completo — e era uma das duas caixas fixas
+            # de um ciclo de 219 blocos por hora de áudio. O aviso vai para a
+            # linha de estado, com o Ctrl+Z dito por extenso.
             if not self.save_current_turn():
                 return
             before = deepcopy(self.review)
+            juntar = review_store.merge_turn_with_previous if para_tras else review_store.merge_turn_with_next
             try:
-                merged_id = review_store.merge_turn_with_next(self.review, self.current_turn_id)
+                merged_id = juntar(self.review, self.current_turn_id)
                 app_service.save_review(self.context, self.current_interview_id, self.review)
                 self.turns = review_store.review_turns(self.review)
                 self.load_turn_table()
                 self.select_turn_by_index(review_store.find_turn_index(self.review, merged_id), seek=False)
                 self.undo_stack.push(ReviewSnapshotCommand(self, "Juntar blocos", before, self.review, merged_id))
                 self.set_save_state(saved_status_message())
+                self._back_to_text("Blocos juntados. Ctrl+Z desfaz.")
             except Exception as exc:
-                QMessageBox.warning(self, "Não foi possível juntar", sanitize_message(str(exc)))
+                self._edit_warning(f"Não foi possível juntar: {sanitize_message(str(exc))}")
 
         def split_current_turn(self) -> None:
             if not self.review or not self.current_interview_id or not self.current_turn_id:
                 return
-            reply = QMessageBox.question(
-                self, "Dividir bloco",
-                "Isso vai dividir este bloco em dois na posição atual do cursor.\n\nDeseja continuar?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if reply != QMessageBox.StandardButton.Yes:
-                return
+            # Sem confirmação: dividir é reversível por inteiro (ver merge).
             if not self.save_current_turn():
                 return
             try:
                 current_index = review_store.find_turn_index(self.review, self.current_turn_id)
             except KeyError as exc:
-                QMessageBox.warning(self, "Não foi possível dividir", sanitize_message(str(exc)))
+                self._edit_warning(f"Não foi possível dividir: {sanitize_message(str(exc))}")
                 return
             before = deepcopy(self.review)
             current_turn = self.turns[current_index]
@@ -11414,9 +11545,9 @@ if QT_IMPORT_ERROR is None:
                 self.waveform_widget.set_edit_cursor(split_time)
                 self.undo_stack.push(ReviewSnapshotCommand(self, "Dividir bloco", before, self.review, new_id))
                 self.set_save_state(saved_status_message())
-                self.progress_label.setText(f"Bloco dividido; {split_note}. Ajuste Início/Fim se necessário.")
+                self._back_to_text(f"Bloco dividido; {split_note}. Ctrl+Z desfaz.")
             except Exception as exc:
-                QMessageBox.warning(self, "Não foi possível dividir", sanitize_message(str(exc)))
+                self._edit_warning(f"Não foi possível dividir: {sanitize_message(str(exc))}")
 
         def use_player_as_start(self) -> None:
             self.apply_player_time_to_boundary("start")
@@ -11853,15 +11984,37 @@ if QT_IMPORT_ERROR is None:
             else:
                 self.progress_label.setText(f"{n} arquivos enviados para a Lixeira. Ctrl+Z para desfazer.")
 
+        def _undo_belongs_to_editor(self) -> bool:
+            """O Ctrl+Z deve desfazer uma edição da transcrição (e não a
+            exclusão de um arquivo)? Sim quando há algo desfeito a desfazer E o
+            foco está dentro do painel de revisão — inclusive quando ele está
+            num BOTÃO desse painel, que é onde ele fica logo depois de Juntar
+            ou Dividir."""
+            if not (hasattr(self, "undo_action") and self.undo_action.isEnabled()):
+                return False
+            foco = QApplication.focusWidget()
+            if foco is None:
+                return False
+            if isinstance(foco, QTextEdit) and not foco.isReadOnly():
+                return True
+            painel = getattr(self, "review_splitter", None)
+            return bool(painel is not None and (painel is foco or painel.isAncestorOf(foco)))
+
         def undo_last_trash(self, *_args: Any) -> None:
-            if self._trash_busy or self.context is None or not self._trash_undo:
+            if self._trash_busy or self.context is None:
                 return
-            # Guard: se foco esta em QTextEdit editavel, delegar para o undo_action do editor
-            focus = QApplication.focusWidget()
-            if isinstance(focus, QTextEdit) and not focus.isReadOnly():
-                # Delegar ao undo nativo do editor (ou QUndoStack via undo_action)
+            # A quem pertence o Ctrl+Z agora? Ate 2026-09-04 a pergunta era
+            # "o foco esta num QTextEdit editavel?" — e depois de clicar em
+            # "Juntar" ou "Dividir" o foco fica no BOTAO, entao o Ctrl+Z
+            # escapava do editor e caia aqui: no melhor caso nao fazia nada, no
+            # pior restaurava um ARQUIVO da Lixeira em vez de desfazer a fusao.
+            # Agora basta o foco estar dentro do painel de revisao e haver algo
+            # a desfazer; a Lixeira so fica com o Ctrl+Z na lista de arquivos.
+            if self._undo_belongs_to_editor():
                 if hasattr(self, "undo_action") and self.undo_action.isEnabled():
                     self.undo_action.trigger()
+                return
+            if not self._trash_undo:
                 return
             trash_id = self._trash_undo[-1]
             try:
@@ -12169,6 +12322,64 @@ if QT_IMPORT_ERROR is None:
                 return
             target = max(0, min(self.player.duration(), self.player.position() + (seconds * 1000)))
             self.seek_player(target)
+
+        def _step_playback_speed(self, step: int) -> None:
+            """Um passo na velocidade de reprodução (F7/F8). Anda pela mesma
+            lista do seletor: nunca inventa valor fora dela."""
+            if not hasattr(self, "speed_combo"):
+                return
+            alvo = self.speed_combo.currentIndex() + step
+            if alvo < 0 or alvo >= self.speed_combo.count():
+                return
+            self.speed_combo.setCurrentIndex(alvo)   # dispara update_playback_rate
+            # Sem roubar o foco: F7/F8 valem tanto no texto quanto na lista.
+            self.progress_label.setText(f"Velocidade de reprodução: {self.speed_combo.currentText()}.")
+
+        def _step_block(self, step: int) -> None:
+            """Bloco seguinte/anterior levando o áudio junto e devolvendo o
+            cursor ao texto — o ciclo inteiro sem tocar no mouse."""
+            if not self.review or not self.turns:
+                return
+            atual = self.turn_table.currentRow()
+            if atual < 0:
+                atual = -1 if step > 0 else len(self.turns)
+            alvo = atual + step
+            if alvo < 0:
+                self._back_to_text("Este já é o primeiro bloco.")
+                return
+            if alvo >= len(self.turns):
+                self._back_to_text("Este já é o último bloco.")
+                return
+            self.select_turn_by_index(alvo, seek=True)
+            item = self.turn_table.item(alvo, 0)
+            if item is not None:
+                self.turn_table.scrollToItem(item)
+            if hasattr(self, "text_edit"):
+                self.text_edit.setFocus()
+
+        def _step_flagged(self, step: int) -> None:
+            """Próximo/anterior bloco marcado para conferir (cíclico, como os
+            botões ‹ › da faixa de marcações)."""
+            if not self.review:
+                return
+            if not self._boundary_suspect_rows():
+                self._back_to_text("Nenhum bloco marcado para conferir nesta entrevista.")
+                return
+            self._on_boundary_nav(step)
+            if hasattr(self, "text_edit"):
+                self.text_edit.setFocus()
+
+        def _toggle_studio_focus(self) -> None:
+            """F6: vai e volta entre a lista de blocos e o texto. Sem ele, sair
+            do texto para navegar exigia o mouse."""
+            if not hasattr(self, "text_edit") or not hasattr(self, "turn_table"):
+                return
+            if self.text_edit.hasFocus():
+                self.turn_table.setFocus()
+                self.progress_label.setText("Foco na lista de blocos. F6 volta ao texto.")
+            else:
+                self.text_edit.setFocus()
+                self.progress_label.setText("Foco no texto do bloco. F6 vai para a lista.")
 
         def repeat_current_turn(self) -> None:
             if not self.review or not self.current_turn_id:

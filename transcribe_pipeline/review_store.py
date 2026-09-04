@@ -308,6 +308,20 @@ def set_turn_flags(review: dict[str, Any], turn_id: str, flags: list[str]) -> No
     record_edit(review, "set_flags", turn_id)
 
 
+def merge_turn_with_previous(review: dict[str, Any], turn_id: str) -> str:
+    """Junta este bloco com o ANTERIOR; devolve o id do bloco que sobrou.
+
+    Pedido do usuario (2026-09-04): so existia juntar com o proximo, e o
+    contorno — clicar no bloco de cima e juntar para a frente — troca o bloco
+    aberto e perde o cursor. Nao ha logica de fusao nova aqui: e o mesmo
+    caminho ja testado, aplicado ao bloco anterior."""
+    turns = review_turns(review)
+    index = find_turn_index(review, turn_id)
+    if index <= 0:
+        raise ValueError("Este é o primeiro bloco: não há bloco anterior para juntar.")
+    return merge_turn_with_next(review, str(turns[index - 1].get("id")))
+
+
 def merge_turn_with_next(review: dict[str, Any], turn_id: str) -> str:
     turns = review_turns(review)
     index = find_turn_index(review, turn_id)
@@ -317,7 +331,8 @@ def merge_turn_with_next(review: dict[str, Any], turn_id: str) -> str:
     following = turns.pop(index + 1)
     if turn_speaker_key(current) != turn_speaker_key(following):
         turns.insert(index + 1, following)
-        raise ValueError("Não é possível fundir turnos de falantes diferentes. Troque o falante primeiro, se essa for a correção desejada.")
+        raise ValueError("Não é possível juntar blocos de falantes diferentes. "
+                         "Troque o falante primeiro, se essa for a correção desejada.")
     current["start"] = min(float(current.get("start", 0) or 0), float(following.get("start", 0) or 0))
     current["end"] = max(float(current.get("end", 0) or 0), float(following.get("end", 0) or 0))
     current["text"] = " ".join([str(current.get("text", "")).strip(), str(following.get("text", "")).strip()]).strip()

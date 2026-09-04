@@ -2,6 +2,27 @@
 
 ## Em desenvolvimento (ramo beta)
 
+- **O Estúdio de Transcrição sem tirar a mão do teclado.** Revisar era "muito clicar":
+  uma hora de entrevista tem cerca de 219 blocos, e cada um custava idas ao mouse para
+  ouvir, voltar, corrigir, juntar e seguir. Três coisas mudaram.
+  - **Atalhos que funcionam com o cursor dentro do texto.** Os três que existiam (Espaço,
+    Ctrl+← e Ctrl+→) nunca chegavam a quem estava digitando: o editor de texto consome as
+    três teclas. Agora há uma família que sobrevive — **F4** reproduz/pausa, **F3** repete
+    o bloco, **Alt+←/→** andam 5 segundos, **Alt+Shift+←/→** andam 2, **F7/F8** mudam a
+    velocidade, **Alt+↓/↑** vão para o bloco seguinte/anterior levando o áudio junto,
+    **Alt+Shift+↓/↑** pulam de um bloco marcado para o outro, **F6** troca o foco entre a
+    lista e o texto, **Alt+J** junta com o próximo, **Alt+Shift+J** com o anterior e
+    **Alt+D** divide. Os antigos continuam valendo. Todos aparecem escritos em
+    Editar → Bloco e reprodução.
+  - **"Juntar com anterior".** Só existia juntar com o próximo; para juntar com o bloco de
+    cima era preciso subir um bloco e juntar para a frente — o que troca o bloco aberto e
+    faz perder o cursor e o ponto de reprodução.
+  - **Sem caixas de confirmação em juntar e dividir.** Nenhuma das duas apaga texto e as
+    duas têm desfazer completo; eram duas caixas por bloco num ciclo de 219. O aviso agora
+    vai para a linha de estado, dizendo que Ctrl+Z desfaz. Junto com isso, o Ctrl+Z parou
+    de escapar do editor logo depois de clicar num desses botões (o foco ficava no botão e
+    o Ctrl+Z podia cair no "desfazer exclusão de arquivo" da Lixeira).
+
 - **Áudio curto e a contagem de falantes.** Um teste com um recorte de 1 minuto voltou
   com a separação de vozes "ruim": o app passava ao pyannote `num_speakers: 2`, que é uma
   ordem e não uma dica — o agrupamento fica obrigado a devolver dois grupos e, num trecho
