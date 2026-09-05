@@ -117,6 +117,13 @@ def create_project(project_root: Path, project_name: str | None = None) -> Proje
     ensure_directories(paths)
     context = build_context(config_path, config, paths, [])
     project_store.write_project_readme_if_missing(paths)
+    # Contexto da pesquisa (roteiro, codebook, nomes) nasce com o projeto
+    # (2026-09-03): antes so o glossario o criava e o Perguntar rodava cego.
+    try:
+        from .research_context import write_template_if_missing
+        write_template_if_missing(paths)
+    except Exception:  # noqa: BLE001 - opcional, nunca impede criar o projeto
+        pass
     if project_name:
         context.project["project_name"] = project_name
         context = save_project_metadata(context)

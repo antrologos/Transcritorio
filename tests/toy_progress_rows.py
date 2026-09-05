@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 _tmp_home = tempfile.mkdtemp(prefix="toy_progress_rows_")
-os.environ["TRANSCRITORIO_APP_DATA"] = str(Path(_tmp_home) / "appdata")
+os.environ["TRANSCRITORIO_HOME"] = str(Path(_tmp_home) / "appdata")
 os.environ["TRANSCRITORIO_MODEL_CACHE"] = str(Path(_tmp_home) / "models")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 

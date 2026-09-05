@@ -3921,7 +3921,7 @@ wheels = [
 
 [[package]]
 name = "transcritorio"
-version = "0.2.8"
+version = "0.3.0b1"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },

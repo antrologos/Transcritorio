@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 _tmp_home = tempfile.mkdtemp(prefix="toy_busy_hint_")
-os.environ["TRANSCRITORIO_APP_DATA"] = str(Path(_tmp_home) / "appdata")
+os.environ["TRANSCRITORIO_HOME"] = str(Path(_tmp_home) / "appdata")
 os.environ["TRANSCRITORIO_MODEL_CACHE"] = str(Path(_tmp_home) / "models")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -97,7 +97,7 @@ win.start_worker = _boom  # type: ignore[method-assign]
 win.explore_action.trigger()
 app.processEvents()
 assert getattr(win, "_explore_dialog", None) is None, "abriu a janela Perguntar durante o lote"
-assert "\"Perguntar às entrevistas com AI\"" in win.busy_hint_label.text(), win.busy_hint_label.text()
+assert "\"Buscar por sentido e perguntar\"" in win.busy_hint_label.text(), win.busy_hint_label.text()
 assert "uma tarefa por vez" in win.busy_hint_label.text()
 win.run_glossario_job()
 assert "\"Glossário de nomes com AI\"" in win.busy_hint_label.text()

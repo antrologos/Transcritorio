@@ -102,7 +102,7 @@ with patch.object(runtime, "model_cache_dir", return_value=cache_root):
 # E4-4) + 2 fixos + 15 pacotes de idioma (etapa 4; pt ja esta nos fixos)
 # + 1 MMS coringa + 3 opcionais + 1 orfao = 28; +1 no Windows (linha da
 # aceleracao GPU do Parakeet, so win32 nao-frozen)
-esperado = 28 + (1 if sys.platform == "win32" else 0)
+esperado = 30 + (1 if sys.platform == "win32" else 0)  # busca v3: +encoder hq, +reordenador
 assert dlg.table.rowCount() == esperado, \
     f"esperava {esperado} linhas, got {dlg.table.rowCount()}"
 check(f"1.1 tabela com {dlg.table.rowCount()} linhas")

@@ -13,6 +13,7 @@ import glob
 import re
 import subprocess
 import sys
+import threading
 import time
 import wave
 from bisect import bisect_left
@@ -97,6 +98,7 @@ try:
         QTableWidget,
         QTableWidgetItem,
         QTabWidget,
+        QTextBrowser,
         QTextEdit,
         QToolButton,
         QTreeWidget,
@@ -174,16 +176,82 @@ def _promote_staging_to_files(
         raise last_error or OSError("nao foi possivel promover staging para files")
 
 
-def similarity_label(similarity: float) -> str:
+def fmt_gb(value: float) -> str:
+    """Tamanho em GB no formato do guia: virgula decimal, sem casa quando
+    inteiro ("8,7 GB", "3 GB")."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "? GB"
+    if abs(number - round(number)) < 0.05:
+        return f"{int(round(number))} GB"
+    return f"{number:.1f}".replace(".", ",") + " GB"
+
+
+def render_answer_html(resposta: str, n_trechos: int, ids: tuple[str, ...] = ()) -> str:
+    """Resposta da AI em HTML com as citacoes clicaveis (pura).
+
+    [n] com 1 <= n <= n_trechos vira <a href="trecho:n">; [ID] de uma
+    entrevista conhecida vira <a href="entrevista:ID">; o resto e escapado.
+    """
+    import html as _html
+    import re as _re
+
+    known = {str(i) for i in ids}
+
+    def _sub(match: "_re.Match[str]") -> str:
+        inner = match.group(1)
+        if inner.isdigit() and 1 <= int(inner) <= int(n_trechos):
+            return f'<a href="trecho:{int(inner)}">[{inner}]</a>'
+        if inner in known:
+            return f'<a href="entrevista:{_html.escape(inner)}">[{_html.escape(inner)}]</a>'
+        return f"[{_html.escape(inner)}]"
+
+    escaped = _html.escape(str(resposta or ""))
+    linked = _re.sub(r"\[([^\[\]\n]{1,80})\]", _sub, escaped)
+    return "<p>" + linked.replace("\n\n", "</p><p>").replace("\n", "<br>") + "</p>"
+
+
+def results_footer_text(result: dict[str, Any]) -> str:
+    """Rodape honesto da busca (pura): quantos trechos tratam do tema, de
+    ate quantos, e se o corte veio do reordenador ou so da semelhanca."""
+    hits = result.get("hits") or []
+    n = len(hits)
+    max_results = int(result.get("max_results") or 0)
+    considered = int(result.get("considered") or 0)
+    if n == 0:
+        base = "Nenhum trecho trata disso de perto."
+    else:
+        plural = n != 1
+        base = f"{n} trecho{'s' if plural else ''} trata{'m' if plural else ''} disso"
+        if max_results:
+            base += f" (de até {max_results})"
+        base += "."
+        if considered > n:
+            base += " O restante ficou fora por não tratar do tema."
+    if not result.get("reranked"):
+        base += (" Ordenados só pela semelhança — a busca de qualidade (Gerenciar modelos) "
+                 "faz um corte mais certeiro.")
+    return base
+
+
+def relevance_label(hit: dict[str, Any]) -> str:
     """Grau de proximidade em linguagem simples (nunca numeros na UI).
 
-    Limiares dos dados reais de 2026-08-26: hits certeiros vieram a
-    0,56-0,64; a cauda relacionada a 0,35-0,45.
+    v3 (2026-09-03): RELATIVO ao escopo — `z` = desvios acima da media dos
+    cossenos de todas as passagens consultadas (search.rank_semantic). Um
+    piso absoluto nao separa nada num encoder de recuperacao (cossenos
+    comprimidos em 0,7-0,9), e os limiares antigos (0,55) rotulavam tudo
+    "muito proximo". O reordenador (etapa seguinte) refina isto.
     """
-    if similarity >= 0.55:
-        return "muito proximo"
-    if similarity >= 0.45:
-        return "proximo"
+    try:
+        z = float(hit.get("z", 0) or 0)
+    except (TypeError, ValueError):
+        z = 0.0
+    if z >= 3.0:
+        return "muito próximo"
+    if z >= 2.0:
+        return "próximo"
     return "relacionado"
 
 
@@ -236,6 +304,16 @@ def boundary_flagged_rows(turns: list[dict[str, Any]]) -> list[int]:
             rows.append(index)
     return rows
 APP_NAME = "Transcrit\u00f3rio"
+
+
+def channel_suffix(channel: str | None = None) -> str:
+    """Sufixo do titulo quando o app roda num canal de teste (puro).
+    "" no canal normal; " \u2014 vers\u00e3o de teste (beta 0.3.0b1)" na beta."""
+    from . import __version__
+    nome = (channel if channel is not None else os.environ.get("TRANSCRITORIO_CHANNEL", "")).strip()
+    if not nome:
+        return ""
+    return f" \u2014 vers\u00e3o de teste ({nome} {__version__})"
 APP_CREDITS = "Rog\u00e9rio Jer\u00f4nimo Barbosa - https://antrologos.github.io/"
 APP_ICON_FILE = "transcritorio_icon.svg"
 WAVEFORM_CACHE_VERSION = 1
@@ -3038,6 +3116,29 @@ if QT_IMPORT_ERROR is None:
                     "Desmarcada: este lote sai só com o texto; a lista oferece "
                     "\"Separar falantes agora\" para completar depois, em lote.")
                 layout.addWidget(self.diarize_now_check)
+            # Uso do computador: escolha da MÁQUINA (app_settings), oferecida
+            # aqui porque é onde a decisão acontece — a pessoa está prestes a
+            # entregar o computador a um lote longo. Só aparece sem placa de
+            # vídeo, que é quando o processador é o recurso disputado.
+            self.uso_rapido_radio: QRadioButton | None = None
+            self.uso_leve_radio: QRadioButton | None = None
+            if estimate_text:
+                from . import app_settings as _st_uso
+
+                layout.addWidget(QLabel("Enquanto o lote roda:"))
+                self.uso_rapido_radio = QRadioButton("Mais rápido — usa o computador inteiro")
+                self.uso_rapido_radio.setToolTip(
+                    "O computador fica lento para as outras tarefas enquanto transcreve.")
+                self.uso_leve_radio = QRadioButton("Posso usar o computador enquanto roda")
+                self.uso_leve_radio.setToolTip(
+                    "Usa metade da máquina: cerca de 25% mais devagar, com a "
+                    "transcrição idêntica (medido em 2026-09-05).")
+                if _st_uso.computer_use() == "metade":
+                    self.uso_leve_radio.setChecked(True)
+                else:
+                    self.uso_rapido_radio.setChecked(True)
+                layout.addWidget(self.uso_rapido_radio)
+                layout.addWidget(self.uso_leve_radio)
             buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
             buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Transcrever")
             buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Cancelar")
@@ -3048,6 +3149,12 @@ if QT_IMPORT_ERROR is None:
         def diarize_now(self) -> bool:
             """Decisao do lote: True sem a caixa (GPU) ou com ela marcada."""
             return True if self.diarize_now_check is None else self.diarize_now_check.isChecked()
+
+        def computer_use(self) -> str | None:
+            """Escolha de uso do computador, ou None quando nem foi oferecida."""
+            if self.uso_leve_radio is None:
+                return None
+            return "metade" if self.uso_leve_radio.isChecked() else "tudo"
 
         def updates(self) -> dict[str, str]:
             """Mesmas chaves do MetadataDialog + marcador speaker_setup."""
@@ -3368,17 +3475,35 @@ if QT_IMPORT_ERROR is None:
 
 
     class CallableWorker(QThread):
-        """Roda um callable em thread; progresso e resultado viram sinais."""
+        """Roda um callable em thread; progresso e resultado viram sinais.
+
+        Cancelavel (2026-09-03): fn pode aceitar um segundo parametro
+        `should_cancel` (callable -> bool); request_cancel() aciona o
+        Event — run_ask/run_visao_geral ja honram e matam o subprocesso."""
         progress = Signal(dict)
         done = Signal(object, str)
 
         def __init__(self, fn, parent=None) -> None:
             super().__init__(parent)
-            self._fn = fn  # fn(progress_emit) -> result
+            import threading as _threading
+            self._fn = fn  # fn(progress_emit[, should_cancel]) -> result
+            self.cancelled = _threading.Event()
+
+        def request_cancel(self) -> None:
+            self.cancelled.set()
 
         def run(self) -> None:  # noqa: D102
+            import inspect as _inspect
             try:
-                self.done.emit(self._fn(self.progress.emit), "")
+                try:
+                    aceita_cancel = len(_inspect.signature(self._fn).parameters) >= 2
+                except (TypeError, ValueError):
+                    aceita_cancel = False
+                if aceita_cancel:
+                    result = self._fn(self.progress.emit, self.cancelled.is_set)
+                else:
+                    result = self._fn(self.progress.emit)
+                self.done.emit(result, "")
             except Exception as exc:  # noqa: BLE001 - GUI boundary
                 self.done.emit(None, str(exc)[:500])
 
@@ -3560,15 +3685,33 @@ if QT_IMPORT_ERROR is None:
                 self._window.open_search_hit(str(interview_id), float(start))
 
         def _start_worker(self, fn, on_done, on_progress=None) -> None:
-            self._worker = CallableWorker(fn, self)
+            worker = CallableWorker(fn, self)
+            self._worker = worker
             if on_progress is not None:
-                self._worker.progress.connect(on_progress)
-            self._worker.done.connect(on_done)
-            self._worker.start()
+                worker.progress.connect(on_progress)
+            worker.done.connect(on_done)
+            # Sem isto, cada etapa deixava um QThread terminado como filho do
+            # dialogo (que fica cacheado pela sessao inteira) e, com ele, a
+            # closure — na janela de temas, uma copia inteira das passagens.
+            # `done` e emitido antes de `finished`, entao os tratadores ainda
+            # veem self._worker.
+            worker.finished.connect(lambda: self._retire_worker(worker))
+            worker.start()
+
+        def _retire_worker(self, worker) -> None:
+            if self._worker is worker:
+                self._worker = None
+            worker.deleteLater()
 
         def closeEvent(self, event) -> None:  # noqa: N802 - assinatura Qt
             worker = self._worker
             if worker is not None and worker.isRunning():
+                # Fechar cancela a etapa em curso (o Qwen nao fica rodando
+                # na placa depois que a janela sumiu).
+                try:
+                    worker.request_cancel()
+                except AttributeError:
+                    pass
                 try:
                     worker.done.disconnect()
                     worker.progress.disconnect()
@@ -3635,120 +3778,177 @@ if QT_IMPORT_ERROR is None:
 
 
     class ExploreDialog(_SearchDialogBase):
-        """Explorar as entrevistas (identidade B): busca por SENTIDO, com
-        preparo/download do modelo vivendo aqui — e o futuro lar das
-        perguntas com respostas citadas (fase 2.7)."""
+        """Perguntar às entrevistas (identidade B), v3 (2026-09-03): UM gesto em
+        dois estagios. Estagio 1: os trechos que tratam do tema (busca por
+        sentido v3 — passagens, encoder de recuperacao, hibrido com o literal,
+        reordenador quando instalado, corte de relevancia), em segundos e em
+        qualquer maquina. Estagio 2, so com o modelo de analise: a resposta
+        escrita citando [n], cancelavel — os trechos ficam. Perguntas sobre o
+        CONJUNTO (ask.question_kind) vao pelos resumos (visao geral), com o
+        escape "responder pelos trechos mesmo assim". O botao "Encontrar
+        trechos" morreu: era a mesma busca sem a redacao (decisao do usuario)."""
 
         _scope_subject = "A AI"
 
         def __init__(self, window) -> None:
-            super().__init__(window, "✨ Perguntar às entrevistas com AI")
-            self.setMinimumSize(720, 500)
+            super().__init__(window, "✨ Buscar por sentido e perguntar")
+            self.setMinimumSize(760, 560)
+            self._last_result: dict[str, Any] | None = None
+            self._current_query = ""
+            self._current_ids: list[str] = []
+            self._row_by_n: dict[int, int] = {}
             layout = QVBoxLayout(self)
             intro = QLabel(
-                "Faça uma pergunta e receba a resposta citando os trechos [n] — ou "
-                "descreva um tema para encontrá-los pelo significado.\n"
-                "AI 100% local — nada sai do seu computador.")
+                "Escreva uma pergunta ou um tema. Aparecem os trechos das entrevistas que "
+                "tratam disso — pelo sentido, mesmo sem as palavras exatas, e em qualquer "
+                "computador. Havendo placa NVIDIA, a AI também escreve uma resposta "
+                "citando-os [n]. Tudo local — nada sai do seu computador.")
             intro.setWordWrap(True)
             intro.setStyleSheet(_style_muted())
             layout.addWidget(intro)
             row = QHBoxLayout()
             self.query_input = QLineEdit()
-            self.query_input.setPlaceholderText("uma pergunta, um tema, uma situação…")
+            self.query_input.setPlaceholderText("uma pergunta ou um tema — ex.: dificuldade para entrar em condomínios")
             self.query_input.returnPressed.connect(self.run_question)
             row.addWidget(self.query_input, 1)
+            # O rótulo segue a máquina (_announce_readiness): onde a resposta
+            # escrita não roda, o botão não pode dizer "Perguntar".
             self.ask_button = QPushButton("✨ Perguntar")
-            self.ask_button.setToolTip("A AI responde com base nos trechos, citando-os (pode levar ~1 min).")
-            self._ask_tooltip_base = self.ask_button.toolTip()
+            self.ask_button.setToolTip(
+                "Encontra os trechos em segundos e, quando o modelo de análise está "
+                "disponível, escreve a resposta citando-os.")
             self.ask_button.clicked.connect(self.run_question)
             row.addWidget(self.ask_button)
-            explore_button = QPushButton("Encontrar trechos")
-            explore_button.setToolTip("Só encontra os trechos pelo significado, sem compor resposta (rápido).")
-            explore_button.clicked.connect(self.run_explore)
-            row.addWidget(explore_button)
+            row.addWidget(QLabel("até"))
+            from . import app_settings as _settings_n
+            self.max_results_spin = QSpinBox()
+            lo, hi = _settings_n.SEARCH_MAX_RESULTS_RANGE
+            self.max_results_spin.setRange(lo, hi)
+            self.max_results_spin.setValue(_settings_n.search_max_results())
+            self.max_results_spin.setToolTip(
+                "Quantos trechos no máximo. A busca só devolve os que tratam do tema — "
+                "pode vir menos.")
+            self.max_results_spin.valueChanged.connect(self._save_max_results)
+            row.addWidget(self.max_results_spin)
+            row.addWidget(QLabel("trechos"))
             layout.addLayout(row)
             self._build_scope_widgets(layout)
-            self.answer_view = QTextEdit()
-            self.answer_view.setReadOnly(True)
+            # "Nesta máquina: …" — o que roda aqui, dito na abertura.
+            self.state_label = QLabel("")
+            self.state_label.setWordWrap(True)
+            self.state_label.setStyleSheet(_style_muted())
+            layout.addWidget(self.state_label)
+            # Faixa de rota: pergunta sobre o conjunto / nada responde.
+            self.route_banner = QFrame()
+            self.route_banner.setVisible(False)
+            self.route_banner.setStyleSheet(f"QFrame {{ {ui_tokens.banner_style(ui_tokens.INFO)} }}")
+            route_layout = QHBoxLayout(self.route_banner)
+            route_layout.setContentsMargins(10, 6, 10, 6)
+            self.route_label = QLabel("")
+            self.route_label.setWordWrap(True)
+            route_layout.addWidget(self.route_label, 1)
+            self.route_button = QPushButton("")
+            self.route_button.setVisible(False)
+            route_layout.addWidget(self.route_button)
+            layout.addWidget(self.route_banner)
+            self.answer_view = QTextBrowser()
+            self.answer_view.setOpenLinks(False)
+            self.answer_view.setOpenExternalLinks(False)
+            self.answer_view.anchorClicked.connect(self._on_answer_anchor)
             self.answer_view.setVisible(False)
-            self.answer_view.setMaximumHeight(180)
+            self.answer_view.setMaximumHeight(220)
             layout.addWidget(self.answer_view)
             self.results = self._make_results_list()
+            self.results.setWordWrap(True)
             layout.addWidget(self.results, 1)
             self.prepare_button = QPushButton("Preparar")
             self.prepare_button.setVisible(False)
             self.prepare_button.clicked.connect(self._prepare)
             layout.addWidget(self.prepare_button)
-            self.exact_hint_button = QPushButton("")
-            self.exact_hint_button.setFlat(True)
-            self.exact_hint_button.setVisible(False)
-            self.exact_hint_button.clicked.connect(self._open_word_search)
-            layout.addWidget(self.exact_hint_button)
             bottom = QHBoxLayout()
             self.status_label = QLabel("")
             self.status_label.setWordWrap(True)
             bottom.addWidget(self.status_label, 1)
+            self.cancel_answer_button = QPushButton("Cancelar a resposta (os trechos ficam)")
+            self.cancel_answer_button.setVisible(False)
+            self.cancel_answer_button.clicked.connect(self._cancel_answer)
+            bottom.addWidget(self.cancel_answer_button)
             close_button = QPushButton("Fechar")
             close_button.clicked.connect(self.close)
             bottom.addWidget(close_button)
             layout.addLayout(bottom)
             self._announce_readiness()
 
-        def _announce_readiness(self) -> None:
-            """Estado visivel JA NA ABERTURA (feedback 2026-08-30, 2a
-            rodada): sem isto a janela parecia identica com e sem os
-            modelos instalados — o usuario so descobria o que falta
-            clicando. Incompativel desabilita o Perguntar com motivo;
-            instalavel anuncia o download que o clique vai oferecer.
-
-            IDEMPOTENTE: o dialogo e cacheado pela janela, entao cada
-            reabertura re-anuncia — comecar limpando o estado anterior
-            (botao, tooltip, rodape) para nada grudar."""
+        # ---- estado na abertura -------------------------------------------
+        def _llm_state(self) -> tuple[str, str, float]:
             try:
-                resumo_estado, resumo_motivo, resumo_gb = (
-                    self._window._capability_state("resumo_perguntar"))
-                busca_estado, _busca_motivo, busca_gb = (
-                    self._window._capability_state("busca_semantica"))
+                return self._window._capability_state("resumo_perguntar")
             except Exception:  # noqa: BLE001 - sonda nunca derruba a janela
-                return
-            self.ask_button.setEnabled(True)
-            self.ask_button.setToolTip(getattr(
-                self, "_ask_tooltip_base", self.ask_button.toolTip()))
-            self.status_label.setText("")
+                return "pronta", "", 0.0
+
+        def _announce_readiness(self) -> None:
+            """Estado visivel JA NA ABERTURA (feedback 2026-08-30): uma linha
+            "Nesta máquina: …" com os dois estagios. O botao nunca fica cinza —
+            os trechos funcionam em qualquer maquina; so a resposta escrita
+            depende do modelo de analise (placa NVIDIA). IDEMPOTENTE: o dialogo
+            e cacheado pela janela e cada reabertura re-anuncia."""
+            from . import search as _search
+            resumo_estado, resumo_motivo, resumo_gb = self._llm_state()
+            try:
+                encoder_ok = _search.encoder_cached()
+                reranker_ok = _search.reranker_cached()
+                _busca_estado, _m, busca_gb = self._window._capability_state("busca_semantica")
+            except Exception:  # noqa: BLE001
+                encoder_ok, reranker_ok, busca_gb = True, False, 0.5
             partes: list[str] = []
+            if encoder_ok:
+                partes.append("trechos pelo sentido — pronta"
+                              + (" (com reordenador)" if reranker_ok else ""))
+            else:
+                partes.append(f"trechos pelo sentido — falta baixar (~{fmt_gb(busca_gb)}; o clique oferece)")
             if resumo_estado == "incompativel":
-                self.ask_button.setEnabled(False)
-                self.ask_button.setToolTip(resumo_motivo)
-                partes.append(
-                    f"\"Perguntar\" não está disponível nesta máquina "
-                    f"({resumo_motivo}) — \"Encontrar trechos\" funciona normalmente.")
+                partes.append("resposta escrita — não roda neste computador: precisa de placa "
+                              "NVIDIA (os trechos funcionam normalmente)")
             elif resumo_estado == "instalavel":
-                partes.append(
-                    f"\"Perguntar\" usa o modelo de análise (~{resumo_gb:.1f} GB), "
-                    "ainda não instalado neste computador — o clique oferece o download.")
+                partes.append(f"resposta escrita — falta baixar o modelo de análise "
+                              f"(~{fmt_gb(resumo_gb)}; o clique oferece)")
+            else:
+                partes.append("resposta escrita — pronta (cerca de 1 min)")
             try:
                 aviso_resumo = self._window._capability_warning("resumo_perguntar")
             except Exception:  # noqa: BLE001
                 aviso_resumo = ""
+            texto = "Nesta máquina: " + " · ".join(partes) + "."
             if resumo_estado != "incompativel" and aviso_resumo:
-                partes.append(f"Atenção: \"Perguntar\" {aviso_resumo} — "
-                              "por sua conta e risco.")
-            from . import search as _search
-            try:
-                encoder_ok = _search.encoder_cached()
-            except Exception:  # noqa: BLE001
-                encoder_ok = True
-            if busca_estado == "instalavel" and not encoder_ok:
-                partes.append(
-                    f"\"Encontrar trechos\" baixa um modelo de ~{busca_gb:.1f} GB "
-                    "na primeira utilização.")
-            if partes:
-                self.status_label.setText("\n".join(partes))
+                texto += f" Atenção: a resposta escrita {aviso_resumo} — por sua conta e risco."
+            self.state_label.setText(texto)
+            # Onde a resposta escrita não roda, o botão promete só o que entrega.
+            if resumo_estado == "incompativel":
+                self.ask_button.setText("✨ Buscar trechos")
+                self.ask_button.setToolTip(
+                    "Encontra em segundos os trechos que tratam do que você escreveu.\n"
+                    "A resposta escrita precisa de placa NVIDIA — neste computador, "
+                    "ficam os trechos.")
+            else:
+                self.ask_button.setText("✨ Perguntar")
+                self.ask_button.setToolTip(
+                    "Encontra os trechos em segundos e, quando o modelo de análise está "
+                    "disponível, escreve a resposta citando-os.")
+            self.ask_button.setEnabled(True)
+            self.status_label.setText("")
 
+        def _save_max_results(self, value: int) -> None:
+            from . import app_settings as _settings_n
+            try:
+                _settings_n.save({"search_max_results": int(value)})
+            except Exception as exc:  # noqa: BLE001 - preferencia nunca bloqueia
+                _logger.warning("Nao foi possivel guardar 'até N trechos': %s", exc)
+
+        # ---- gating comum ----------------------------------------------------
         def _ready_query(self) -> tuple[list[str], str] | None:
-            """Gating comum de perguntar/explorar: contexto, consulta, escopo
-            com transcricao, encoder baixado e indices frescos. None = ainda
-            nao da — sempre com o motivo visivel, nunca clique-morto."""
+            """Contexto, consulta, escopo com transcricao e encoder baixado.
+            None = ainda nao da — sempre com o motivo visivel, nunca clique
+            morto. Indices desatualizados sao refeitos DENTRO da busca."""
             from . import search as _search
             ctx = self._window.context
             query = self.query_input.text().strip()
@@ -3756,14 +3956,8 @@ if QT_IMPORT_ERROR is None:
                 return None
             self._refresh_scope()
             ids = self._scope_ids()
-            self.results.clear()
-            self.answer_view.setVisible(False)
-            self.prepare_button.setVisible(False)
-            self.exact_hint_button.setVisible(False)
-            self.status_label.setText("")
+            self._clear_results()
             if not ids:
-                # Antes de oferecer download de modelo: sem transcricao no
-                # escopo, nada ha o que preparar.
                 self.status_label.setText(self._scope_text())
                 return None
             if not _search.encoder_cached():
@@ -3772,117 +3966,280 @@ if QT_IMPORT_ERROR is None:
                 self.status_label.setText(
                     "Esta janela usa um modelo pequeno e local que ainda não foi baixado.")
                 return None
-            stale = [iid for iid in ids if not _search.index_is_fresh(ctx.paths, iid)]
-            if stale:
-                self.prepare_button.setText(f"Preparar ({len(stale)} arquivo(s), ~1 min)")
-                self.prepare_button.setVisible(True)
-            if len(stale) >= len(ids):
-                return None
             return ids, query
 
-        def run_explore(self) -> None:
-            from . import search as _search
-            if not self.query_input.text().strip():
-                self.status_label.setText(
-                    "Descreva um tema ou faça uma pergunta antes de buscar.")
-                return
-            if self._worker and self._worker.isRunning():
-                self.status_label.setText("Aguarde a consulta atual terminar.")
-                return
-            ready = self._ready_query()
-            if ready is None:
-                return
-            ids, query = ready
-            paths = self._window.context.paths
-            self.status_label.setText("Explorando…")
+        def _clear_results(self) -> None:
+            self.results.clear()
+            self._row_by_n = {}
+            self.answer_view.clear()
+            self.answer_view.setVisible(False)
+            self.route_banner.setVisible(False)
+            self.route_button.setVisible(False)
+            self.prepare_button.setVisible(False)
+            self.cancel_answer_button.setVisible(False)
+            self.status_label.setText("")
 
-            def fn(_emit):
-                similar = _search.project_semantic_search(paths, ids, query)
-                exact_count = len(_search.project_literal_search(paths, ids, query))
-                return similar, exact_count
-
-            self._start_worker(fn, self._on_explore_done)
-
+        # ---- estagio 1: trechos ---------------------------------------------
         def run_question(self) -> None:
             from . import ask as _ask
             if not self.query_input.text().strip():
-                # Antes: return None silencioso — clique morto.
-                self.status_label.setText(
-                    "Digite uma pergunta antes de clicar em Perguntar.")
+                self.status_label.setText("Escreva uma pergunta ou um tema antes de perguntar.")
                 return
             if self._worker and self._worker.isRunning():
                 self.status_label.setText("Aguarde a consulta atual terminar.")
-                return
-            if not self.ask_button.isEnabled():
-                # Enter contornava o botao desabilitado (maquina
-                # incompativel): repetir o motivo no rodape, sem modal.
-                self.status_label.setText(self.ask_button.toolTip())
-                return
-            # Gate da LLM ANTES do preparo do encoder: na ordem antiga a
-            # instalacao essencial via so o "Preparar (~0,5 GB)" e a
-            # oferta do modelo de analise nunca disparava (bug relatado
-            # no teste real de 2026-08-30).
-            if not self._window._ensure_llm_model():
-                self.status_label.setText(
-                    "A resposta com AI não está disponível — use "
-                    "\"Encontrar trechos\", que funciona nesta máquina.")
                 return
             ready = self._ready_query()
             if ready is None:
                 return
             ids, query = ready
+            self._current_ids, self._current_query = ids, query
             paths = self._window.context.paths
-            self.status_label.setText("Perguntando à AI local (pode levar ~1 minuto)…")
+            max_results = int(self.max_results_spin.value())
+            self.status_label.setText("Procurando os trechos que tratam disso…")
+            # Cancelar durante a reordenacao devolve a lista por semelhanca
+            # (ja calculada) em vez de esperar 10-40 s numa maquina sem placa.
+            self.cancel_answer_button.setText("Cancelar a reordenação (mostrar só por semelhança)")
+            self.cancel_answer_button.setVisible(True)
 
-            def fn(emit):
-                return _ask.run_ask(paths, ids, query, progress_callback=emit)
+            def fn(emit, should_cancel):
+                return _ask.retrieve(paths, ids, query, max_results=max_results,
+                                     progress_callback=emit, should_cancel=should_cancel)
 
             self._start_worker(
-                fn, self._on_question_done,
+                fn, self._on_retrieve_done,
                 on_progress=lambda d: self.status_label.setText(str(d.get("message") or "")))
 
-        def _on_question_done(self, result, error: str) -> None:
-            self.status_label.setText("")
+        def _on_retrieve_done(self, result, error: str) -> None:
+            self.cancel_answer_button.setVisible(False)
+            self.cancel_answer_button.setText("Cancelar a resposta (os trechos ficam)")
             if error:
-                self.status_label.setText(f"Não foi possível responder: {error}")
+                self.status_label.setText(f"Busca indisponível: {error}")
+                return
+            result = result or {}
+            self._last_result = result
+            self._render_sections(result)
+            self.status_label.setText(results_footer_text(result))
+            if result.get("rerank_cancelled"):
+                self.status_label.setText(
+                    results_footer_text(result) + " Reordenação cancelada: ordem só por semelhança.")
+                return
+            if result.get("kind") == "global":
+                self._route_global(result)
+                return
+            self._maybe_answer(result)
+
+        def _render_sections(self, result: dict[str, Any]) -> None:
+            self.results.clear()
+            self._row_by_n = {}
+            n = 0
+            for section in result.get("sections") or []:
+                if section.get("weak"):
+                    titulo = "Nada realmente próximo — os trechos abaixo são só os menos distantes"
+                else:
+                    titulo = f"{section.get('label')} ({len(section.get('hits') or [])})"
+                header = QListWidgetItem(titulo)
+                header.setFlags(Qt.ItemFlag.NoItemFlags)
+                fonte = header.font()
+                fonte.setBold(True)
+                header.setFont(fonte)
+                self.results.addItem(header)
+                for hit in section.get("hits") or []:
+                    n += 1
+                    self._add_passage(n, hit)
+
+        def _add_passage(self, n: int, hit: dict[str, Any]) -> None:
+            titulo = self._friendly_title(str(hit.get("interview_id") or ""))
+            texto = " ".join(str(hit.get("text") or "").split())
+            item = QListWidgetItem(f"[{n}]  {titulo} · {format_clock(float(hit.get('start', 0) or 0))}\n{texto}")
+            item.setData(Qt.ItemDataRole.UserRole, (hit.get("interview_id"), hit.get("start", 0)))
+            self.results.addItem(item)
+            self._row_by_n[n] = self.results.count() - 1
+
+        # ---- estagio 2: resposta ----------------------------------------------
+        def _maybe_answer(self, result: dict[str, Any]) -> None:
+            from . import ask as _ask
+            if not result.get("trechos"):
+                return
+            if not result.get("worth_answer"):
+                # Nao gastar ~1 min de AI com trechos que nao respondem.
+                self.status_label.setText(results_footer_text(result) + " " + _ask.SEM_TRECHOS)
+                return
+            estado, _motivo, _gb = self._llm_state()
+            if estado == "incompativel":
+                self.status_label.setText(
+                    results_footer_text(result) + " Nesta máquina a AI encontra os trechos, "
+                    "mas não escreve a resposta (precisa de placa NVIDIA).")
+                return
+            if estado == "instalavel" and not self._window._ensure_llm_model():
+                self.status_label.setText(
+                    results_footer_text(result) + " A resposta escrita fica para quando o "
+                    "modelo de análise estiver instalado.")
+                return
+            self._start_answer(result)
+
+        def _start_answer(self, result: dict[str, Any]) -> None:
+            from . import ask as _ask
+            paths = self._window.context.paths
+            question = self._current_query
+            trechos = list(result.get("trechos") or [])
+            self.cancel_answer_button.setVisible(True)
+            self.status_label.setText("Escrevendo a resposta com base nos trechos (cerca de 1 min)…")
+
+            def fn(emit, should_cancel):
+                return _ask.answer_from_trechos(paths, question, trechos,
+                                                progress_callback=emit, should_cancel=should_cancel)
+
+            self._start_worker(
+                fn, self._on_answer_done,
+                on_progress=lambda d: self.status_label.setText(str(d.get("message") or "")))
+
+        def _cancel_answer(self) -> None:
+            worker = self._worker
+            if worker is not None and worker.isRunning():
+                worker.request_cancel()
+                self.status_label.setText("Cancelando a resposta…")
+
+        def _on_answer_done(self, result, error: str) -> None:
+            self.cancel_answer_button.setVisible(False)
+            rodape = results_footer_text(self._last_result or {})
+            worker = self._worker
+            if worker is not None and worker.cancelled.is_set():
+                self.status_label.setText("Resposta cancelada — os trechos acima continuam válidos.")
+                return
+            if error:
+                self.status_label.setText(f"{rodape} Não foi possível responder: {error}")
+                return
+            payload = result or {}
+            if payload.get("erro"):
+                self.status_label.setText(f"{rodape} {payload['erro']}")
+                return
+            resposta = str(payload.get("resposta") or "")
+            n = len((self._last_result or {}).get("trechos") or [])
+            self.answer_view.setHtml(render_answer_html(resposta, n))
+            self.answer_view.setVisible(True)
+            self.status_label.setText(rodape)
+
+        def _on_answer_anchor(self, url) -> None:
+            alvo = str(url.toString() if hasattr(url, "toString") else url)
+            if alvo.startswith("trecho:"):
+                try:
+                    n = int(alvo.split(":", 1)[1])
+                except ValueError:
+                    return
+                row = self._row_by_n.get(n)
+                if row is not None:
+                    self.results.setCurrentRow(row)
+                    self.results.scrollToItem(self.results.item(row))
+            elif alvo.startswith("entrevista:"):
+                self._window.open_search_hit(alvo.split(":", 1)[1], 0.0)
+
+        # ---- pergunta sobre o conjunto ---------------------------------------
+        def _route_global(self, result: dict[str, Any]) -> None:
+            from . import ask as _ask
+            ctx = self._window.context
+            ids = list(self._current_ids)
+            titles = {iid: self._friendly_title(iid) for iid in ids}
+            resumos = _ask.resumos_for_scope(ctx.paths, ids, titles)
+            com, total = len(resumos), len(ids)
+            estado, _motivo, _gb = self._llm_state()
+            self.route_banner.setVisible(True)
+            slot = getattr(self, "_route_slot", None)
+            if slot is not None:
+                try:
+                    self.route_button.clicked.disconnect(slot)
+                except (RuntimeError, TypeError):
+                    pass
+                self._route_slot = None
+            if com == 0:
+                self.route_label.setText(
+                    "Pergunta sobre o conjunto: para responder, a AI usa os resumos por "
+                    f"entrevista — nenhuma das {total} tem resumo ainda. Os trechos abaixo "
+                    "são só os menos distantes.")
+                if estado != "incompativel":
+                    self.route_button.setText(f"Resumir as {total} entrevistas agora")
+                    self.route_button.setVisible(True)
+                    self._route_slot = lambda: self._window.run_summarize_job(ids=ids)
+                    self.route_button.clicked.connect(self._route_slot)
+                return
+            if estado == "incompativel":
+                self.route_label.setText(
+                    f"Pergunta sobre o conjunto: a AI responderia pelos resumos ({com} das {total} "
+                    "têm resumo), mas nesta máquina a resposta escrita não roda (precisa de placa "
+                    "NVIDIA). Os trechos abaixo são só os menos distantes.")
+                return
+            if estado == "instalavel" and not self._window._ensure_llm_model():
+                self.route_label.setText(
+                    "Pergunta sobre o conjunto: a AI responde pelos resumos quando o modelo de "
+                    "análise estiver instalado.")
+                return
+            self.route_label.setText(
+                f"Pergunta sobre o conjunto: a AI responde pelos resumos ({com} das {total} "
+                "têm resumo).")
+            self.route_button.setText("Responder pelos trechos mesmo assim")
+            self.route_button.setVisible(True)
+            self._route_slot = lambda: self._answer_by_passages_anyway(result)
+            self.route_button.clicked.connect(self._route_slot)
+            self._start_visao_geral(ids, titles)
+
+        def _answer_by_passages_anyway(self, result: dict[str, Any]) -> None:
+            if self._worker and self._worker.isRunning():
+                self._worker.request_cancel()
+            self.route_banner.setVisible(False)
+            self.route_button.setVisible(False)
+            self._maybe_answer(result)
+
+        def _start_visao_geral(self, ids: list[str], titles: dict[str, str]) -> None:
+            from . import ask as _ask
+            paths = self._window.context.paths
+            question = self._current_query
+            self.cancel_answer_button.setVisible(True)
+            self.status_label.setText("Lendo os resumos das entrevistas…")
+
+            def fn(emit, should_cancel):
+                return _ask.run_visao_geral(paths, ids, question, progress_callback=emit,
+                                            should_cancel=should_cancel, titles=titles)
+
+            self._start_worker(
+                fn, self._on_visao_done,
+                on_progress=lambda d: self.status_label.setText(str(d.get("message") or "")))
+
+        def _on_visao_done(self, result, error: str) -> None:
+            self.cancel_answer_button.setVisible(False)
+            worker = self._worker
+            if worker is not None and worker.cancelled.is_set():
+                self.status_label.setText("Visão geral cancelada — os trechos acima continuam válidos.")
+                return
+            if error:
+                self.status_label.setText(f"Não foi possível responder pelos resumos: {error}")
                 return
             payload = result or {}
             if payload.get("erro"):
                 self.status_label.setText(str(payload["erro"]))
                 return
-            self.answer_view.setPlainText(str(payload.get("resposta") or ""))
+            citadas = [str(c) for c in (payload.get("citadas") or [])]
+            self.answer_view.setHtml(render_answer_html(str(payload.get("resposta") or ""), 0, tuple(citadas)))
             self.answer_view.setVisible(True)
-            for trecho in payload.get("trechos") or []:
-                self._add_hit(self.results, f"[{trecho['n']}]  ", {
-                    "interview_id": trecho["interview_id"],
-                    "start": trecho["start"],
-                    "label": trecho["label"],
-                    "text": trecho["text"],
-                })
-            if not payload.get("trechos"):
-                self.status_label.setText(
-                    "Nenhum trecho próximo o suficiente — a resposta acima reflete isso.")
+            self.results.clear()
+            self._row_by_n = {}
+            if citadas:
+                header = QListWidgetItem(f"Entrevistas citadas ({len(citadas)})")
+                header.setFlags(Qt.ItemFlag.NoItemFlags)
+                fonte = header.font()
+                fonte.setBold(True)
+                header.setFont(fonte)
+                self.results.addItem(header)
+                for iid in citadas:
+                    item = QListWidgetItem(f"[{iid}]  {self._friendly_title(iid)}")
+                    item.setData(Qt.ItemDataRole.UserRole, (iid, 0.0))
+                    self.results.addItem(item)
+            sem = payload.get("sem_resumo") or []
+            com = payload.get("com_resumo") or []
+            nota = f"Com base nos resumos de {len(com)} entrevista(s)."
+            if sem:
+                nota += f" {len(sem)} sem resumo ficaram de fora."
+            self.status_label.setText(nota)
 
-        def _on_explore_done(self, result, error: str) -> None:
-            self.status_label.setText("")
-            if error:
-                self.status_label.setText(f"Exploração indisponível: {error}")
-                return
-            hits, exact_count = result or ([], 0)
-            for hit in hits:
-                prefix = f"[{similarity_label(hit.get('similarity', 0))}]  "
-                self._add_hit(self.results, prefix, hit)
-            if not hits:
-                self.status_label.setText("Nenhum trecho próximo do que você descreveu.")
-            if exact_count:
-                plural = "s" if exact_count != 1 else ""
-                self.exact_hint_button.setText(
-                    f"Há também {exact_count} ocorrência{plural} exata{plural} — ver em Buscar palavras")
-                self.exact_hint_button.setVisible(True)
-
-        def _open_word_search(self) -> None:
-            self._window.open_word_search(self.query_input.text().strip())
-
+        # ---- preparo do encoder ------------------------------------------------
         def _prepare(self) -> None:
             from . import search as _search
             ctx = self._window.context
@@ -3922,8 +4279,1050 @@ if QT_IMPORT_ERROR is None:
                 self._announce_readiness()
             except Exception:  # noqa: BLE001 - estado da janela nunca derruba o preparo
                 pass
-            self.status_label.setText("Exploração pronta.")
-            self.run_explore()
+            self.status_label.setText("Busca pronta.")
+            self.run_question()
+
+
+    class ThemesDialog(_SearchDialogBase):
+        """Temas das entrevistas (Parte B, 2026-09-03): agrupa TODAS as
+        passagens do escopo por semelhanca de sentido (themes.discover —
+        numpy, qualquer maquina, segundos) e lista os temas mais tratados com
+        todos os seus trechos, sem teto. Nomes: termos caracteristicos na
+        hora; com o modelo de analise, nomes e descricoes pela AI em SEGUNDO
+        PLANO (a janela nunca espera pela LLM — regra do plano de camadas).
+        Codificacao (coding.py): um ou mais codigos por trecho, tema inteiro
+        como codigo, exportacao .qualilab (QualiLab) ou CSV. Duplo clique no
+        trecho abre a entrevista no ponto."""
+
+        _scope_subject = "A descoberta de temas"
+        OUTROS_ID = "__outros__"
+
+        def __init__(self, window) -> None:
+            super().__init__(window, "✨ Temas das entrevistas")
+            self.setMinimumSize(980, 640)
+            self._payload: dict[str, Any] | None = None
+            self._codes: list[dict[str, Any]] = []
+            self._codings: list[dict[str, Any]] = []
+            self._codes_dirty = False
+            # Retrato do codebook e da codificacao ANTES da ultima aplicacao em
+            # massa. Vale so para ela: qualquer outra mudanca o descarta.
+            self._bulk_undo: tuple[list[dict[str, Any]], list[dict[str, Any]]] | None = None
+            self._naming = False
+            self._speakers: list[str] | None = None   # None = todos os falantes
+            self._inventory: list[dict[str, Any]] = []
+            layout = QVBoxLayout(self)
+            intro = QLabel(
+                "Agrupa os trechos das entrevistas por semelhança de sentido e lista os temas "
+                "mais tratados, cada um com todos os seus trechos. Dá para renomear, juntar, "
+                "aplicar códigos (um ou mais por trecho) e exportar para o QualiLab. "
+                "Tudo local — nada sai do seu computador.")
+            intro.setWordWrap(True)
+            intro.setStyleSheet(_style_muted())
+            layout.addWidget(intro)
+            self._build_scope_widgets(layout)
+            # "Quem entra": em entrevista não se codifica quem pergunta, em
+            # grupo focal não se codifica quem modera — e os nomes desses
+            # papéis variam. O app pergunta (decisão do usuário 2026-09-03).
+            quem_row = QHBoxLayout()
+            quem_row.addWidget(QLabel("Quem entra:"))
+            self.speakers_label = QLabel("todos os falantes")
+            self.speakers_label.setWordWrap(True)
+            quem_row.addWidget(self.speakers_label, 1)
+            self.speakers_button = QPushButton("Escolher…")
+            self.speakers_button.setToolTip(
+                "Escolha os falantes que contam nos temas e na codificação. A fala de quem "
+                "ficar de fora continua na transcrição e no arquivo exportado, como contexto — "
+                "só não influencia o agrupamento nem recebe código.")
+            self.speakers_button.clicked.connect(self._choose_speakers)
+            quem_row.addWidget(self.speakers_button)
+            layout.addLayout(quem_row)
+            row = QHBoxLayout()
+            row.addWidget(QLabel("Quantos temas:"))
+            self.n_themes_spin = QSpinBox()
+            self.n_themes_spin.setRange(0, 40)
+            self.n_themes_spin.setSpecialValueText("automático")
+            self.n_themes_spin.setValue(0)
+            self.n_themes_spin.setToolTip(
+                "Automático depende da quantidade de trechos. Menos temas = mais amplos; "
+                "mais temas = mais finos. Grupos com menos de 3 trechos — ou com menos de 6 "
+                "quando todos vêm de uma única entrevista — viram «sem tema definido», por "
+                "isso podem aparecer menos temas do que você pediu.")
+            row.addWidget(self.n_themes_spin)
+            self.discover_button = QPushButton("Descobrir os temas")
+            self.discover_button.setToolTip(
+                "Lê os trechos de todas as entrevistas do escopo e agrupa por semelhança "
+                "(segundos; a primeira vez prepara o índice de busca).")
+            self.discover_button.clicked.connect(self.run_discover)
+            row.addWidget(self.discover_button)
+            self.names_button = QPushButton("✨ Nomear os temas com a AI")
+            self.names_button.setVisible(False)
+            self.names_button.clicked.connect(lambda: self._start_naming(user_click=True))
+            row.addWidget(self.names_button)
+            self.cancel_button = QPushButton("Cancelar")
+            self.cancel_button.setVisible(False)
+            self.cancel_button.clicked.connect(self._cancel)
+            row.addWidget(self.cancel_button)
+            row.addStretch(1)
+            layout.addLayout(row)
+            self.state_label = QLabel("")
+            self.state_label.setWordWrap(True)
+            self.state_label.setStyleSheet(_style_muted())
+            layout.addWidget(self.state_label)
+
+            splitter = QSplitter(Qt.Orientation.Horizontal)
+            left = QWidget()
+            left_layout = QVBoxLayout(left)
+            left_layout.setContentsMargins(0, 0, 0, 0)
+            self.themes_list = QListWidget()
+            self.themes_list.setWordWrap(True)
+            self.themes_list.currentRowChanged.connect(self._on_theme_selected)
+            left_layout.addWidget(self.themes_list, 1)
+            left_buttons = QHBoxLayout()
+            self.rename_button = QPushButton("Renomear…")
+            self.rename_button.clicked.connect(self._rename)
+            left_buttons.addWidget(self.rename_button)
+            self.merge_button = QPushButton("Juntar com outro tema…")
+            self.merge_button.clicked.connect(self._merge)
+            left_buttons.addWidget(self.merge_button)
+            left_layout.addLayout(left_buttons)
+            # O passo que faltava entre descobrir os temas e ter um codebook
+            # utilizável: aplicar tema por tema, marcando trecho por trecho,
+            # é o que o relato de campo chamou de "não dá para aplicar todos
+            # os códigos de uma só vez".
+            all_buttons = QHBoxLayout()
+            self.code_all_button = QPushButton("Aplicar todos os temas como códigos…")
+            self.code_all_button.setToolTip(
+                "Cria um código por tema (reaproveitando os que já existem com o mesmo nome)\n"
+                "e o aplica a todos os trechos daquele tema, de uma vez só.")
+            self.code_all_button.clicked.connect(self._apply_all_themes_as_codes)
+            all_buttons.addWidget(self.code_all_button)
+            self.undo_bulk_button = QPushButton("Desfazer")
+            self.undo_bulk_button.setToolTip(
+                "Devolve o codebook e a codificação ao que eram antes da última aplicação em massa.")
+            self.undo_bulk_button.setVisible(False)
+            self.undo_bulk_button.clicked.connect(self._undo_bulk_coding)
+            all_buttons.addWidget(self.undo_bulk_button)
+            left_layout.addLayout(all_buttons)
+            splitter.addWidget(left)
+            right = QWidget()
+            right_layout = QVBoxLayout(right)
+            right_layout.setContentsMargins(0, 0, 0, 0)
+            self.theme_title = QLabel("")
+            self.theme_title.setWordWrap(True)
+            fonte = self.theme_title.font()
+            fonte.setBold(True)
+            self.theme_title.setFont(fonte)
+            right_layout.addWidget(self.theme_title)
+            self.theme_desc = QLabel("")
+            self.theme_desc.setWordWrap(True)
+            self.theme_desc.setStyleSheet(_style_muted())
+            right_layout.addWidget(self.theme_desc)
+            self.passages = QListWidget()
+            self.passages.setWordWrap(True)
+            self.passages.setToolTip(
+                "Duplo clique abre a entrevista neste trecho; a caixa marca o trecho para codificar.")
+            self.passages.itemActivated.connect(self._open_hit)
+            right_layout.addWidget(self.passages, 1)
+            right_buttons = QHBoxLayout()
+            self.code_theme_button = QPushButton("Aplicar código aos trechos marcados…")
+            self.code_theme_button.setToolTip(
+                "Cria (ou reutiliza) um código e o aplica a todos os trechos marcados deste tema.")
+            self.code_theme_button.clicked.connect(self._apply_code_to_checked)
+            right_buttons.addWidget(self.code_theme_button)
+            self.passage_codes_button = QPushButton("Códigos deste trecho…")
+            self.passage_codes_button.setToolTip(
+                "Acrescenta ou tira um código do trecho selecionado (um trecho pode ter vários).")
+            self.passage_codes_button.clicked.connect(self._passage_codes)
+            right_buttons.addWidget(self.passage_codes_button)
+            self.export_button = QPushButton("Exportar codificação…")
+            self.export_button.setToolTip(
+                "Grava um projeto do QualiLab (.qualilab: um documento por entrevista, códigos e "
+                "trechos codificados) ou uma planilha CSV.")
+            self.export_button.clicked.connect(self._export)
+            right_buttons.addWidget(self.export_button)
+            right_layout.addLayout(right_buttons)
+            splitter.addWidget(right)
+            splitter.setSizes([340, 640])
+            layout.addWidget(splitter, 1)
+            bottom = QHBoxLayout()
+            self.status_label = QLabel("")
+            self.status_label.setWordWrap(True)
+            bottom.addWidget(self.status_label, 1)
+            close_button = QPushButton("Fechar")
+            close_button.clicked.connect(self.close)
+            bottom.addWidget(close_button)
+            layout.addLayout(bottom)
+            self._announce_readiness()
+
+        # ---- estado ---------------------------------------------------------
+        def _paths(self):
+            ctx = self._window.context
+            return ctx.paths if ctx is not None else None
+
+        def _llm_state(self) -> tuple[str, str, float]:
+            try:
+                return self._window._capability_state("resumo_perguntar")
+            except Exception:  # noqa: BLE001 - sonda nunca derruba a janela
+                return "pronta", "", 0.0
+
+        def _announce_readiness(self) -> None:
+            """Uma linha "Nesta máquina: …" na abertura, idempotente. O
+            agrupamento roda em qualquer maquina; so os NOMES pela AI dependem
+            do modelo de analise (placa NVIDIA)."""
+            from . import search as _search
+            try:
+                encoder_ok = _search.encoder_cached()
+                _e, _m, busca_gb = self._window._capability_state("busca_semantica")
+            except Exception:  # noqa: BLE001
+                encoder_ok, busca_gb = True, 0.5
+            estado, _motivo, resumo_gb = self._llm_state()
+            partes = ["temas por semelhança — pronta (segundos)" if encoder_ok else
+                      f"temas por semelhança — falta baixar (~{fmt_gb(busca_gb)}; o clique oferece)"]
+            if estado == "incompativel":
+                partes.append("nomes pela AI — não roda neste computador (precisa de placa NVIDIA); "
+                              "os temas ficam com os termos característicos")
+            elif estado == "instalavel":
+                partes.append(f"nomes pela AI — falta baixar o modelo de análise (~{fmt_gb(resumo_gb)})")
+            else:
+                partes.append("nomes pela AI — pronta (alguns minutos, em segundo plano)")
+            self.state_label.setText("Nesta máquina: " + " · ".join(partes) + ".")
+
+        def showEvent(self, event) -> None:  # noqa: N802 - assinatura Qt
+            super().showEvent(event)
+            if self._payload is None and self._window.context is not None:
+                self._load_existing()
+
+        def closeEvent(self, event) -> None:  # noqa: N802 - assinatura Qt
+            # A base cancela o worker e desliga os sinais — o tratador de fim
+            # nao roda mais, entao os botoes tem de voltar AQUI: senao
+            # "Descobrir os temas" ficava cinza para sempre (a janela e
+            # cacheada) e o "Cancelar" seguia visivel sem efeito.
+            super().closeEvent(event)
+            self._idle_buttons()
+
+        def _idle_buttons(self) -> None:
+            self.discover_button.setEnabled(True)
+            self.cancel_button.setVisible(False)
+            self._naming = False
+
+        def reset_for_project(self) -> None:
+            """Esquece temas e códigos do projeto ANTERIOR (a janela é cacheada
+            pela janela principal). Sem isto, renomear um tema depois de trocar
+            de projeto gravaria os temas do projeto antigo dentro do novo —
+            `_save_themes`/`_save_coding` escrevem sempre no projeto ATUAL."""
+            worker = self._worker
+            if worker is not None and worker.isRunning():
+                try:
+                    worker.request_cancel()
+                    worker.done.disconnect()
+                    worker.progress.disconnect()
+                except (RuntimeError, TypeError, AttributeError):
+                    pass
+            self._worker = None
+            self._payload = None
+            self._codes = []
+            self._codings = []
+            self._bulk_undo = None
+            if hasattr(self, "undo_bulk_button"):
+                self.undo_bulk_button.setVisible(False)
+            self._speakers = None
+            self._inventory = []
+            self._sync_speakers_label()
+            self.themes_list.clear()
+            self.passages.clear()
+            self.theme_title.setText("")
+            self.theme_desc.setText("")
+            self.names_button.setVisible(False)
+            self._idle_buttons()
+            self.status_label.setText("")
+            self._announce_readiness()
+            if self.isVisible() and self._window.context is not None:
+                self._load_existing()
+
+        def _load_existing(self) -> None:
+            from . import themes as _themes
+            paths = self._paths()
+            if paths is None:
+                return
+            self._load_coding()
+            self._load_speakers_choice()
+            payload = _themes.load_themes(paths)
+            if not payload:
+                # Primeira vez: dizer qual e o primeiro passo, senao a janela
+                # abre com duas listas vazias e nenhuma orientacao.
+                self.status_label.setText(
+                    "Comece por «Descobrir os temas» — os trechos de cada tema aparecem à "
+                    "direita, e aí dá para aplicar códigos e exportar.")
+                return
+            self._payload = payload
+            self._render()
+            quando = str(payload.get("created_at") or "").replace("T", " ")
+            n_ids = len(payload.get("interview_ids") or [])
+            self.status_label.setText(
+                f"Temas descobertos{' em ' + quando if quando else ''} para {n_ids} entrevista(s). "
+                "«Descobrir os temas» refaz com o escopo atual.")
+            # Ao ABRIR, a AI nunca começa sozinha: ocupar a placa por minutos
+            # sem o usuário ter pedido nada contraria "dizer o custo antes do
+            # clique" (e ainda bloquearia «Descobrir os temas»). Só oferece.
+            self._maybe_offer_naming(auto=False)
+
+        def _load_coding(self) -> None:
+            from . import coding as _coding
+            from . import research_context as _rc
+            paths = self._paths()
+            if paths is None:
+                return
+            self._codes = _coding.load_codebook(paths)
+            self._codings = _coding.load_codings(paths)
+            self._codes_dirty = False
+            if not self._codes:
+                # Sementes do "## Codebook inicial" do contexto da pesquisa
+                # (em memoria; gravadas na primeira codificacao).
+                try:
+                    for name, desc in _coding.parse_codebook_seed(_rc.load_research_context(paths)):
+                        _coding.add_code(self._codes, name, desc)
+                except Exception:  # noqa: BLE001 - contexto ausente/ilegivel = sem sementes
+                    pass
+
+        # ---- quem entra (falantes) --------------------------------------------
+        def _speakers_set(self) -> set[str] | None:
+            return None if self._speakers is None else set(self._speakers)
+
+        def _load_speakers_choice(self) -> None:
+            """Lê a escolha gravada no projeto. Ausente = ainda não perguntado."""
+            ctx = self._window.context
+            escolha = (ctx.project.get("coding_speakers") if ctx is not None else None)
+            self._speakers = [str(s) for s in escolha] if isinstance(escolha, list) else None
+            self._sync_speakers_label()
+
+        def _save_speakers_choice(self) -> None:
+            ctx = self._window.context
+            if ctx is None:
+                return
+            ctx.project["coding_speakers"] = list(self._speakers) if self._speakers is not None else None
+            ctx.project["coding_speakers_asked"] = True
+            try:
+                app_service.save_project_metadata(ctx)
+            except Exception as exc:  # noqa: BLE001 - escolha nunca derruba a janela
+                _logger.warning("Nao foi possivel guardar 'quem entra': %s", exc)
+
+        def _speaker_inventory(self) -> list[dict[str, Any]]:
+            """Falantes do escopo, com o peso de cada um (relê a cada abertura:
+            identificar vozes muda os rótulos por fora desta janela)."""
+            from . import search as _search
+            from . import speakers as _speakers
+            paths = self._paths()
+            if paths is None:
+                return []
+            self._refresh_scope()
+            ids = self._scope_ids() or self._project_ids()
+            turns_by_id = {iid: _search.load_source_turns(paths, iid) for iid in ids}
+            self._inventory = _speakers.speaker_inventory(turns_by_id)
+            return self._inventory
+
+        def _sync_speakers_label(self) -> None:
+            from . import speakers as _speakers
+            self.speakers_label.setText(
+                _speakers.describe_selection(self._inventory, self._speakers))
+
+        def _choose_speakers(self, primeira_vez: bool = False) -> bool:
+            """Janela de escolha; True se o usuário confirmou."""
+            from . import speakers as _speakers
+            inventario = self._speaker_inventory()
+            if not inventario:
+                self.status_label.setText(
+                    "Nenhuma transcrição no escopo para ler os falantes.")
+                return False
+            rotulos = [i["label"] for i in inventario]
+            marcados = set(self._speakers) if self._speakers is not None else (
+                set(_speakers.default_selection(rotulos)) if primeira_vez else set(rotulos))
+            dialogo = QDialog(self)
+            dialogo.setWindowTitle("Quem entra na análise")
+            dlayout = QVBoxLayout(dialogo)
+            explicacao = QLabel(
+                "Marque os falantes que contam nos temas e na codificação. Em entrevistas "
+                "não se costuma codificar quem pergunta; em grupos focais, quem modera — "
+                "mas a decisão é sua.\n\nA fala de quem ficar de fora continua na "
+                "transcrição e no arquivo exportado, como contexto: ela só deixa de "
+                "influenciar o agrupamento e de receber código.")
+            explicacao.setWordWrap(True)
+            dlayout.addWidget(explicacao)
+            lista = QListWidget()
+            sugeridos = _speakers.suggest_excluded(rotulos)
+            for item_inv in inventario:
+                rotulo = item_inv["label"]
+                texto = (f"{rotulo} — {item_inv['turns']} turnos, {item_inv['words']} palavras, "
+                         f"{item_inv['interviews']} entrevista(s)")
+                if rotulo in sugeridos:
+                    texto += "  · sugerido de fora (parece quem conduz)"
+                item = QListWidgetItem(texto)
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setData(Qt.ItemDataRole.UserRole, rotulo)
+                item.setCheckState(Qt.CheckState.Checked if rotulo in marcados
+                                   else Qt.CheckState.Unchecked)
+                lista.addItem(item)
+            dlayout.addWidget(lista, 1)
+            aviso = QLabel("")
+            aviso.setWordWrap(True)
+            aviso.setStyleSheet(f"color: {ui_tokens.WARN};")
+            dlayout.addWidget(aviso)
+            botoes = QHBoxLayout()
+            botoes.addStretch(1)
+            cancelar = QPushButton("Cancelar")
+            cancelar.clicked.connect(dialogo.reject)
+            botoes.addWidget(cancelar)
+            confirmar = QPushButton("Usar estes falantes")
+            confirmar.setDefault(True)
+            botoes.addWidget(confirmar)
+            dlayout.addLayout(botoes)
+
+            def _confirmar() -> None:
+                escolhidos = [str(lista.item(r).data(Qt.ItemDataRole.UserRole))
+                              for r in range(lista.count())
+                              if lista.item(r).checkState() == Qt.CheckState.Checked]
+                if not escolhidos:
+                    aviso.setText("Marque ao menos um falante — sem nenhum não há o que agrupar.")
+                    return
+                dialogo._escolhidos = escolhidos  # type: ignore[attr-defined]
+                dialogo.accept()
+
+            confirmar.clicked.connect(_confirmar)
+            if dialogo.exec() != QDialog.DialogCode.Accepted:
+                return False
+            escolhidos = list(getattr(dialogo, "_escolhidos", rotulos))
+            # Todos marcados = "todos os falantes" (None), para o índice não
+            # ganhar um escopo que não muda nada.
+            self._speakers = None if set(escolhidos) == set(rotulos) else escolhidos
+            self._save_speakers_choice()
+            self._sync_speakers_label()
+            return True
+
+        def _save_coding(self) -> None:
+            from . import coding as _coding
+            paths = self._paths()
+            if paths is None:
+                return
+            _coding.save_codebook(paths, self._codes)
+            _coding.save_codings(paths, self._codings)
+            self._codes_dirty = False
+
+        def _save_themes(self) -> None:
+            from . import themes as _themes
+            paths = self._paths()
+            if paths is not None and self._payload is not None:
+                _themes.save_themes(paths, self._payload)
+
+        # ---- descoberta ------------------------------------------------------
+        def run_discover(self) -> None:
+            from . import search as _search
+            from . import themes as _themes
+            ctx = self._window.context
+            if ctx is None:
+                return
+            if self._worker and self._worker.isRunning():
+                self.status_label.setText("Aguarde a etapa atual terminar (ou cancele).")
+                return
+            self._refresh_scope()
+            ids = self._scope_ids()
+            if not ids:
+                self.status_label.setText(self._scope_text())
+                return
+            if not _search.encoder_cached() and not self._window._ensure_optional_model(
+                    "search_encoder", "o modelo de busca por sentido",
+                    "Os temas são descobertos pelo sentido dos trechos — para isso o "
+                    "Transcritório usa o modelo de busca por sentido, que ainda não está "
+                    "instalado neste computador."):
+                return
+            self._load_coding()
+            # Primeira descoberta do projeto: PERGUNTAR quem entra antes de
+            # rodar, em vez de decidir por conta própria.
+            if not bool(ctx.project.get("coding_speakers_asked")):
+                if not self._choose_speakers(primeira_vez=True):
+                    self.status_label.setText(
+                        "Escolha quem entra na análise para descobrir os temas.")
+                    return
+            n = int(self.n_themes_spin.value()) or None
+            speakers = list(self._speakers) if self._speakers is not None else None
+            paths = ctx.paths
+            self.names_button.setVisible(False)
+            self.cancel_button.setText("Cancelar")
+            self.cancel_button.setVisible(True)
+            self.discover_button.setEnabled(False)
+            self.status_label.setText("Lendo os trechos das entrevistas…")
+
+            def fn(emit, should_cancel):
+                return _themes.discover(paths, ids, n_themes=n, progress_callback=emit,
+                                        should_cancel=should_cancel, speakers=speakers)
+
+            self._start_worker(
+                fn, self._on_discover_done,
+                on_progress=lambda d: self.status_label.setText(str(d.get("message") or "")))
+
+        def _on_discover_done(self, result, error: str) -> None:
+            self._idle_buttons()
+            worker = self._worker
+            payload = result or {}
+            if payload.get("cancelado") or (worker is not None and worker.cancelled.is_set()):
+                self.status_label.setText(
+                    "Descoberta cancelada — os temas anteriores continuam valendo.")
+                return
+            if error:
+                self.status_label.setText(f"Não foi possível descobrir os temas: {error}")
+                return
+            if not payload.get("themes") and not payload.get("outros"):
+                self.status_label.setText(
+                    "Nenhum trecho para agrupar — as entrevistas do escopo ainda não têm índice de busca.")
+                return
+            self._payload = payload
+            self._render()
+            temas = payload.get("themes") or []
+            outros = payload.get("outros") or []
+            self.status_label.setText(
+                f"{len(temas)} tema(s) em {int(payload.get('n_passages') or 0)} trechos de "
+                f"{len(payload.get('interview_ids') or [])} entrevista(s); {len(outros)} trecho(s) sem tema definido.")
+            self._maybe_offer_naming()
+
+        def _cancel(self) -> None:
+            worker = self._worker
+            if worker is not None and worker.isRunning():
+                worker.request_cancel()
+                self.status_label.setText("Cancelando…")
+
+        # ---- nomes pela AI (segundo plano) ------------------------------------
+        def _needs_names(self) -> bool:
+            return any(t.get("name_source") == "termos" for t in (self._payload or {}).get("themes") or [])
+
+        def _maybe_offer_naming(self, auto: bool = True) -> None:
+            """Com o modelo de analise pronto, nomeia sozinho em segundo plano
+            LOGO APOS uma descoberta pedida pelo usuario (auto=True); ao abrir a
+            janela (auto=False), so oferece o botao. Modelo instalavel: botao
+            com o tamanho do download. Incompativel: diz por que os nomes ficam
+            pelos termos."""
+            if not self._needs_names():
+                self.names_button.setVisible(False)
+                return
+            estado, _motivo, gb = self._llm_state()
+            if estado == "incompativel":
+                self.names_button.setVisible(False)
+                self.status_label.setText(
+                    self.status_label.text() + " Nomes pelos termos característicos — a AI que nomeia "
+                    "precisa de placa NVIDIA.")
+                return
+            if estado == "instalavel":
+                self.names_button.setText(f"✨ Nomear os temas com a AI (baixa ~{fmt_gb(gb)})")
+                self.names_button.setVisible(True)
+                return
+            self.names_button.setText("✨ Nomear os temas com a AI")
+            if not auto:
+                self.names_button.setVisible(True)
+                return
+            self._start_naming(user_click=False)
+
+        def _start_naming(self, user_click: bool = False) -> None:
+            import copy as _copy
+            from . import themes as _themes
+            if self._payload is None or (self._worker and self._worker.isRunning()):
+                return
+            estado, _motivo, _gb = self._llm_state()
+            if estado == "incompativel":
+                return
+            if estado == "instalavel" and (not user_click or not self._window._ensure_llm_model()):
+                return
+            paths = self._paths()
+            if paths is None:
+                return
+            snapshot = _copy.deepcopy(self._payload)   # a thread nunca toca no payload da janela
+            self._naming = True
+            self.names_button.setVisible(False)
+            self.cancel_button.setText("Cancelar os nomes pela AI (os temas ficam)")
+            self.cancel_button.setVisible(True)
+            self.status_label.setText(
+                self.status_label.text() + " Nomeando os temas com a AI em segundo plano (alguns minutos)…")
+
+            def fn(emit, should_cancel):
+                return _themes.name_with_llm(paths, snapshot, progress_callback=emit,
+                                             should_cancel=should_cancel)
+
+            self._start_worker(fn, self._on_naming_done)
+
+        def _on_naming_done(self, result, error: str) -> None:
+            from . import themes as _themes
+            self._naming = False
+            self.cancel_button.setVisible(False)
+            worker = self._worker
+            if worker is not None and worker.cancelled.is_set():
+                self.status_label.setText("Nomes pela AI cancelados — os temas continuam com os termos.")
+                self.names_button.setVisible(self._needs_names())
+                return
+            payload = result or {}
+            if error or payload.get("erro"):
+                self.status_label.setText(f"A AI não conseguiu nomear os temas: {error or payload.get('erro')}")
+                self.names_button.setVisible(self._needs_names())
+                return
+            if self._payload is None:
+                return
+            n = _themes.apply_names(self._payload, payload.get("nomes") or [])
+            self._save_themes()
+            # A nomeação roda por minutos JUSTAMENTE para o usuário continuar
+            # trabalhando: reconstruir a lista de trechos apagaria as caixas
+            # que ele desmarcou nesse intervalo — e o código seguinte iria
+            # para trechos que ele tinha excluído de propósito.
+            self._render(keep_marks=True)
+            if n == 0:
+                # Sem saída era o pior caso: JSON malformado ou ids inventados
+                # deixavam a janela sem botão para tentar de novo.
+                self.status_label.setText(
+                    "A AI não conseguiu nomear os temas desta vez — eles continuam com os "
+                    "termos característicos. Dá para tentar de novo.")
+            else:
+                faltam = sum(1 for t in self._themes() if t.get("name_source") == "termos")
+                self.status_label.setText(
+                    f"A AI nomeou {n} tema(s)."
+                    + (f" {faltam} continuam com os termos característicos." if faltam else ""))
+            self.names_button.setVisible(self._needs_names())
+
+        # ---- lista de temas e trechos -----------------------------------------
+        def _themes(self) -> list[dict[str, Any]]:
+            return list((self._payload or {}).get("themes") or [])
+
+        def _current_theme(self) -> dict[str, Any] | None:
+            item = self.themes_list.currentItem()
+            if item is None:
+                return None
+            theme_id = str(item.data(Qt.ItemDataRole.UserRole) or "")
+            for theme in self._themes():
+                if theme.get("id") == theme_id:
+                    return theme
+            return None
+
+        @staticmethod
+        def _passage_key(passage: dict[str, Any]) -> tuple[str, int, int]:
+            return (str(passage.get("interview_id") or ""),
+                    int(passage.get("t_from", 0)), int(passage.get("t_to", 0)))
+
+        def _current_marks(self) -> dict[tuple[str, int, int], Any]:
+            """Marcações atuais por TRECHO (não por linha): a lista pode mudar
+            de tamanho entre uma reconstrução e outra."""
+            marks: dict[tuple[str, int, int], Any] = {}
+            for row in range(self.passages.count()):
+                item = self.passages.item(row)
+                passage = item.data(Qt.ItemDataRole.UserRole + 1) or {}
+                if passage:
+                    marks[self._passage_key(passage)] = item.checkState()
+            return marks
+
+        def _render(self, keep_marks: bool = False) -> None:
+            marks = self._current_marks() if keep_marks else None
+            current = self.themes_list.currentItem()
+            keep_id = str(current.data(Qt.ItemDataRole.UserRole)) if current is not None else ""
+            self.themes_list.blockSignals(True)
+            self.themes_list.clear()
+            for theme in self._themes():
+                item = QListWidgetItem(
+                    f"{theme.get('name') or theme.get('id')}  —  {int(theme.get('n_passages') or 0)} trechos · "
+                    f"{int(theme.get('n_interviews') or 0)} entrevistas")
+                item.setData(Qt.ItemDataRole.UserRole, theme.get("id"))
+                self.themes_list.addItem(item)
+            outros = (self._payload or {}).get("outros") or []
+            if outros:
+                item = QListWidgetItem(f"Sem tema definido  —  {len(outros)} trechos")
+                item.setData(Qt.ItemDataRole.UserRole, self.OUTROS_ID)
+                self.themes_list.addItem(item)
+            self.themes_list.blockSignals(False)
+            row = 0
+            for index in range(self.themes_list.count()):
+                if str(self.themes_list.item(index).data(Qt.ItemDataRole.UserRole)) == keep_id:
+                    row = index
+                    break
+            if self.themes_list.count():
+                self.themes_list.setCurrentRow(row)
+                self._on_theme_selected(row, marks)
+            else:
+                self._on_theme_selected(-1)
+
+        def _turns_for(self, interview_id: str) -> list[dict[str, Any]]:
+            """Turnos da entrevista, com cache por sessão da janela."""
+            from . import search as _search
+            cache = getattr(self, "_turns_cache", None)
+            if cache is None:
+                cache = self._turns_cache = {}
+            if interview_id not in cache:
+                paths = self._paths()
+                cache[interview_id] = _search.load_source_turns(paths, interview_id) if paths else []
+            return cache[interview_id]
+
+        def _passage_ranges(self, passage: dict[str, Any]) -> list[tuple[int, int]]:
+            """As faixas de turnos que o código pinta neste trecho: só as
+            falas de quem está marcado em "Quem entra"."""
+            from . import coding as _coding
+            iid = str(passage.get("interview_id") or "")
+            return _coding.contiguous_ranges(
+                self._turns_for(iid), int(passage.get("t_from", 0)),
+                int(passage.get("t_to", 0)), self._speakers_set())
+
+        def _range_quote(self, interview_id: str, t_from: int, t_to: int) -> str:
+            from . import search as _search
+            faixa = {"t_from": t_from, "t_to": t_to, "c_from": 0, "c_to": -1}
+            return _search.passage_scope_text(self._turns_for(interview_id), faixa, None)
+
+        def _code_names_for(self, passage: dict[str, Any]) -> list[str]:
+            from . import coding as _coding
+            by_id = {c["id"]: c["name"] for c in self._codes}
+            iid = str(passage.get("interview_id") or "")
+            nomes: list[str] = []
+            for t_from, t_to in self._passage_ranges(passage):
+                for code_id in _coding.codes_at(self._codings, iid, t_from, t_to):
+                    nome = by_id.get(code_id)
+                    if nome and nome not in nomes:
+                        nomes.append(nome)
+            return nomes
+
+        def _on_theme_selected(self, row: int, marks: dict | None = None) -> None:
+            self.passages.clear()
+            if row < 0 or self._payload is None:
+                self.theme_title.setText("")
+                self.theme_desc.setText("")
+                return
+            item = self.themes_list.item(row)
+            theme_id = str(item.data(Qt.ItemDataRole.UserRole) or "") if item is not None else ""
+            if theme_id == self.OUTROS_ID:
+                lista = list(self._payload.get("outros") or [])
+                self.theme_title.setText(f"Sem tema definido ({len(lista)} trechos)")
+                self.theme_desc.setText(
+                    "Trechos que não se pareceram o bastante com nenhum tema. Dá para codificá-los mesmo assim.")
+            else:
+                theme = self._current_theme() or {}
+                lista = list(theme.get("passages") or [])
+                self.theme_title.setText(str(theme.get("name") or theme_id))
+                termos = ", ".join(theme.get("terms") or [])
+                desc = str(theme.get("description") or "")
+                self.theme_desc.setText(
+                    desc + (f"\nTermos característicos: {termos}" if termos else ""))
+            for passage in lista:
+                self._add_passage(passage, marks)
+
+        def _add_passage(self, passage: dict[str, Any], marks: dict | None = None) -> None:
+            iid = str(passage.get("interview_id") or "")
+            codigos = self._code_names_for(passage)
+            prefixo = ("● " + "; ".join(codigos) + "\n") if codigos else ""
+            texto = " ".join(str(passage.get("text") or "").split())
+            item = QListWidgetItem(
+                f"{prefixo}{self._friendly_title(iid)} · {format_clock(float(passage.get('start', 0) or 0))}\n{texto}")
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState((marks or {}).get(self._passage_key(passage), Qt.CheckState.Checked))
+            item.setData(Qt.ItemDataRole.UserRole, (iid, float(passage.get("start", 0) or 0)))
+            item.setData(Qt.ItemDataRole.UserRole + 1, passage)
+            self.passages.addItem(item)
+
+        def _refresh_passages(self) -> None:
+            """Reescreve os rotulos de codigo preservando as marcacoes."""
+            marks = self._current_marks()
+            atual = self.passages.currentRow()
+            self._on_theme_selected(self.themes_list.currentRow(), marks)
+            if 0 <= atual < self.passages.count():
+                self.passages.setCurrentRow(atual)
+
+        def _checked_passages(self) -> list[dict[str, Any]]:
+            out: list[dict[str, Any]] = []
+            for row in range(self.passages.count()):
+                item = self.passages.item(row)
+                if item.checkState() == Qt.CheckState.Checked:
+                    out.append(item.data(Qt.ItemDataRole.UserRole + 1))
+            return out
+
+        # ---- renomear / juntar ------------------------------------------------
+        def _selection_is_outros(self) -> bool:
+            item = self.themes_list.currentItem()
+            return item is not None and str(item.data(Qt.ItemDataRole.UserRole) or "") == self.OUTROS_ID
+
+        def _no_theme_reason(self, acao: str) -> str:
+            """Motivo certo para renomear/juntar sem um TEMA escolhido — a
+            linha «Sem tema definido» está na lista mas não é um tema, e
+            mandar "escolha um tema" para quem acabou de escolher uma linha
+            não explica nada."""
+            if self._payload is None:
+                return f"Descubra os temas primeiro — depois dá para {acao}."
+            if self._selection_is_outros():
+                return ("«Sem tema definido» não é um tema — são os trechos que sobraram. "
+                        f"Escolha um tema da lista para {acao}.")
+            return f"Escolha um tema na lista para {acao}."
+
+        def _rename(self) -> None:
+            from . import themes as _themes
+            theme = self._current_theme()
+            if theme is None or self._payload is None:
+                self.status_label.setText(self._no_theme_reason("renomear"))
+                return
+            nome, ok = QInputDialog.getText(self, "Renomear tema", "Nome do tema:",
+                                            text=str(theme.get("name") or ""))
+            nome = " ".join(str(nome or "").split())
+            if not ok or not nome:
+                return
+            _themes.rename_theme(self._payload, str(theme["id"]), nome)
+            self._save_themes()
+            self._render()
+            self.status_label.setText(f"Tema renomeado para «{nome}».")
+
+        def _merge(self) -> None:
+            from . import themes as _themes
+            theme = self._current_theme()
+            if theme is None or self._payload is None:
+                self.status_label.setText(self._no_theme_reason("juntar"))
+                return
+            outros = [t for t in self._themes() if t is not theme]
+            if not outros:
+                self.status_label.setText("Só há um tema.")
+                return
+            nomes = [str(t.get("name") or t.get("id")) for t in outros]
+            escolha, ok = QInputDialog.getItem(
+                self, "Juntar temas", f"Juntar «{theme.get('name')}» com:", nomes, 0, False)
+            if not ok or escolha not in nomes:
+                return
+            absorvido = outros[nomes.index(escolha)]
+            _themes.merge_themes(self._payload, str(theme["id"]), str(absorvido["id"]))
+            self._save_themes()
+            self._render()
+            self.status_label.setText(
+                f"«{escolha}» entrou em «{theme.get('name')}» ({int(theme.get('n_passages') or 0)} trechos).")
+
+        # ---- codificacao -------------------------------------------------------
+        def _code_names(self) -> list[str]:
+            return [str(c.get("name") or "") for c in self._codes]
+
+        def _apply_code_to_checked(self) -> None:
+            from . import coding as _coding
+            theme = self._current_theme()
+            marcados = self._checked_passages()
+            if not marcados:
+                self.status_label.setText(
+                    "Marque ao menos um trecho para aplicar um código." if self._payload is not None
+                    else "Descubra os temas primeiro — depois marque os trechos e aplique um código.")
+                return
+            nomes = self._code_names()
+            sugerido = str(theme.get("name") or "") if theme else ""
+            atual = nomes.index(sugerido) if sugerido in nomes else (len(nomes) if sugerido else 0)
+            escolha, ok = QInputDialog.getItem(
+                self, "Aplicar código", "Código (escolha um ou escreva um novo):",
+                nomes + ([sugerido] if sugerido and sugerido not in nomes else []), atual, True)
+            escolha = " ".join(str(escolha or "").split())
+            if not ok or not escolha:
+                return
+            novo = _coding.find_code(self._codes, escolha) is None
+            code = _coding.add_code(self._codes, escolha,
+                                    description=str(theme.get("description") or "") if (theme and novo) else "")
+            # O código pinta SÓ as falas de quem está em "Quem entra": um
+            # trecho pergunta-resposta-pergunta-resposta vira duas faixas do
+            # mesmo código, e a pergunta fica no documento como contexto.
+            criadas, ja_tinham = 0, 0
+            for p in marcados:
+                iid = str(p["interview_id"])
+                for t_from, t_to in self._passage_ranges(p):
+                    if _coding.add_coding(self._codings, iid, t_from, t_to, code["id"],
+                                          quote=self._range_quote(iid, t_from, t_to),
+                                          origem="tema") is not None:
+                        criadas += 1
+                    else:
+                        ja_tinham += 1
+            self._forget_bulk_undo()
+            self._save_coding()
+            self._refresh_passages()
+            self.status_label.setText(
+                f"Código «{code['name']}» aplicado a {criadas} trecho(s)"
+                + (f" ({ja_tinham} já o tinham)." if ja_tinham else ".")
+                + ("" if self._speakers is None
+                   else f" Só a fala de {', '.join(self._speakers)}."))
+
+        def _apply_all_themes_as_codes(self) -> None:
+            """Um código por tema, aplicado a todos os trechos daquele tema."""
+            from . import coding as _coding
+            temas = self._themes()
+            if not temas:
+                self.status_label.setText(
+                    "Descubra os temas primeiro — depois dá para aplicar todos como códigos."
+                    if self._payload is None else "Nenhum tema para aplicar.")
+                return
+            trechos = sum(len(t.get("passages") or []) for t in temas)
+            escopo = ("" if self._speakers is None
+                      else "\nCada código pinta só a fala de "
+                           f"{', '.join(self._speakers)}; o resto do trecho fica no "
+                           "documento como contexto.")
+            resposta = QMessageBox.question(
+                self, "Aplicar todos os temas como códigos",
+                f"Isto cria um código para cada um dos {len(temas)} temas (reaproveitando os que já "
+                f"existem com o mesmo nome) e o aplica aos {trechos} trechos deles."
+                f"{escopo}\n\n«Sem tema definido» não entra. O botão «Desfazer», ao lado, "
+                "devolve tudo ao que era.\n\nAplicar agora?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes)
+            if resposta != QMessageBox.StandardButton.Yes:
+                return
+            antes = (deepcopy(self._codes), deepcopy(self._codings))
+            try:
+                resumo = _coding.apply_themes_as_codes(
+                    self._codes, self._codings, temas, self._passage_ranges, self._range_quote)
+            except Exception as exc:  # noqa: BLE001 - nunca deixa a janela num meio-termo
+                self._codes, self._codings = antes
+                self.status_label.setText(f"Não foi possível aplicar: {sanitize_message(str(exc))}")
+                return
+            # Só guarda o retrato quando algo mudou de fato: aplicar duas vezes
+            # seguidas não pode fazer o «Desfazer» apontar para uma aplicação
+            # que não alterou nada — e deixar de desfazer a que alterou.
+            if resumo["criadas"] or resumo["codigos_novos"]:
+                self._bulk_undo = antes
+                self.undo_bulk_button.setVisible(True)
+            self._save_coding()
+            self._refresh_passages()
+            partes = [f"{resumo['codigos_novos']} código(s) novo(s) e "
+                      f"{resumo['criadas']} trecho(s) codificado(s) em {resumo['temas']} temas."]
+            if resumo["ja_tinham"]:
+                partes.append(f"{resumo['ja_tinham']} já tinham o código do tema.")
+            if resumo["sem_fala"]:
+                partes.append(f"{resumo['sem_fala']} trecho(s) ficaram de fora: só têm fala de "
+                              "quem não entra na análise.")
+            self.status_label.setText(" ".join(partes))
+
+        def _undo_bulk_coding(self) -> None:
+            """Desfaz a última aplicação em massa. Só ela: o que veio depois,
+            manualmente, seria perdido — por isso o botão some assim que a
+            codificação muda por outro caminho."""
+            antes = getattr(self, "_bulk_undo", None)
+            if antes is None:
+                self.undo_bulk_button.setVisible(False)
+                return
+            self._codes, self._codings = antes
+            self._bulk_undo = None
+            self.undo_bulk_button.setVisible(False)
+            self._save_coding()
+            self._refresh_passages()
+            self.status_label.setText("Aplicação em massa desfeita: codebook e codificação "
+                                      "voltaram ao que eram.")
+
+        def _forget_bulk_undo(self) -> None:
+            """Qualquer outra mudança na codificação torna o desfazer em massa
+            perigoso (levaria junto o que foi feito depois)."""
+            if getattr(self, "_bulk_undo", None) is not None:
+                self._bulk_undo = None
+                self.undo_bulk_button.setVisible(False)
+
+        def _passage_codes(self) -> None:
+            from . import coding as _coding
+            item = self.passages.currentItem()
+            if item is None:
+                self.status_label.setText(
+                    "Selecione um trecho para ver ou mudar os códigos dele." if self._payload is not None
+                    else "Descubra os temas primeiro — os trechos de cada tema aparecem à direita.")
+                return
+            passage = item.data(Qt.ItemDataRole.UserRole + 1) or {}
+            aplicados = self._code_names_for(passage)
+            opcoes = [("✓ " + n) if n in aplicados else n for n in self._code_names()]
+            escolha, ok = QInputDialog.getItem(
+                self, "Códigos deste trecho",
+                "Escolha um código para acrescentar, um marcado (✓) para tirar, ou escreva um novo:",
+                opcoes, 0, True)
+            escolha = " ".join(str(escolha or "").split())
+            if not ok or not escolha:
+                return
+            iid = str(passage["interview_id"])
+            faixas = self._passage_ranges(passage)
+            if not faixas:
+                self.status_label.setText(
+                    "Este trecho só tem fala de quem ficou de fora em «Quem entra».")
+                return
+            if escolha.startswith("✓ "):
+                nome = escolha[2:].strip()
+                code = _coding.find_code(self._codes, nome)
+                if code is not None:
+                    alvo = [c for c in self._codings
+                            if c.get("interview_id") == iid and c.get("code_id") == code["id"]
+                            and (int(c.get("t_from", -1)), int(c.get("t_to", -1))) in faixas]
+                    for c in alvo:
+                        _coding.remove_coding(self._codings, str(c["id"]))
+                    self._forget_bulk_undo()
+                    self._save_coding()
+                    self._refresh_passages()
+                    self.status_label.setText(f"Código «{nome}» retirado do trecho.")
+                return
+            code = _coding.add_code(self._codes, escolha)
+            criadas = sum(
+                1 for t_from, t_to in faixas
+                if _coding.add_coding(self._codings, iid, t_from, t_to, code["id"],
+                                      quote=self._range_quote(iid, t_from, t_to),
+                                      origem="manual") is not None)
+            if not criadas:
+                self.status_label.setText(f"O trecho já tem o código «{code['name']}».")
+                return
+            self._forget_bulk_undo()
+            self._save_coding()
+            self._refresh_passages()
+            self.status_label.setText(f"Código «{code['name']}» acrescentado ao trecho.")
+
+        def _export_ids(self) -> list[str]:
+            """Entrevistas que entram na exportação: TODAS as que têm alguma
+            codificação, mais as do escopo dos temas.
+
+            Nunca o combo "Onde:" — ele descreve a descoberta, e usá-lo aqui
+            fazia o arquivo sair sem parte da codificação, em silêncio."""
+            from . import coding as _coding
+            transcritas = self._project_ids()
+            ids = list(_coding.coded_interview_ids(self._codings))
+            for iid in (self._payload or {}).get("interview_ids") or []:
+                if iid not in ids:
+                    ids.append(str(iid))
+            return [i for i in ids if i in transcritas]
+
+        def _export(self) -> None:
+            from . import coding as _coding
+            from . import search as _search
+            ctx = self._window.context
+            if ctx is None:
+                return
+            if not self._codings:
+                self.status_label.setText("Nenhum código aplicado ainda — codifique trechos antes de exportar.")
+                return
+            paths = ctx.paths
+            ids = self._export_ids()
+            if not ids:
+                self.status_label.setText(
+                    "As entrevistas codificadas não têm transcrição neste projeto — nada a exportar.")
+                return
+            nome = str(ctx.project.get("project_name") or paths.project_root.name)
+            padrao = _coding.coding_dir(paths) / f"{nome}.qualilab"
+            destino, _filtro = QFileDialog.getSaveFileName(
+                self, f"Exportar a codificação de {len(ids)} entrevista(s)", str(padrao),
+                "Projeto QualiLab (*.qualilab);;Planilha CSV (*.csv)")
+            if not destino:
+                return
+            titulos = {iid: self._friendly_title(iid) for iid in ids}
+            out = Path(destino)
+            try:
+                if out.suffix.lower() == ".csv":
+                    contagem = _coding.export_csv(
+                        paths, ids, out, lambda iid: _search.load_source_turns(paths, iid))
+                    self.status_label.setText(
+                        f"Planilha gravada em {out} ({contagem['linhas']} trecho(s) codificado(s))."
+                        + self._desancoradas_text(contagem))
+                else:
+                    if out.suffix.lower() != ".qualilab":
+                        out = out.with_suffix(".qualilab")
+                    contagem = _coding.export_qualilab(
+                        paths, ids, out, nome, lambda iid: _search.load_source_turns(paths, iid), titles=titulos)
+                    self.status_label.setText(
+                        f"Projeto do QualiLab gravado em {out} ({contagem['documents']} documento(s), "
+                        f"{contagem['codes']} código(s), {contagem['codings']} trecho(s) codificado(s))."
+                        + self._desancoradas_text(contagem))
+            except Exception as exc:  # noqa: BLE001 - GUI boundary
+                self.status_label.setText(f"Não foi possível exportar: {exc}")
+
+        @staticmethod
+        def _desancoradas_text(contagem: dict[str, int]) -> str:
+            """Perda NUNCA silenciosa: se a transcrição mudou depois da
+            codificação, os trechos que não puderam ser localizados ficam de
+            fora — e o usuário precisa saber."""
+            n = int(contagem.get("desancoradas") or 0)
+            if not n:
+                return ""
+            return (f" {n} trecho(s) codificado(s) não entraram: a transcrição mudou depois "
+                    "da codificação e eles não foram encontrados onde estavam.")
 
 
     class EngineSettingsDialog(QDialog):
@@ -5583,7 +6982,10 @@ if QT_IMPORT_ERROR is None:
     class ReviewStudioWindow(QMainWindow):
         def __init__(self, project_root: Path | None = None) -> None:
             super().__init__()
-            self.setWindowTitle(APP_NAME)
+            # Canal de teste visivel no titulo: a beta e a estavel podem ficar
+            # abertas ao mesmo tempo, e confundir as duas seria pior do que
+            # nao ter beta nenhuma.
+            self.setWindowTitle(APP_NAME + channel_suffix())
             icon_path = app_asset_path(APP_ICON_FILE)
             if icon_path.exists():
                 self.setWindowIcon(QIcon(str(icon_path)))
@@ -5874,14 +7276,33 @@ if QT_IMPORT_ERROR is None:
                 "na janela, dá para restringir a entrevista aberta ou escolher quais entram.")
             self.project_search_action.triggered.connect(lambda: self.open_word_search())
 
-            self.explore_action = QAction("✨ Perguntar às entrevistas com AI…", self)
+            # O nome diz primeiro o que a função entrega SEMPRE (os trechos, em
+            # qualquer computador) e só depois o que depende da máquina (a
+            # resposta escrita). "Perguntar às entrevistas com AI" prometia a
+            # resposta a todo mundo — e a maioria dos computadores não tem
+            # placa NVIDIA. Relato de campo 2026-09-04: "continua não
+            # entregando o que promete; temos que mudar como nomeamos,
+            # explicamos e propagandeamos".
+            self.explore_action = QAction("✨ Buscar por sentido e perguntar…", self)
             self.explore_action.setToolTip(
-                "Faça perguntas e receba respostas citando os trechos, ou encontre\n"
-                "trechos pelo significado, mesmo sem as palavras exatas.\n"
+                "Escreva uma pergunta ou um tema e receba os trechos das entrevistas que\n"
+                "tratam disso — pelo sentido, mesmo sem as palavras exatas. Isso funciona\n"
+                "em qualquer computador.\n"
+                "A resposta escrita, citando os trechos, precisa de placa NVIDIA; sem ela,\n"
+                "ficam os trechos.\n"
                 "Lê as transcrições (não o áudio); o escopo é escolhível na janela:\n"
                 "todas, somente a entrevista aberta ou um conjunto escolhido.\n"
                 "AI local — nada sai do seu computador.")
             self.explore_action.triggered.connect(self.open_explore)
+
+            self.themes_action = QAction("✨ Temas das entrevistas…", self)
+            self.themes_action.setToolTip(
+                "Agrupa os trechos de todas as entrevistas por semelhança de sentido e lista\n"
+                "os temas mais tratados, com todos os trechos de cada um. Dá para renomear,\n"
+                "juntar, aplicar códigos (um ou mais por trecho) e exportar para o QualiLab\n"
+                "(.qualilab) ou CSV. Lê as transcrições (não o áudio); o escopo é escolhível\n"
+                "na janela. AI local — nada sai do seu computador.")
+            self.themes_action.triggered.connect(self.open_themes)
 
             self.summarize_action = QAction("✨ Resumir a entrevista com AI", self)
             self.summarize_action.setToolTip(
@@ -5948,15 +7369,134 @@ if QT_IMPORT_ERROR is None:
             self.play_action.triggered.connect(self.toggle_playback)
             self.addAction(self.play_action)
 
-            self.seek_back_action = QAction("Voltar 5s", self)
+            self.seek_back_action = QAction("Voltar 5 segundos", self)
             self.seek_back_action.setShortcut(QKeySequence("Ctrl+Left"))
             self.seek_back_action.triggered.connect(lambda: self.seek_relative(-5))
             self.addAction(self.seek_back_action)
 
-            self.seek_forward_action = QAction("Avancar 5s", self)
+            self.seek_forward_action = QAction("Avançar 5 segundos", self)
             self.seek_forward_action.setShortcut(QKeySequence("Ctrl+Right"))
             self.seek_forward_action.triggered.connect(lambda: self.seek_relative(5))
             self.addAction(self.seek_forward_action)
+
+            # --- Atalhos do Estúdio (2026-09-04) ---------------------------
+            # Uma hora de entrevista tem ~219 blocos, e cada um custava idas ao
+            # mouse: ouvir, voltar, corrigir, juntar, seguir. O problema é que
+            # com o cursor DENTRO do texto o QTextEdit consome Espaço, Ctrl+←
+            # e Ctrl+→ (sonda empírica) — os três atalhos de player que já
+            # existiam nunca chegavam a quem estava digitando. A família Alt e
+            # as teclas F sobrevivem: daí a segunda tecla nas ações do player e
+            # o conjunto abaixo, todo ele utilizável sem tirar a mão do texto.
+            self.play_action.setText("Reproduzir/Pausar")
+            self.play_action.setShortcuts([QKeySequence(Qt.Key.Key_Space), QKeySequence("F4")])
+            self.play_action.setToolTip("Reproduz ou pausa. (Espaço; F4 também funciona com o cursor no texto)")
+            self.seek_back_action.setShortcuts([QKeySequence("Ctrl+Left"), QKeySequence("Alt+Left")])
+            self.seek_back_action.setToolTip("Volta 5 segundos. (Ctrl+← ; Alt+← com o cursor no texto)")
+            self.seek_forward_action.setShortcuts([QKeySequence("Ctrl+Right"), QKeySequence("Alt+Right")])
+            self.seek_forward_action.setToolTip("Avança 5 segundos. (Ctrl+→ ; Alt+→ com o cursor no texto)")
+
+            self.seek_back_short_action = QAction("Voltar 2 segundos", self)
+            self.seek_back_short_action.setShortcut(QKeySequence("Alt+Shift+Left"))
+            self.seek_back_short_action.setToolTip("Volta 2 segundos — o passo curto de quem está conferindo uma palavra. (Alt+Shift+←)")
+            self.seek_back_short_action.triggered.connect(lambda: self.seek_relative(-2))
+            self.addAction(self.seek_back_short_action)
+
+            self.seek_forward_short_action = QAction("Avançar 2 segundos", self)
+            self.seek_forward_short_action.setShortcut(QKeySequence("Alt+Shift+Right"))
+            self.seek_forward_short_action.setToolTip("Avança 2 segundos. (Alt+Shift+→)")
+            self.seek_forward_short_action.triggered.connect(lambda: self.seek_relative(2))
+            self.addAction(self.seek_forward_short_action)
+
+            self.repeat_turn_action = QAction("Repetir o bloco", self)
+            self.repeat_turn_action.setShortcut(QKeySequence("F3"))
+            self.repeat_turn_action.setToolTip("Volta ao início do bloco atual e reproduz de novo. (F3)")
+            self.repeat_turn_action.triggered.connect(self.repeat_current_turn)
+
+            self.speed_down_action = QAction("Reproduzir mais devagar", self)
+            self.speed_down_action.setShortcut(QKeySequence("F7"))
+            self.speed_down_action.setToolTip("Um passo mais devagar na velocidade de reprodução. (F7)")
+            self.speed_down_action.triggered.connect(lambda: self._step_playback_speed(-1))
+            self.addAction(self.speed_down_action)
+
+            self.speed_up_action = QAction("Reproduzir mais rápido", self)
+            self.speed_up_action.setShortcut(QKeySequence("F8"))
+            self.speed_up_action.setToolTip("Um passo mais rápido na velocidade de reprodução. (F8)")
+            self.speed_up_action.triggered.connect(lambda: self._step_playback_speed(1))
+            self.addAction(self.speed_up_action)
+
+            self.next_block_action = QAction("Bloco seguinte", self)
+            self.next_block_action.setShortcut(QKeySequence("Alt+Down"))
+            self.next_block_action.setToolTip("Vai para o próximo bloco, leva o áudio junto e deixa o cursor no texto. (Alt+↓)")
+            self.next_block_action.triggered.connect(lambda: self._step_block(1))
+
+            self.prev_block_action = QAction("Bloco anterior", self)
+            self.prev_block_action.setShortcut(QKeySequence("Alt+Up"))
+            self.prev_block_action.setToolTip("Volta ao bloco anterior, leva o áudio junto e deixa o cursor no texto. (Alt+↑)")
+            self.prev_block_action.triggered.connect(lambda: self._step_block(-1))
+
+            self.next_flagged_action = QAction("Próximo bloco marcado", self)
+            self.next_flagged_action.setShortcut(QKeySequence("Alt+Shift+Down"))
+            self.next_flagged_action.setToolTip("Pula para o próximo bloco marcado para conferir. (Alt+Shift+↓)")
+            self.next_flagged_action.triggered.connect(lambda: self._step_flagged(1))
+
+            self.prev_flagged_action = QAction("Bloco marcado anterior", self)
+            self.prev_flagged_action.setShortcut(QKeySequence("Alt+Shift+Up"))
+            self.prev_flagged_action.setToolTip("Volta ao bloco marcado anterior. (Alt+Shift+↑)")
+            self.prev_flagged_action.triggered.connect(lambda: self._step_flagged(-1))
+
+            self.focus_toggle_action = QAction("Alternar foco: lista de blocos / texto", self)
+            self.focus_toggle_action.setShortcut(QKeySequence("F6"))
+            self.focus_toggle_action.setToolTip("Passa o foco do texto para a lista de blocos e de volta. (F6)")
+            self.focus_toggle_action.triggered.connect(self._toggle_studio_focus)
+
+            self.merge_prev_block_action = QAction("Juntar com anterior", self)
+            self.merge_prev_block_action.setShortcut(QKeySequence("Alt+Shift+J"))
+            self.merge_prev_block_action.setToolTip(
+                "Junta este bloco ao bloco de cima quando os falantes forem iguais. (Alt+Shift+J)")
+            self.merge_prev_block_action.triggered.connect(self.merge_current_turn_with_previous)
+
+            self.merge_block_action = QAction("Juntar com próximo", self)
+            self.merge_block_action.setShortcut(QKeySequence("Alt+J"))
+            self.merge_block_action.setToolTip(
+                "Junta este bloco ao bloco seguinte quando os falantes forem iguais. (Alt+J)")
+            self.merge_block_action.triggered.connect(self.merge_current_turn)
+
+            self.split_block_action = QAction("Dividir bloco", self)
+            self.split_block_action.setShortcut(QKeySequence("Alt+D"))
+            self.split_block_action.setToolTip(
+                "Divide o bloco pelo cursor de edição na onda, pela posição do player\n"
+                "ou no tempo exato da palavra sob o cursor do texto. (Alt+D)")
+            self.split_block_action.triggered.connect(self.split_current_turn)
+
+            # Fronteira mal colocada pela separacao automatica: o bloco e de A,
+            # mas a partir de certo ponto quem fala e B. Custava CINCO gestos
+            # (dividir, abrir o seletor, escolher B, juntar — e o juntar so
+            # passava depois de trocar o falante). O falante nao e perguntado:
+            # vem do bloco vizinho, que ja tem o certo — e por isso serve igual
+            # em entrevista a dois e em grupo focal.
+            self.move_tail_action = QAction("Passar o fim para o próximo", self)
+            self.move_tail_action.setShortcut(QKeySequence("Alt+P"))
+            self.move_tail_action.setToolTip(
+                "O texto a partir do cursor é do bloco seguinte: passa para lá,\n"
+                "com o falante de lá. Com o cursor no início, o bloco inteiro passa. (Alt+P)")
+            self.move_tail_action.triggered.connect(self.move_boundary_forward)
+
+            self.move_head_action = QAction("Passar o começo para o anterior", self)
+            self.move_head_action.setShortcut(QKeySequence("Alt+Shift+P"))
+            self.move_head_action.setToolTip(
+                "O texto até o cursor é do bloco anterior: passa para lá, com o\n"
+                "falante de lá. Com o cursor no fim, o bloco inteiro passa. (Alt+Shift+P)")
+            self.move_head_action.triggered.connect(self.move_boundary_backward)
+
+            # Quando o trecho e de alguem que NAO e vizinho — uma fala encaixada
+            # no meio do bloco, ou um grupo focal — nao ha fronteira a mover: o
+            # jeito e trocar o falante. Ate agora o seletor so era alcancavel
+            # pelo mouse.
+            self.focus_speaker_action = QAction("Escolher o falante deste bloco", self)
+            self.focus_speaker_action.setShortcut(QKeySequence("Alt+E"))
+            self.focus_speaker_action.setToolTip(
+                "Abre a lista de falantes do bloco atual, sem tirar a mão do teclado. (Alt+E)")
+            self.focus_speaker_action.triggered.connect(self.focus_speaker_combo)
 
         def action_button(self, action: QAction, primary: bool = False) -> QPushButton:
             button = QPushButton(action.text())
@@ -6107,6 +7647,31 @@ if QT_IMPORT_ERROR is None:
             editar_menu.addAction(self.redo_action)
             editar_menu.addSeparator()
             editar_menu.addAction(self.find_action)
+            editar_menu.addSeparator()
+            # Submenu "Bloco e reprodução": é aqui que os atalhos do Estúdio
+            # ficam VISÍVEIS. Atalho que ninguém descobre não economiza clique.
+            bloco_menu = editar_menu.addMenu("Bloco e reprodução")
+            bloco_menu.addAction(self.play_action)
+            bloco_menu.addAction(self.repeat_turn_action)
+            bloco_menu.addAction(self.seek_back_action)
+            bloco_menu.addAction(self.seek_forward_action)
+            bloco_menu.addAction(self.seek_back_short_action)
+            bloco_menu.addAction(self.seek_forward_short_action)
+            bloco_menu.addAction(self.speed_down_action)
+            bloco_menu.addAction(self.speed_up_action)
+            bloco_menu.addSeparator()
+            bloco_menu.addAction(self.prev_block_action)
+            bloco_menu.addAction(self.next_block_action)
+            bloco_menu.addAction(self.prev_flagged_action)
+            bloco_menu.addAction(self.next_flagged_action)
+            bloco_menu.addAction(self.focus_toggle_action)
+            bloco_menu.addSeparator()
+            bloco_menu.addAction(self.merge_prev_block_action)
+            bloco_menu.addAction(self.merge_block_action)
+            bloco_menu.addAction(self.split_block_action)
+            bloco_menu.addAction(self.move_head_action)
+            bloco_menu.addAction(self.move_tail_action)
+            bloco_menu.addAction(self.focus_speaker_action)
 
             # --- Entrevista: tudo sobre a entrevista (abrir, transcrever,
             # falantes, propriedades, lista, destrutivas) ---
@@ -6150,6 +7715,7 @@ if QT_IMPORT_ERROR is None:
             analisar_menu.addAction(self.busy_menu_hint_separator)
             analisar_menu.addAction(self.project_search_action)
             analisar_menu.addAction(self.explore_action)
+            analisar_menu.addAction(self.themes_action)
             analisar_menu.addSeparator()
             analisar_menu.addAction(self.summarize_action)
             analisar_menu.addAction(self.glossario_action)
@@ -7295,13 +8861,13 @@ if QT_IMPORT_ERROR is None:
             if self.context is not None:
                 nome = str(self.context.project.get("project_name")
                            or self.context.paths.project_root.name)
-                self.setWindowTitle(f"{APP_NAME} — {nome}")
+                self.setWindowTitle(f"{APP_NAME} — {nome}{channel_suffix()}")
                 self.project_label.setToolTip(
                     f"Projeto: {self.context.paths.project_root}\n"
                     "Clique em \"Modelo\" ou \"Motor\" para configurar a "
                     "transcrição (modelo, dispositivo CUDA/CPU, idioma).")
             else:
-                self.setWindowTitle(APP_NAME)
+                self.setWindowTitle(APP_NAME + channel_suffix())
                 self.project_label.setToolTip("Nenhum projeto aberto.")
 
         def project_header_text(self) -> str:
@@ -7454,7 +9020,7 @@ if QT_IMPORT_ERROR is None:
             self.play_button = QPushButton("Reproduzir")
             self.play_button.setAccessibleName("Reproduzir ou pausar")
             self.play_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
-            self.play_button.setToolTip("Reproduzir ou pausar o áudio da entrevista. (Espaço)")
+            self.play_button.setToolTip("Reproduzir ou pausar o áudio da entrevista. (Espaço; F4 com o cursor no texto)")
             self.play_button.clicked.connect(self.toggle_playback)
             media_controls.addWidget(self.play_button)
             stop_button = QPushButton("Parar")
@@ -7464,18 +9030,15 @@ if QT_IMPORT_ERROR is None:
             media_controls.addWidget(stop_button)
             back_button = QPushButton("-5s")
             back_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaSeekBackward))
-            back_button.setToolTip("Voltar 5 segundos no áudio. (Ctrl+Esquerda)")
+            back_button.setToolTip("Voltar 5 segundos no áudio. (Ctrl+Esquerda; Alt+Esquerda com o cursor no texto)")
             back_button.clicked.connect(lambda: self.seek_relative(-5))
             media_controls.addWidget(back_button)
             forward_button = QPushButton("+5s")
             forward_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaSeekForward))
-            forward_button.setToolTip("Avançar 5 segundos no áudio. (Ctrl+Direita)")
+            forward_button.setToolTip("Avançar 5 segundos no áudio. (Ctrl+Direita; Alt+Direita com o cursor no texto)")
             forward_button.clicked.connect(lambda: self.seek_relative(5))
             media_controls.addWidget(forward_button)
-            repeat_button = QPushButton("Repetir bloco")
-            repeat_button.setToolTip("Reproduzir novamente o trecho do bloco selecionado na tabela.")
-            repeat_button.clicked.connect(self.repeat_current_turn)
-            media_controls.addWidget(repeat_button)
+            media_controls.addWidget(self.action_button(self.repeat_turn_action))
             self.position_slider = QSlider(Qt.Orientation.Horizontal)
             self.position_slider.setAccessibleName("Posição do áudio")
             self.position_slider.setToolTip("Arraste para navegar no áudio da entrevista.")
@@ -7486,7 +9049,7 @@ if QT_IMPORT_ERROR is None:
             media_controls.addWidget(self.time_label)
             self.speed_combo = QComboBox()
             self.speed_combo.setAccessibleName("Velocidade de reprodução")
-            self.speed_combo.setToolTip("Velocidade de reprodução do áudio (0.75x a 2.0x).")
+            self.speed_combo.setToolTip("Velocidade de reprodução do áudio (0.75x a 2.0x). F7 diminui, F8 aumenta.")
             for label, rate in [("0.75x", 0.75), ("1.0x", 1.0), ("1.25x", 1.25), ("1.5x", 1.5), ("2.0x", 2.0)]:
                 self.speed_combo.addItem(label, rate)
             self.speed_combo.setCurrentIndex(1)
@@ -7755,16 +9318,19 @@ if QT_IMPORT_ERROR is None:
             self.save_block_button.setToolTip("Salva as alterações do bloco atual. Trocar de bloco também salva automaticamente.")
             self.save_block_button.clicked.connect(lambda _checked=False: self.save_current_turn(force=True))
             button_row.addWidget(self.save_block_button)
-            self.merge_button = QPushButton("Juntar com próximo")
-            self.merge_button.setToolTip("Junta este bloco ao bloco seguinte quando os falantes forem iguais.")
-            self.merge_button.clicked.connect(self.merge_current_turn)
+            # Ordem de leitura: anterior à esquerda, próximo à direita. Os três
+            # são espelhos das ações (action_button): um só estado, um só
+            # tooltip, e o atalho aparece escrito no botão que o usuário já usa.
+            self.merge_prev_button = self.action_button(self.merge_prev_block_action)
+            button_row.addWidget(self.merge_prev_button)
+            self.merge_button = self.action_button(self.merge_block_action)
             button_row.addWidget(self.merge_button)
-            self.split_button = QPushButton("Dividir bloco")
-            self.split_button.setToolTip(
-                "Divide o bloco pelo cursor de edição na onda, pela posição do player\n"
-                "ou no tempo exato da palavra sob o cursor do texto.")
-            self.split_button.clicked.connect(self.split_current_turn)
+            self.split_button = self.action_button(self.split_block_action)
             button_row.addWidget(self.split_button)
+            self.move_head_button = self.action_button(self.move_head_action)
+            button_row.addWidget(self.move_head_button)
+            self.move_tail_button = self.action_button(self.move_tail_action)
+            button_row.addWidget(self.move_tail_button)
             button_row.addStretch()
             grid.addLayout(button_row, 3, 0, 1, 4)
 
@@ -8022,17 +9588,22 @@ if QT_IMPORT_ERROR is None:
             return True
 
         # --- servidor de separacao de falantes do lote (B1, 2026-09-02) ---
-        def _start_diarize_server(self, n_files: int) -> None:
+        def _start_diarize_server(self, n_files: int, sobrepor: bool = False) -> None:
             """Um processo `diarize-serve` por LOTE em vez de um `diarize` por
             arquivo: o modelo carrega uma vez, em paralelo com o preparo e a
-            transcricao do 1o arquivo (start() nao espera). Lote de 1
-            arquivo segue na rota antiga — nada a ganhar."""
+            transcricao do 1o arquivo (start() nao espera).
+
+            Lote de 1 arquivo seguia na rota antiga — nada a ganhar. Com
+            SOBREPOSICAO (2026-09-05) isso deixou de valer: o arquivo unico e
+            justamente quem mais ganha, porque a separacao inteira se esconde
+            atras da transcricao."""
             self._stop_diarize_server()
-            if n_files < 2 or self.context is None:
+            if self.context is None or (n_files < 2 and not sobrepor):
                 return
             try:
                 from .diarize_client import DiarizeServer
-                server = DiarizeServer(self.context.paths.project_root)
+                server = DiarizeServer(self.context.paths.project_root,
+                                       threads=self._core_budget(concurrent=sobrepor)[1])
                 if server.start():
                     self._diarize_server = server
             except Exception as exc:  # noqa: BLE001 - sem servidor = rota por arquivo
@@ -8046,6 +9617,46 @@ if QT_IMPORT_ERROR is None:
                     server.stop()
                 except Exception as exc:  # noqa: BLE001
                     _logger.warning("servidor de diarizacao nao encerrou limpo: %s", exc)
+
+        def _core_budget(self, *, concurrent: bool = False) -> tuple[int, int]:
+            """(threads da transcrição, threads da separação) para este lote.
+
+            (0, 0) significa "não mexer": é o padrão, e reproduz o
+            comportamento de sempre sem passar SessionOptions nem variável de
+            ambiente nenhuma."""
+            from . import app_settings as _st_b, capabilities as _caps_b, runtime as _rt_b
+
+            try:
+                return _caps_b.cpu_budget(_st_b.computer_use(), _rt_b.cpu_cores(),
+                                          concurrent=concurrent)
+            except Exception as exc:  # noqa: BLE001 - preferencia ilegivel = padrao
+                _logger.warning("orçamento de núcleos indisponível: %s", exc)
+                return (0, 0)
+
+        def _overlap_decision(self, device: str) -> tuple[bool, str]:
+            """Sobrepor transcrição e separação de vozes neste computador?"""
+            from . import capabilities as _caps_o
+
+            try:
+                return _caps_o.should_overlap(_caps_o.hardware_snapshot(), device)
+            except Exception as exc:  # noqa: BLE001 - na duvida, o caminho de sempre
+                _logger.warning("nao consegui decidir sobre a sobreposicao: %s", exc)
+                return False, ""
+
+        def _release_batch_models(self) -> None:
+            """Solta os modelos que ficam vivos ENTRE arquivos de um lote.
+
+            O TAGARELA em CPU custa 2,2 GB e passou a ser carregado uma vez por
+            lote (2026-09-05) — sem soltar ao fim, o app ficaria segurando isso
+            enquanto a pessoa revisa. Chamado nos mesmos tres pontos do
+            servidor de diarizacao: fim, falha e fechar a janela."""
+            self._diar_ahead_join_all()
+            try:
+                from . import parakeet_runner as _pk_rel
+
+                _pk_rel.release_cpu_model()
+            except Exception as exc:  # noqa: BLE001 - soltar memoria nunca derruba nada
+                _logger.warning("nao consegui soltar o modelo de transcricao: %s", exc)
 
         # --- preparo dos audios em paralelo (B2, 2026-09-02) ---
         def _prepare_batch(
@@ -8113,21 +9724,55 @@ if QT_IMPORT_ERROR is None:
             asr_model: str,
             progress_callback: Callable[[dict[str, Any]], None] | None = None,
             should_cancel: Callable[[], bool] | None = None,
+            diarize_ahead: bool = False,
+            asr_threads: int = 0,
         ) -> app_service.JobResult:
             """Passo de transcricao de um arquivo do lote: recusa quem falhou
             no preparo em paralelo — o worker pula o resto DESTE arquivo e
-            segue com os outros."""
+            segue com os outros.
+
+            `diarize_ahead`: dispara a separacao de vozes DESTE arquivo antes
+            de comecar a transcrever, para as duas correrem juntas. O passo
+            seguinte so espera (ver _diar_ahead_take)."""
             if interview_id in getattr(self, "_prepare_failed", set()):
                 raise RuntimeError(
                     "não foi possível converter o áudio para WAV (ffmpeg) — "
                     "veja a fila de processamento em Ferramentas")
+            if diarize_ahead:
+                self._diar_ahead_start(interview_id, should_cancel)
+            try:
+                resultado = self._transcrever_agora(interview_id, asr_model, progress_callback,
+                                                    should_cancel, asr_threads)
+            except BaseException:
+                # Transcricao falhou: a separacao adiantada deste arquivo perdeu
+                # o sentido (o passo que a recolheria vai ser PULADO pelo
+                # skip-and-continue). Sem isto ela seguiria viva, gastando
+                # processador e deixando uma thread orfa para o proximo arquivo
+                # topar com ela.
+                self._diar_ahead_cancel(interview_id)
+                raise
+            if getattr(resultado, "failures", 0):
+                self._diar_ahead_cancel(interview_id)
+            return resultado
+
+        def _transcrever_agora(
+            self,
+            interview_id: str,
+            asr_model: str,
+            progress_callback: Callable[[dict[str, Any]], None] | None = None,
+            should_cancel: Callable[[], bool] | None = None,
+            asr_threads: int = 0,
+        ) -> app_service.JobResult:
             return app_service.transcribe_interviews(
                 self.context,
                 ids=[interview_id],
                 # asr_model efetivo SEMPRE no override: igual a config no
                 # fluxo normal; o escolhido na rodada de "Transcrever
                 # novamente…".
-                overrides={"diarize": False, "asr_model": asr_model},
+                # asr_threads > 0 só quando há orçamento de núcleos (opção de
+                # uso do computador, ou sobreposição); 0 não vira SessionOptions.
+                overrides={"diarize": False, "asr_model": asr_model,
+                           **({"asr_threads": asr_threads} if asr_threads else {})},
                 progress_callback=progress_callback,
                 should_cancel=should_cancel,
             )
@@ -8222,16 +9867,43 @@ if QT_IMPORT_ERROR is None:
             if engine == "parakeet_onnx" and device == "cuda":
                 from . import parakeet_runner as _pk_e
                 asr_dev = _pk_e.planned_device(device)   # CPU ate o onnx-gpu existir
+            # Historico DESTA maquina: depois das primeiras transcricoes ele
+            # vale mais que qualquer formula (a formula nao enxerga o clock nem
+            # a reducao termica de cada nucleo).
+            asr_hist: list[tuple[float, float]] = []
+            diar_hist: list[tuple[float, float]] = []
+            try:
+                entradas = project_store.read_jobs_log(self.context.paths)
+                duracoes = {}
+                for linha in (self.context.rows or []):
+                    try:
+                        duracoes[str(linha.get("interview_id"))] = float(linha.get("duration_sec") or 0)
+                    except (TypeError, ValueError):
+                        pass
+                asr_hist = project_store.stage_samples(entradas, "transcribe", duracoes)
+                diar_hist = project_store.stage_samples(entradas, "diarize", duracoes)
+            except Exception as exc:  # noqa: BLE001 - sem historico, vale a formula
+                _logger.debug("Sem historico para a estimativa: %s", exc)
             asr_s, diar_s = _caps_e.batch_time_estimate(
-                total, engine, device, _runtime_e.cpu_cores(), asr_device=asr_dev)
+                total, engine, device, _runtime_e.cpu_cores(), asr_device=asr_dev,
+                asr_samples=asr_hist, diar_samples=diar_hist)
+            medido = _caps_e.estimate_is_measured(asr_hist)
             onde = "sem placa de vídeo" if device != "cuda" else "com placa de vídeo"
+            # Ate 2026-09-05 este texto dizia que a separacao era "a etapa
+            # demorada" — a formula supunha escala linear com nucleos e a
+            # inflava por ~2x. Medida, ela e a metade barata, e adia-la economiza
+            # menos do que a frase antiga prometia. A dica agora diz quanto.
             dica = ("A separação é a etapa demorada — dá para deixá-la para depois "
                     "(a lista oferece um botão) e já revisar o texto."
                     if diar_s > asr_s else
-                    "Dá para deixar a separação para depois (a lista oferece um botão).")
+                    "A transcrição é a etapa demorada. Deixar a separação de falantes "
+                    f"para depois (a lista oferece um botão) adianta cerca de "
+                    f"{_caps_e.describe_seconds(diar_s)}.")
+            base = ("com base no que este computador já levou nas transcrições anteriores"
+                    if medido else "estimativa aproximada — ela se ajusta depois da primeira transcrição")
             return (f"Neste computador ({onde}), para {_caps_e.describe_seconds(total)} "
                     f"de áudio: transcrição ≈ {_caps_e.describe_seconds(asr_s)} · separação de "
-                    f"falantes ≈ {_caps_e.describe_seconds(diar_s)}.\n{dica}")
+                    f"falantes ≈ {_caps_e.describe_seconds(diar_s)} ({base}).\n{dica}")
 
         def _apply_interview_filter(self) -> None:
             """Hide/show table rows based on status combo and text search."""
@@ -8451,6 +10123,11 @@ if QT_IMPORT_ERROR is None:
             # R4: sucesso anunciado pertence ao projeto ANTERIOR.
             if getattr(self, "docs_panel", None) is not None:
                 self.docs_panel.clear_success()
+            # Janelas cacheadas com estado POR PROJETO (temas e códigos): sem
+            # esquecer, uma ação depois da troca gravaria no projeto errado.
+            temas = getattr(self, "_themes_dialog", None)
+            if temas is not None:
+                temas.reset_for_project()
             self.review = None
             self.current_interview_id = None
             self.current_turn_id = None
@@ -8770,8 +10447,8 @@ if QT_IMPORT_ERROR is None:
             dialog.query_input.setFocus()
 
         def open_explore(self) -> None:
-            """Janela Explorar as entrevistas (botao da barra / menu)."""
-            if self._explain_busy("Perguntar às entrevistas com AI"):
+            """Janela Buscar por sentido e perguntar (botao da barra / menu)."""
+            if self._explain_busy("Buscar por sentido e perguntar"):
                 return
             if self.context is None:
                 QMessageBox.information(self, "Abra um projeto", "Abra um projeto para explorar as entrevistas.")
@@ -8785,6 +10462,20 @@ if QT_IMPORT_ERROR is None:
             self._explore_dialog.show()
             self._explore_dialog.raise_()
             self._explore_dialog.query_input.setFocus()
+
+        def open_themes(self) -> None:
+            """Janela Temas das entrevistas (Parte B) — cacheada como a Perguntar."""
+            if self._explain_busy("Temas das entrevistas"):
+                return
+            if self.context is None:
+                QMessageBox.information(self, "Abra um projeto", "Abra um projeto para ver os temas das entrevistas.")
+                return
+            if getattr(self, "_themes_dialog", None) is None:
+                self._themes_dialog = ThemesDialog(self)
+            else:
+                self._themes_dialog._announce_readiness()
+            self._themes_dialog.show()
+            self._themes_dialog.raise_()
 
         def open_search_hit(self, interview_id: str, start: float) -> None:
             """Abre a entrevista no bloco mais proximo do tempo dado (busca)."""
@@ -9939,7 +11630,11 @@ if QT_IMPORT_ERROR is None:
             busca_estado, _busca_motivo, busca_gb = self._capability_state("busca_semantica")
             self._set_action(self.explore_action, has_project, reason_project,
                              enabled_note=" ".join([nota_lote, (
-                                 f"Baixa um modelo de ~{busca_gb:.1f} GB na primeira utilização."
+                                 f"Baixa um modelo de ~{fmt_gb(busca_gb)} na primeira utilização."
+                                 if busca_estado == "instalavel" else "")]).strip())
+            self._set_action(self.themes_action, has_project, reason_project,
+                             enabled_note=" ".join([nota_lote, (
+                                 f"Baixa um modelo de ~{fmt_gb(busca_gb)} na primeira utilização."
                                  if busca_estado == "instalavel" else "")]).strip())
             glos_estado, glos_motivo, glos_gb = self._capability_state("glossario_nomes")
             glos_travado = glos_estado == "incompativel"  # hoje impossivel (CPU basta); regra geral
@@ -9947,7 +11642,7 @@ if QT_IMPORT_ERROR is None:
                              has_project and not glos_travado,
                              glos_motivo if glos_travado else reason_project,
                              enabled_note=" ".join([nota_lote, (
-                                 f"Baixa o modelo de nomes (~{glos_gb:.1f} GB) na primeira utilização."
+                                 f"Baixa o modelo de nomes (~{fmt_gb(glos_gb)}) na primeira utilização."
                                  if glos_estado == "instalavel" else "")]).strip())
             self._set_action(self.spelling_action, has_project, reason_project,
                              enabled_note=nota_lote)
@@ -9962,10 +11657,17 @@ if QT_IMPORT_ERROR is None:
                              reason_busy if busy else reason_project)
             if hasattr(self, "save_block_button"):
                 self.save_block_button.setEnabled(not busy and has_turn)
-            if hasattr(self, "merge_button"):
-                self.merge_button.setEnabled(not busy and has_turn)
-            if hasattr(self, "split_button"):
-                self.split_button.setEnabled(not busy and has_turn)
+            # Bloco aberto: as ações e os três botões que as espelham. O motivo
+            # vai no tooltip — botão cinza sem explicação foi reclamação de campo.
+            motivo_bloco = reason_busy if busy else "Abra uma entrevista e escolha um bloco."
+            for acao_bloco in (self.merge_prev_block_action, self.merge_block_action,
+                               self.split_block_action, self.move_tail_action,
+                               self.move_head_action, self.focus_speaker_action,
+                               self.repeat_turn_action,
+                               self.next_block_action, self.prev_block_action,
+                               self.next_flagged_action, self.prev_flagged_action,
+                               self.focus_toggle_action):
+                self._set_action(acao_bloco, not busy and has_turn, motivo_bloco)
             if hasattr(self, "transcribe_current_button"):
                 self.transcribe_current_button.setVisible(has_untranscribed_open_file)
                 self.transcribe_current_button.setEnabled(not busy and has_untranscribed_open_file)
@@ -10031,48 +11733,70 @@ if QT_IMPORT_ERROR is None:
             self.turn_table.item(index, 2).setToolTip(text)
             self.turn_table.item(index, 3).setText(display_flags(turn))
 
-        def merge_current_turn(self) -> None:
+        def _back_to_text(self, mensagem: str) -> None:
+            """Anuncia na linha de estado e DEVOLVE O FOCO ao texto.
+
+            O foco importa mais do que parece: depois de clicar num botão de
+            bloco ele ficava no botão, e daí o Ctrl+Z escapava do editor (ver
+            `_undo_belongs_to_editor`). Devolver o foco também deixa o próximo
+            atalho de teclado funcionar sem passar pelo mouse."""
+            self.progress_label.setText(mensagem)
+            if hasattr(self, "text_edit"):
+                self.text_edit.setFocus()
+
+        def _edit_warning(self, mensagem: str) -> None:
+            """Erro de edição de bloco na faixa de estado, não em janela modal
+            (padrão da R4). Pisca em WARN e volta ao normal."""
+            self.progress_label.setText(mensagem)
+            try:
+                self.progress_label.setStyleSheet(f"color: {ui_tokens.WARN}; font-weight: 600;")
+                QTimer.singleShot(2500, lambda: self.progress_label.setStyleSheet(""))
+            except Exception:  # noqa: BLE001 - aviso nunca derruba a edicao
+                pass
+            if hasattr(self, "text_edit"):
+                self.text_edit.setFocus()
+
+        def merge_current_turn_with_previous(self) -> None:
+            """Junta com o bloco de cima. O contorno — subir um bloco e juntar
+            para a frente — troca o bloco aberto e faz perder o cursor."""
+            self.merge_current_turn(para_tras=True)
+
+        def merge_current_turn(self, *_args: object, para_tras: bool = False) -> None:
             if not self.review or not self.current_interview_id or not self.current_turn_id:
                 return
-            reply = QMessageBox.question(
-                self, "Juntar blocos",
-                "Isso vai juntar este bloco com o próximo, removendo a divisão entre eles.\n\nDeseja continuar?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if reply != QMessageBox.StandardButton.Yes:
-                return
+            # Sem confirmação (2026-09-04): juntar não apaga nada, não perde
+            # texto e tem desfazer completo — e era uma das duas caixas fixas
+            # de um ciclo de 219 blocos por hora de áudio. O aviso vai para a
+            # linha de estado, com o Ctrl+Z dito por extenso.
             if not self.save_current_turn():
                 return
             before = deepcopy(self.review)
+            juntar = review_store.merge_turn_with_previous if para_tras else review_store.merge_turn_with_next
             try:
-                merged_id = review_store.merge_turn_with_next(self.review, self.current_turn_id)
+                merged_id, adotado = juntar(self.review, self.current_turn_id)
                 app_service.save_review(self.context, self.current_interview_id, self.review)
                 self.turns = review_store.review_turns(self.review)
                 self.load_turn_table()
                 self.select_turn_by_index(review_store.find_turn_index(self.review, merged_id), seek=False)
                 self.undo_stack.push(ReviewSnapshotCommand(self, "Juntar blocos", before, self.review, merged_id))
                 self.set_save_state(saved_status_message())
+                # Falantes diferentes deixaram de ser recusa e viraram aviso: o
+                # bloco adota o falante do de cima, e a linha de estado diz qual.
+                aviso = f" O bloco ficou como «{adotado}»." if adotado else ""
+                self._back_to_text(f"Blocos juntados.{aviso} Ctrl+Z desfaz.")
             except Exception as exc:
-                QMessageBox.warning(self, "Não foi possível juntar", sanitize_message(str(exc)))
+                self._edit_warning(f"Não foi possível juntar: {sanitize_message(str(exc))}")
 
         def split_current_turn(self) -> None:
             if not self.review or not self.current_interview_id or not self.current_turn_id:
                 return
-            reply = QMessageBox.question(
-                self, "Dividir bloco",
-                "Isso vai dividir este bloco em dois na posição atual do cursor.\n\nDeseja continuar?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if reply != QMessageBox.StandardButton.Yes:
-                return
+            # Sem confirmação: dividir é reversível por inteiro (ver merge).
             if not self.save_current_turn():
                 return
             try:
                 current_index = review_store.find_turn_index(self.review, self.current_turn_id)
             except KeyError as exc:
-                QMessageBox.warning(self, "Não foi possível dividir", sanitize_message(str(exc)))
+                self._edit_warning(f"Não foi possível dividir: {sanitize_message(str(exc))}")
                 return
             before = deepcopy(self.review)
             current_turn = self.turns[current_index]
@@ -10102,9 +11826,89 @@ if QT_IMPORT_ERROR is None:
                 self.waveform_widget.set_edit_cursor(split_time)
                 self.undo_stack.push(ReviewSnapshotCommand(self, "Dividir bloco", before, self.review, new_id))
                 self.set_save_state(saved_status_message())
-                self.progress_label.setText(f"Bloco dividido; {split_note}. Ajuste Início/Fim se necessário.")
+                self._back_to_text(f"Bloco dividido; {split_note}. Ctrl+Z desfaz.")
             except Exception as exc:
-                QMessageBox.warning(self, "Não foi possível dividir", sanitize_message(str(exc)))
+                self._edit_warning(f"Não foi possível dividir: {sanitize_message(str(exc))}")
+
+        def focus_speaker_combo(self, *_args: object) -> None:
+            """Alt+E: leva o foco ao seletor de falante e abre a lista.
+
+            Existe para o caso em que a fala é de alguém que NÃO é vizinho —
+            encaixada no meio do bloco, ou um grupo focal com várias vozes —,
+            onde mover a fronteira não resolve e é preciso trocar o falante."""
+            combo = getattr(self, "speaker_combo", None)
+            if combo is None or not combo.isEnabled():
+                return
+            combo.setFocus(Qt.FocusReason.ShortcutFocusReason)
+            combo.showPopup()
+
+        def move_boundary_forward(self, *_args: object) -> None:
+            self._move_boundary(para_tras=False)
+
+        def move_boundary_backward(self, *_args: object) -> None:
+            self._move_boundary(para_tras=True)
+
+        def _move_boundary(self, *, para_tras: bool) -> None:
+            """Passa a fala de um lado do cursor para o bloco vizinho.
+
+            É o conserto da fronteira que a separação automática colocou no
+            lugar errado. Um gesto: divide no cursor, dá ao pedaço o falante do
+            vizinho e junta os dois — tudo num único item de desfazer."""
+            if not self.review or not self.current_interview_id or not self.current_turn_id:
+                return
+            if not self.save_current_turn():
+                return
+            try:
+                indice = review_store.find_turn_index(self.review, self.current_turn_id)
+            except KeyError as exc:
+                self._edit_warning(f"Não foi possível passar a fala: {sanitize_message(str(exc))}")
+                return
+            before = deepcopy(self.review)
+            turno = self.turns[indice]
+            inicio = float(turno.get("start", 0) or 0)
+            fim = float(turno.get("end", inicio) or inicio)
+            texto = self.text_edit.toPlainText().strip()
+            cursor = self.text_edit.textCursor().position()
+            # Aqui NÃO se usa choose_split_char: o cursor na ponta não é um
+            # engano a corrigir, é o pedido de passar o bloco inteiro.
+            corta = review_store.split_fits(texto, cursor)
+            split_char = cursor if corta else None
+            split_time = None
+            if corta:
+                from . import words as words_mod
+                split_time, _nota = choose_split_time(
+                    inicio, fim,
+                    self.waveform_widget.edit_cursor,
+                    bool(getattr(self.waveform_widget, "edit_cursor_from_click", False)),
+                    self.player.position() / 1000 if self.player.position() else None,
+                    self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState,
+                    words_mod.words_in_range(self.word_index, inicio, fim),
+                    texto, split_char,
+                )
+            mover = (review_store.move_head_to_previous if para_tras
+                     else review_store.move_tail_to_next)
+            try:
+                alvo = mover(self.review, self.current_turn_id,
+                             split_char=split_char, split_time=split_time)
+                app_service.save_review(self.context, self.current_interview_id, self.review)
+                self.turns = review_store.review_turns(self.review)
+                self.load_turn_table()
+                self.select_turn_by_index(review_store.find_turn_index(self.review, alvo), seek=False)
+                if split_time is not None:
+                    self.waveform_widget.set_edit_cursor(split_time)
+                self.undo_stack.push(ReviewSnapshotCommand(
+                    self, "Passar a fala para o bloco vizinho", before, self.review, alvo))
+                self.set_save_state(saved_status_message())
+                destino = "anterior" if para_tras else "seguinte"
+                quanto = "O bloco" if not corta else ("O começo" if para_tras else "O fim")
+                rotulo = display_speaker(self.turns[review_store.find_turn_index(self.review, alvo)])
+                self._back_to_text(
+                    f"{quanto} passou para o bloco {destino}, como «{rotulo}». Ctrl+Z desfaz.")
+            except ValueError as exc:
+                # Mensagens já escritas em português por review_store.
+                self._edit_warning(sanitize_message(str(exc)))
+            except Exception as exc:  # noqa: BLE001
+                self._edit_warning(f"Não foi possível passar a fala: {sanitize_message(str(exc))}")
 
         def use_player_as_start(self) -> None:
             self.apply_player_time_to_boundary("start")
@@ -10541,15 +12345,37 @@ if QT_IMPORT_ERROR is None:
             else:
                 self.progress_label.setText(f"{n} arquivos enviados para a Lixeira. Ctrl+Z para desfazer.")
 
+        def _undo_belongs_to_editor(self) -> bool:
+            """O Ctrl+Z deve desfazer uma edição da transcrição (e não a
+            exclusão de um arquivo)? Sim quando há algo desfeito a desfazer E o
+            foco está dentro do painel de revisão — inclusive quando ele está
+            num BOTÃO desse painel, que é onde ele fica logo depois de Juntar
+            ou Dividir."""
+            if not (hasattr(self, "undo_action") and self.undo_action.isEnabled()):
+                return False
+            foco = QApplication.focusWidget()
+            if foco is None:
+                return False
+            if isinstance(foco, QTextEdit) and not foco.isReadOnly():
+                return True
+            painel = getattr(self, "review_splitter", None)
+            return bool(painel is not None and (painel is foco or painel.isAncestorOf(foco)))
+
         def undo_last_trash(self, *_args: Any) -> None:
-            if self._trash_busy or self.context is None or not self._trash_undo:
+            if self._trash_busy or self.context is None:
                 return
-            # Guard: se foco esta em QTextEdit editavel, delegar para o undo_action do editor
-            focus = QApplication.focusWidget()
-            if isinstance(focus, QTextEdit) and not focus.isReadOnly():
-                # Delegar ao undo nativo do editor (ou QUndoStack via undo_action)
+            # A quem pertence o Ctrl+Z agora? Ate 2026-09-04 a pergunta era
+            # "o foco esta num QTextEdit editavel?" — e depois de clicar em
+            # "Juntar" ou "Dividir" o foco fica no BOTAO, entao o Ctrl+Z
+            # escapava do editor e caia aqui: no melhor caso nao fazia nada, no
+            # pior restaurava um ARQUIVO da Lixeira em vez de desfazer a fusao.
+            # Agora basta o foco estar dentro do painel de revisao e haver algo
+            # a desfazer; a Lixeira so fica com o Ctrl+Z na lista de arquivos.
+            if self._undo_belongs_to_editor():
                 if hasattr(self, "undo_action") and self.undo_action.isEnabled():
                     self.undo_action.trigger()
+                return
+            if not self._trash_undo:
                 return
             trash_id = self._trash_undo[-1]
             try:
@@ -10858,6 +12684,64 @@ if QT_IMPORT_ERROR is None:
             target = max(0, min(self.player.duration(), self.player.position() + (seconds * 1000)))
             self.seek_player(target)
 
+        def _step_playback_speed(self, step: int) -> None:
+            """Um passo na velocidade de reprodução (F7/F8). Anda pela mesma
+            lista do seletor: nunca inventa valor fora dela."""
+            if not hasattr(self, "speed_combo"):
+                return
+            alvo = self.speed_combo.currentIndex() + step
+            if alvo < 0 or alvo >= self.speed_combo.count():
+                return
+            self.speed_combo.setCurrentIndex(alvo)   # dispara update_playback_rate
+            # Sem roubar o foco: F7/F8 valem tanto no texto quanto na lista.
+            self.progress_label.setText(f"Velocidade de reprodução: {self.speed_combo.currentText()}.")
+
+        def _step_block(self, step: int) -> None:
+            """Bloco seguinte/anterior levando o áudio junto e devolvendo o
+            cursor ao texto — o ciclo inteiro sem tocar no mouse."""
+            if not self.review or not self.turns:
+                return
+            atual = self.turn_table.currentRow()
+            if atual < 0:
+                atual = -1 if step > 0 else len(self.turns)
+            alvo = atual + step
+            if alvo < 0:
+                self._back_to_text("Este já é o primeiro bloco.")
+                return
+            if alvo >= len(self.turns):
+                self._back_to_text("Este já é o último bloco.")
+                return
+            self.select_turn_by_index(alvo, seek=True)
+            item = self.turn_table.item(alvo, 0)
+            if item is not None:
+                self.turn_table.scrollToItem(item)
+            if hasattr(self, "text_edit"):
+                self.text_edit.setFocus()
+
+        def _step_flagged(self, step: int) -> None:
+            """Próximo/anterior bloco marcado para conferir (cíclico, como os
+            botões ‹ › da faixa de marcações)."""
+            if not self.review:
+                return
+            if not self._boundary_suspect_rows():
+                self._back_to_text("Nenhum bloco marcado para conferir nesta entrevista.")
+                return
+            self._on_boundary_nav(step)
+            if hasattr(self, "text_edit"):
+                self.text_edit.setFocus()
+
+        def _toggle_studio_focus(self) -> None:
+            """F6: vai e volta entre a lista de blocos e o texto. Sem ele, sair
+            do texto para navegar exigia o mouse."""
+            if not hasattr(self, "text_edit") or not hasattr(self, "turn_table"):
+                return
+            if self.text_edit.hasFocus():
+                self.turn_table.setFocus()
+                self.progress_label.setText("Foco na lista de blocos. F6 volta ao texto.")
+            else:
+                self.text_edit.setFocus()
+                self.progress_label.setText("Foco no texto do bloco. F6 vai para a lista.")
+
         def repeat_current_turn(self) -> None:
             if not self.review or not self.current_turn_id:
                 return
@@ -11152,6 +13036,17 @@ if QT_IMPORT_ERROR is None:
                             _logger.warning("Falha ao gravar configuracao de falantes: %s", exc)
                     if estimate_text and diarize_now is None:
                         diarize_now = dialog.diarize_now()
+                    # Uso do computador: preferencia da MAQUINA, nao do projeto
+                    # (um projeto viaja pelo Dropbox para outro computador).
+                    escolha_uso = dialog.computer_use()
+                    if escolha_uso is not None:
+                        try:
+                            from . import app_settings as _st_uso2
+
+                            if escolha_uso != _st_uso2.computer_use():
+                                _st_uso2.save({"computer_use": escolha_uso})
+                        except Exception as exc:  # noqa: BLE001 - nunca impede o lote
+                            _logger.warning("não consegui gravar o uso do computador: %s", exc)
                 if diarize_now is not False:
                     self._reset_speakers_confirmed(ids)
             steps: list[tuple] = []
@@ -11172,12 +13067,32 @@ if QT_IMPORT_ERROR is None:
             # SO para este lote: nada e gravado no run_config.yaml.
             do_diarize, do_boundary = job_step_flags(
                 do_diarize, bool(self.context.config.get("boundary_check", True)), diarize_now)
+            # Sobrepor a transcricao e a separacao de vozes do MESMO arquivo
+            # (2026-09-05): as duas so leem o WAV, e quem junta e o render.
+            # Medido num notebook de 4 nucleos: 10,8% menos relogio, saida
+            # identica. `should_overlap` recusa onde a medicao nao sustenta
+            # (placa, poucos nucleos, pouca memoria) — e a recusa vem com motivo.
+            sobrepor, motivo_sem_sobrepor = self._overlap_decision(asr_device)
+            sobrepor = bool(sobrepor and do_diarize)
+            threads_asr, _threads_diar = self._core_budget(concurrent=sobrepor)
+            if sobrepor:
+                _logger.info("lote com transcricao e separacao ao mesmo tempo "
+                             "(%s threads para transcrever)", threads_asr)
+            elif motivo_sem_sobrepor and do_diarize:
+                _logger.info("etapas em serie: %s", motivo_sem_sobrepor)
             w5 = _pipeline_weights(asr_model, asr_device)
             # 7 fases: [prepare, asr, diarize, render, conferir trocas,
             # recriar transcricao editavel, qc]. Conferencia e recriacao
             # (pos-render) tem peso pequeno e fixo: custam segundos.
+            # Com sobreposicao o passo de separacao vira ESPERA: o trabalho
+            # aconteceu durante a transcricao. Manter o peso cheio faria a
+            # barra parar em ~49% por arquivo e depois saltar. Sobra so o
+            # residuo — quanto a separacao passa da transcricao.
+            peso_diar = w5[2] if do_diarize else 0
+            if do_diarize and sobrepor:
+                peso_diar = max(1, w5[2] - w5[1])
             w = [
-                w5[0], w5[1], w5[2] if do_diarize else 0, w5[3],
+                w5[0], w5[1], peso_diar, w5[3],
                 1 if do_boundary else 0, 1, w5[4],
             ]
             # Pesos POR STEP: a lista precisa ter exatamente um item por step
@@ -11225,7 +13140,8 @@ if QT_IMPORT_ERROR is None:
                         r[1],
                         r[2],
                         lambda progress, should_cancel, item=interview_id: self._transcribe_prepared(
-                            item, asr_model, progress, should_cancel),
+                            item, asr_model, progress, should_cancel,
+                            diarize_ahead=sobrepor, asr_threads=threads_asr),
                         accepts_progress=True,
                     ),
                 )
@@ -11311,7 +13227,8 @@ if QT_IMPORT_ERROR is None:
             # B1: servidor de separacao para o lote (abre agora, carrega em
             # paralelo). C: as vozes destes arquivos entram na faixa ao fim.
             if do_diarize:
-                self._start_diarize_server(len(ids))
+                self._start_diarize_server(len(ids), sobrepor)
+            self._diar_ahead = {}
             self._voice_batch_ids = list(ids)
             self.start_worker(
                 f"Transcrever {len(ids)} arquivo(s)",
@@ -11522,12 +13439,173 @@ if QT_IMPORT_ERROR is None:
             rotulos com os centroides do pyannote; e best-effort (nunca
             muda o resultado da diarizacao) e, em arquivos mono, nem o
             subprocesso e lancado.
+
+            Quando a separacao foi ADIANTADA (comecou junto com a transcricao
+            deste mesmo arquivo — ver _diar_ahead_start), este passo so espera
+            e reporta: o trabalho ja aconteceu.
             """
+            adiantado = self._diar_ahead_take(interview_id, progress_callback)
+            if adiantado is not None:
+                return adiantado
+            return self._diarize_then_channels_now(interview_id, progress_callback, should_cancel)
+
+        def _diarize_then_channels_now(
+            self,
+            interview_id: str,
+            progress_callback: Callable[[dict[str, Any]], None] | None = None,
+            should_cancel: Callable[[], bool] | None = None,
+        ) -> app_service.JobResult:
             result = self._diarize_via_subprocess(interview_id, progress_callback, should_cancel)
             channels_result = self._channels_via_subprocess(interview_id, progress_callback, should_cancel)
             if channels_result.failures:
                 _logger.warning("analise de canais de %s falhou", interview_id)
             return result
+
+        # --- separar as vozes JUNTO com a transcricao (2026-09-05) ----------
+        # As duas etapas sao independentes: as duas so leem o WAV, e quem junta
+        # e o render, depois. Medido num notebook de 4 nucleos: sobrepor corta
+        # 10,8% do relogio do lote, com a saida identica (transcricao byte a
+        # byte, separacao com DER 0,000%).
+        #
+        # A separacao ja rodava em SUBPROCESSO — o que a serializava era o
+        # passo esperar por ela. Entao nao ha executor novo: a thread daqui so
+        # bombeia um cano. E ela NAO escreve em jobs.json (so guarda o ultimo
+        # percentual), porque `project_store.update_job` e leitura-modificacao-
+        # escrita sem rename atomico (regra do Dropbox): dois escritores
+        # perderiam atualizacoes.
+        def _diar_ahead_start(
+            self,
+            interview_id: str,
+            should_cancel: Callable[[], bool] | None = None,
+        ) -> bool:
+            estado = getattr(self, "_diar_ahead", None)
+            if estado is None:
+                estado = self._diar_ahead = {}
+            if interview_id in estado:
+                return False
+            # NUNCA duas threads ao mesmo tempo. O DiarizeServer atende um
+            # pedido por vez, com uma fila de linhas COMPARTILHADA: duas
+            # threads trocariam respostas entre si, e um arquivo seria dado
+            # como separado enquanto o servidor ainda nem comecou — a saida
+            # mudaria em silencio. Uma orfa so existe quando a transcricao de
+            # um arquivo falhou (o passo que a recolhe e pulado); recolher
+            # agora custa a espera dela, e essa e a troca certa.
+            if any(r["thread"].is_alive() for r in estado.values()):
+                _logger.warning("separacao adiantada anterior ainda viva; recolhendo antes de %s",
+                                interview_id)
+            self._diar_ahead_join_all()
+            estado = self._diar_ahead = {}
+            parar = self._diar_ahead_stop = threading.Event()
+            registro: dict[str, Any] = {"pct": 0, "resultado": None, "erro": None,
+                                        "parar": threading.Event()}
+
+            def cancelado() -> bool:
+                # Tres freios: o do usuario, o do fim de lote e o deste arquivo
+                # (acionado quando a transcricao dele falha — separar um
+                # arquivo sem transcricao so gasta tempo e grava saida que
+                # antes nao existia).
+                return (parar.is_set() or registro["parar"].is_set()
+                        or bool(should_cancel is not None and should_cancel()))
+
+            def anotar(detail: dict[str, Any]) -> None:
+                try:
+                    registro["pct"] = max(0, min(100, int(detail.get("progress", 0))))
+                except (TypeError, ValueError):
+                    pass
+
+            def trabalhar() -> None:
+                try:
+                    registro["resultado"] = self._diarize_then_channels_now(
+                        interview_id, anotar, cancelado)
+                except Exception as exc:  # noqa: BLE001 - relancada no passo de espera
+                    registro["erro"] = exc
+
+            thread = threading.Thread(target=trabalhar, name=f"diar-{interview_id}", daemon=True)
+            registro["thread"] = thread
+            estado[interview_id] = registro
+            thread.start()
+            return True
+
+        def _diar_ahead_take(
+            self,
+            interview_id: str,
+            progress_callback: Callable[[dict[str, Any]], None] | None = None,
+        ) -> app_service.JobResult | None:
+            """Espera a separacao adiantada deste arquivo; None se nao havia."""
+            estado = getattr(self, "_diar_ahead", None) or {}
+            registro = estado.pop(interview_id, None)
+            if registro is None:
+                return None
+            thread = registro["thread"]
+            while thread.is_alive():
+                if progress_callback is not None:
+                    progress_callback({
+                        "event": "diarize_progress", "progress": registro["pct"],
+                        "message": "Terminando de separar as vozes...",
+                    })
+                thread.join(timeout=1.0)
+            if progress_callback is not None:
+                progress_callback({"event": "diarize_progress", "progress": 100,
+                                   "message": "Vozes separadas."})
+            if registro["erro"] is not None:
+                # Relancar preserva o optional=True do job_step: falha na
+                # separacao vira "falantes pendentes", nunca falha do lote.
+                raise registro["erro"]
+            return registro["resultado"]
+
+        def _diar_ahead_cancel(self, interview_id: str) -> None:
+            """Desiste da separacao adiantada DESTE arquivo.
+
+            Chamado quando a transcricao dele falha: sem transcricao a
+            separacao nao serve para nada neste lote, e deixa-la correr gastaria
+            minutos de processador e gravaria um exclusive.json que, antes desta
+            mudanca, nunca teria existido."""
+            estado = getattr(self, "_diar_ahead", None) or {}
+            registro = estado.pop(interview_id, None)
+            if registro is None:
+                return
+            registro["parar"].set()
+            thread = registro.get("thread")
+            if thread is not None and thread.is_alive():
+                thread.join(timeout=10.0)
+                if thread.is_alive():
+                    _logger.warning("separacao adiantada de %s nao parou a tempo", interview_id)
+
+        def _diar_ahead_stop_now(self) -> None:
+            """Aciona o freio de mao ANTES de o servidor ser encerrado.
+
+            A ordem importa: `_stop_diarize_server` mata o servidor, e uma
+            thread que esteja dentro de `run()` recebe None e CAI PARA O
+            SUBPROCESSO DE RESERVA — abrindo um pyannote novo depois do fim do
+            lote. Com o freio acionado antes, ela desiste em vez de recomecar."""
+            parar = getattr(self, "_diar_ahead_stop", None)
+            if parar is not None:
+                parar.set()
+            for registro in (getattr(self, "_diar_ahead", None) or {}).values():
+                freio = registro.get("parar")
+                if freio is not None:
+                    freio.set()
+
+        def _diar_ahead_join_all(self) -> None:
+            """Nao deixar thread de separacao viva ao fim do lote.
+
+            Um arquivo cuja TRANSCRICAO falhou pula o passo de espera
+            (skip-and-continue), e a thread dele ficaria orfa. Roda depois de
+            `_stop_diarize_server`: sem o servidor, `server.run()` devolve None
+            e a thread termina sozinha em seguida."""
+            self._diar_ahead_stop_now()
+            estado = getattr(self, "_diar_ahead", None) or {}
+            for interview_id, registro in list(estado.items()):
+                thread = registro.get("thread")
+                if thread is not None and thread.is_alive():
+                    # Roda na thread da GUI: prazo curto de proposito. Com o
+                    # freio de mao acionado a thread sai em segundos; se nao
+                    # sair, ela e daemon e o log conta o que aconteceu.
+                    thread.join(timeout=10.0)
+                    if thread.is_alive():
+                        _logger.warning("separacao de %s ainda rodando ao fim do lote", interview_id)
+            estado.clear()
+            self._diar_ahead_stop = None
 
         def _channels_via_subprocess(
             self,
@@ -11607,6 +13685,12 @@ if QT_IMPORT_ERROR is None:
                         "servidor de diarizacao indisponivel (%s); usando subprocesso por arquivo",
                         server.failure_reason,
                     )
+                    # O servidor tambem "morre" quando o LOTE acaba ou e
+                    # cancelado (_stop_diarize_server). Sem reconferir aqui, o
+                    # fallback abriria um pyannote novo depois do fim — a
+                    # checagem do topo do laco ja passou nesta volta.
+                    if should_cancel is not None and should_cancel():
+                        break
 
                 def on_output(line: str) -> None:
                     detail = parse_progress_json_line(line)
@@ -11771,15 +13855,17 @@ if QT_IMPORT_ERROR is None:
             self.set_editor_enabled(False)
             self.start_worker(f"Melhorar falantes de {interview_id}", steps, weights=[70, 25, 5])
 
-        def run_summarize_job(self) -> None:
-            """Resumo com indice tematico (fase 2.1) — analise 100% local."""
+        def run_summarize_job(self, *_args: Any, ids: list[str] | None = None) -> None:
+            """Resumo com indice tematico (fase 2.1) — analise 100% local.
+            ids: escopo explicito (a janela Perguntar oferece "Resumir as N
+            entrevistas agora" para a visao geral); sem ids, a selecao."""
             if self._explain_busy("Resumir a entrevista com AI"):
                 return
             if not self.save_current_turn():
                 return
             if not self._ensure_llm_model():
                 return
-            ids = self.selected_ids_for_job(fallback_current=True)
+            ids = list(ids) if ids else self.selected_ids_for_job(fallback_current=True)
             if not ids:
                 QMessageBox.information(self, "Selecione uma entrevista", "Abra ou selecione uma entrevista transcrita para gerar o resumo.")
                 return
@@ -12175,7 +14261,7 @@ if QT_IMPORT_ERROR is None:
             if iid:
                 meta = (self.context.metadata.get(iid) or {})
                 titulo = str(meta.get("title") or iid)
-                alvo = self._export_target_dir()
+                alvo = self._results_folder_for_user()
                 for chave, rotulo, ext, frase in [
                     ("export_docx", "Transcrição final (Word)", "docx",
                      "ainda não exportada"),
@@ -12700,7 +14786,9 @@ if QT_IMPORT_ERROR is None:
 
         def on_worker_done(self, message: str) -> None:
             finished_label = self.current_job_label
+            self._diar_ahead_stop_now()      # ANTES de matar o servidor
             self._stop_diarize_server()
+            self._release_batch_models()
             # Qualquer job pode ter mexido em modelos (Preparar modelos,
             # downloads no meio de acoes): invalidar o retrato de
             # capacidades evita tooltips/notas mentindo apos o download.
@@ -12818,7 +14906,9 @@ if QT_IMPORT_ERROR is None:
                 )
 
         def on_worker_failed(self, message: str) -> None:
+            self._diar_ahead_stop_now()      # ANTES de matar o servidor
             self._stop_diarize_server()
+            self._release_batch_models()
             self._voice_batch_ids = []
             self.progress_bar.setRange(0, 100)
             self.progress_label.setText("Falha.")
@@ -12873,7 +14963,9 @@ if QT_IMPORT_ERROR is None:
                     _ABANDONED_WORKERS.append(self.worker)
                     self.worker = None
             # Servidor de separacao do lote (B1): nao sobreviver a janela.
+            self._diar_ahead_stop_now()      # ANTES de matar o servidor
             self._stop_diarize_server()
+            self._release_batch_models()
             # Trash worker: NUNCA terminate() (pode corromper copy in-flight)
             if getattr(self, "_trash_worker", None) is not None and self._trash_worker.isRunning():
                 self._trash_worker.request_cancel()

@@ -308,16 +308,118 @@ def set_turn_flags(review: dict[str, Any], turn_id: str, flags: list[str]) -> No
     record_edit(review, "set_flags", turn_id)
 
 
-def merge_turn_with_next(review: dict[str, Any], turn_id: str) -> str:
+def _rotulo_visivel(turn: dict[str, Any]) -> str:
+    return str(turn.get("human_label") or turn.get("speaker") or "")
+
+
+def split_fits(texto: str, posicao: int | None) -> bool:
+    """A posicao do cursor produz duas metades com conteudo? (puro)
+
+    Quando nao produz — cursor na ponta, ou texto sem espaco util —, mover a
+    fronteira significa passar o bloco INTEIRO para o vizinho, que e um caso
+    real: um bloco curto atribuido todo ao falante errado."""
+    if posicao is None or not 0 < posicao < len(texto):
+        return False
+    return bool(texto[:posicao].strip() and texto[posicao:].strip())
+
+
+def _mover_fronteira(review: dict[str, Any], turn_id: str, para_frente: bool,
+                     split_char: int | None, split_time: float | None) -> str:
+    """O texto de um lado do cursor pertence ao bloco VIZINHO (puro).
+
+    Este e o conserto da fronteira mal colocada pela separacao automatica de
+    vozes: um bloco atribuido a A que, a partir de certo ponto, e de B. Fazia-se
+    em cinco gestos (dividir, abrir o seletor, escolher B, juntar — e o juntar
+    so passava depois de trocar o falante). Aqui e um so.
+
+    O falante NAO e perguntado: ele e herdado do bloco vizinho, que ja tem o
+    certo. E por isso que a operacao serve igual a uma entrevista a dois e a um
+    grupo focal, onde "o outro falante" seria ambiguo.
+    """
+    turns = review_turns(review)
+    index = find_turn_index(review, turn_id)
+    vizinho_index = index + 1 if para_frente else index - 1
+    if vizinho_index < 0:
+        raise ValueError("Este é o primeiro bloco: não há bloco anterior para receber a fala.")
+    if vizinho_index >= len(turns):
+        raise ValueError("Este é o último bloco: não há bloco seguinte para receber a fala.")
+    atual, vizinho = turns[index], turns[vizinho_index]
+    if turn_speaker_key(atual) == turn_speaker_key(vizinho):
+        raise ValueError("O bloco vizinho já é do mesmo falante — junte os dois.")
+
+    edits = review.setdefault("edits", [])
+    marca = len(edits)
+    rotulo = _rotulo_visivel(vizinho)
+    texto = str(atual.get("text", "")).strip()
+
+    if split_fits(texto, split_char):
+        novo_id = split_turn(review, turn_id, split_time=split_time, split_char=split_char)
+        # Para frente, o pedaco que migra e o da DIREITA (o novo); para tras, o
+        # da esquerda, que conserva o id original.
+        alvo = novo_id if para_frente else turn_id
+    else:
+        alvo = turn_id          # o bloco inteiro passa
+
+    set_turn_speaker_label(review, alvo, rotulo)
+    # O rotulo ja foi igualado acima, entao nao ha falante adotado a anunciar.
+    sobrevivente, _adotado = (merge_turn_with_next(review, alvo) if para_frente
+                              else merge_turn_with_previous(review, alvo))
+    # Um gesto do usuario deixa UM registro de edicao, nao os tres ou quatro
+    # das operacoes internas.
+    del edits[marca:]
+    record_edit(review, "move_boundary", sobrevivente)
+    return sobrevivente
+
+
+def move_tail_to_next(review: dict[str, Any], turn_id: str, split_char: int | None = None,
+                      split_time: float | None = None) -> str:
+    """O texto A PARTIR do cursor pertence ao bloco SEGUINTE."""
+    return _mover_fronteira(review, turn_id, True, split_char, split_time)
+
+
+def move_head_to_previous(review: dict[str, Any], turn_id: str, split_char: int | None = None,
+                          split_time: float | None = None) -> str:
+    """O texto ATE o cursor pertence ao bloco ANTERIOR."""
+    return _mover_fronteira(review, turn_id, False, split_char, split_time)
+
+
+def merge_turn_with_previous(review: dict[str, Any], turn_id: str) -> tuple[str, str]:
+    """Junta este bloco com o ANTERIOR; devolve o id do bloco que sobrou.
+
+    Pedido do usuario (2026-09-04): so existia juntar com o proximo, e o
+    contorno — clicar no bloco de cima e juntar para a frente — troca o bloco
+    aberto e perde o cursor. Nao ha logica de fusao nova aqui: e o mesmo
+    caminho ja testado, aplicado ao bloco anterior."""
+    turns = review_turns(review)
+    index = find_turn_index(review, turn_id)
+    if index <= 0:
+        raise ValueError("Este é o primeiro bloco: não há bloco anterior para juntar.")
+    return merge_turn_with_next(review, str(turns[index - 1].get("id")))
+
+
+def merge_turn_with_next(review: dict[str, Any], turn_id: str) -> tuple[str, str]:
+    """Junta este bloco com o proximo.
+
+    Devolve (id do bloco que sobrou, falante adotado). O falante adotado vem
+    vazio quando os dois blocos ja eram do mesmo — e so vem preenchido quando
+    houve troca, para quem chama poder DIZER o que mudou.
+
+    Ate 2026-09-05 isto RECUSAVA blocos de falantes diferentes. A trava
+    protegia contra fusao acidental, mas travava o conserto mais comum da
+    separacao automatica: era preciso trocar o falante antes, so para poder
+    juntar. Agora junta adotando o falante do bloco que sobrevive (o de cima) e
+    nomeia a mudanca — mesmo padrao que substituiu as caixas de confirmacao de
+    juntar e dividir: em vez de barrar, dizer o que aconteceu e deixar o Ctrl+Z
+    desfazer.
+    """
     turns = review_turns(review)
     index = find_turn_index(review, turn_id)
     if index >= len(turns) - 1:
         raise ValueError("Cannot merge the last turn with a next turn.")
     current = turns[index]
     following = turns.pop(index + 1)
-    if turn_speaker_key(current) != turn_speaker_key(following):
-        turns.insert(index + 1, following)
-        raise ValueError("Não é possível fundir turnos de falantes diferentes. Troque o falante primeiro, se essa for a correção desejada.")
+    adotado = "" if turn_speaker_key(current) == turn_speaker_key(following) \
+        else _rotulo_visivel(current)
     current["start"] = min(float(current.get("start", 0) or 0), float(following.get("start", 0) or 0))
     current["end"] = max(float(current.get("end", 0) or 0), float(following.get("end", 0) or 0))
     current["text"] = " ".join([str(current.get("text", "")).strip(), str(following.get("text", "")).strip()]).strip()
@@ -325,7 +427,46 @@ def merge_turn_with_next(review: dict[str, Any], turn_id: str) -> str:
     current["notes"] = " ".join([str(current.get("notes", "")).strip(), str(following.get("notes", "")).strip()]).strip()
     current["edited"] = True
     record_edit(review, "merge_next", str(current["id"]))
-    return str(current["id"])
+    return str(current["id"]), adotado
+
+
+def _marcador_de_fronteira() -> str:
+    """Marcador da nota da verificacao acustica de trocas de falante.
+
+    Import tardio: `boundary_check` puxa numpy, e `review_store` e um modulo
+    leve, usado em contextos que nao precisam dele. Se por algum motivo nao
+    carregar, as marcacoes simplesmente nao migram — o pedaco da direita nasce
+    limpo, que ja e melhor do que duplicar."""
+    try:
+        from .boundary_check import BOUNDARY_NOTE_MARKER
+
+        return BOUNDARY_NOTE_MARKER
+    except Exception:  # noqa: BLE001 - dividir um bloco nunca pode falhar por isto
+        return ""
+
+
+def _repartir_marcacoes(esquerda: dict[str, Any], direita: dict[str, Any]) -> None:
+    """Ao dividir, as marcacoes NAO se duplicam (puro sobre os dois turnos).
+
+    `split_turn` monta o bloco novo com deepcopy, entao flags e notas vinham
+    junto: dividir um bloco marcado pela verificacao acustica criava dois
+    blocos marcados, com a mesma nota, e a faixa 🔍 contava dois onde havia um.
+
+    A nota de FRONTEIRA acompanha o pedaco da DIREITA — a suspeita sempre foi
+    sobre a emenda com o bloco seguinte, e e a direita que passa a fazer essa
+    emenda. Todo o resto (inaudivel, sobreposicao, duvida posta a mao, notas
+    humanas) fica na esquerda, onde o usuario a pos."""
+    marcador = _marcador_de_fronteira()
+    notas = str(esquerda.get("notes") or "")
+    flags = [str(f) for f in (esquerda.get("flags") or [])]
+    if marcador and marcador in notas:
+        direita["flags"] = ["duvida"] if "duvida" in flags else []
+        direita["notes"] = notas
+        esquerda["flags"] = [f for f in flags if f != "duvida"]
+        esquerda["notes"] = ""
+    else:
+        direita["flags"] = []
+        direita["notes"] = ""
 
 
 def split_turn(review: dict[str, Any], turn_id: str, split_time: float | None = None, split_char: int | None = None) -> str:
@@ -346,6 +487,7 @@ def split_turn(review: dict[str, Any], turn_id: str, split_time: float | None = 
 
     next_id = next_turn_id(turns)
     new_turn = deepcopy(current)
+    _repartir_marcacoes(current, new_turn)
     current["end"] = round(float(split_time), 3)
     current["text"] = left_text
     current["edited"] = True

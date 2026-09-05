@@ -13,7 +13,16 @@ dois problemas e SO ENTAO importa o resto do app (com o splash na tela):
 """
 from __future__ import annotations
 
-_SINGLE_INSTANCE_KEY = "TranscritorioSingleInstance"
+import os as _os
+
+# Instancia unica POR CANAL: a versao de teste (beta) e a estavel tem de
+# poder ficar abertas ao mesmo tempo na mesma maquina — com uma chave so, o
+# atalho da beta apenas acordaria a janela da estavel. O canal vem do
+# lancador (`TRANSCRITORIO_CHANNEL=beta`); sem ele, o comportamento e o de
+# sempre. A chave NAO leva a versao de proposito: duas versoes do MESMO
+# canal precisam se enxergar para o aviso de "build antigo" funcionar.
+_CHANNEL = "".join(c for c in _os.environ.get("TRANSCRITORIO_CHANNEL", "") if c.isalnum())[:16]
+_SINGLE_INSTANCE_KEY = "TranscritorioSingleInstance" + (f"-{_CHANNEL}" if _CHANNEL else "")
 
 
 def _splash_pixmap():

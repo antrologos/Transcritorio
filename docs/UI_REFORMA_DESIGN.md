@@ -34,7 +34,7 @@ Decisões estruturais:
    rótulo/tooltip/estado/atalho — mata a deriva de vocabulário).
    5 lugares na ordem da jornada:
    `[+ Adicionar mídia ▾] [▶ Transcrever ▾] | [Salvar] [Exportar…] |
-   [✨ Perguntar às entrevistas…]`. A ênfase primária (verde) caminha
+   [✨ Buscar por sentido e perguntar…]`. A ênfase primária (verde) caminha
    com o estado: sem mídia → Adicionar grita; com pendentes →
    Transcrever; edições não salvas → Salvar.
 2. **QStatusBar real, EMBAIXO** (convenção universal): atividade à

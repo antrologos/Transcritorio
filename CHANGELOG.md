@@ -1,5 +1,196 @@
 # Changelog
 
+## Em desenvolvimento (ramo beta)
+
+- **Consertar uma fronteira de falante virou um gesto.** Quando a separação
+  automática erra, um bloco atribuído a uma pessoa contém, a partir de certo ponto, a
+  fala de outra. Arrumar isso custava cinco gestos: clicar no ponto, dividir, abrir o
+  seletor de falante, escolher a pessoa certa e juntar com o bloco dela — e o último só
+  funcionava depois do quarto, porque juntar recusava falantes diferentes. Agora são
+  dois: clicar no ponto e **Alt+P** ("Passar o fim para o próximo") ou **Alt+Shift+P**
+  ("Passar o começo para o anterior"). O falante não é perguntado: vem do bloco vizinho,
+  que já tem o certo — por isso funciona igual numa entrevista a dois e num grupo focal.
+  Com o cursor na ponta do texto, o bloco inteiro passa. Um único Ctrl+Z desfaz tudo.
+  - **Juntar blocos de falantes diferentes deixou de ser recusado.** Agora junta,
+    adotando o falante do bloco de cima, e a linha de estado diz qual ficou. A proteção
+    não sumiu: mudou de barrar para avisar, com o desfazer à mão — o mesmo caminho que
+    as caixas de confirmação de juntar e dividir já tinham tomado.
+  - **Alt+E** abre a lista de falantes do bloco sem tirar a mão do teclado, para quando
+    a fala é de alguém que não é vizinho.
+  - **Dividir um bloco marcado com 🔍 não duplica mais a marcação.** A nota da
+    verificação acústica é sobre a emenda com o bloco seguinte, então ela acompanha o
+    pedaço da direita; antes os dois pedaços saíam marcados e o contador da faixa subia
+    em vez de descer, justamente quando a pessoa estava consertando.
+
+- **O lote ficou mais rápido em computadores sem placa de vídeo — e a janela parou de
+  mentir sobre onde vai o tempo.** Tudo abaixo foi medido num notebook de 4 núcleos
+  (simulado por afinidade de processo), sobre entrevistas inteiras do acervo real, e nada
+  disso muda a qualidade: a transcrição sai **idêntica caractere por caractere** e a
+  separação de vozes com **DER 0,000%**, mesmos segmentos e mesmos falantes.
+  - **A separação de falantes não é a etapa demorada.** O app dizia que separar as vozes
+    de 1 hora de entrevista levava ~22 minutos e transcrever ~6 — e concluía que valia a
+    pena "deixar a separação para depois". Medido: transcrever leva ~7,5 min e separar
+    ~6 min. Ele errava o total pelo dobro e invertia a proporção; quem seguia o conselho
+    adiava justamente a etapa barata. A conta usava uma regra que supunha ganho
+    proporcional ao número de núcleos, e as duas etapas na verdade saturam.
+  - **Transcrever e separar as vozes agora acontecem ao mesmo tempo**, no mesmo arquivo.
+    As duas só leem o áudio, e quem junta as saídas é o passo seguinte — não havia motivo
+    para esperar uma para começar a outra. **Cerca de 11% menos tempo de lote.** Onde a
+    medição não sustenta o ganho, o app não sobrepõe: com placa de vídeo (as duas
+    disputariam a mesma placa), com 2 núcleos ou menos, ou com menos de 8 GB de memória.
+  - **O modelo de transcrição é carregado uma vez por lote**, não uma vez por entrevista.
+    Eram 5 segundos e 2,2 GB relidos do disco a cada arquivo.
+  - **Nova escolha, antes de cada lote: "Mais rápido — usa o computador inteiro" ou
+    "Posso usar o computador enquanto roda".** A segunda usa metade da máquina: cerca de
+    25% mais devagar, com a transcrição idêntica. O padrão continua sendo usar tudo, e
+    quem não mexer não vê diferença nenhuma.
+
+- **"Perguntar às entrevistas com AI" passou a se chamar "Buscar por sentido e
+  perguntar".** O nome antigo prometia a todo mundo uma resposta escrita que só roda com
+  placa NVIDIA — e a maioria dos computadores não tem. O nome novo diz primeiro o que a
+  função entrega sempre (os trechos das entrevistas que tratam do que você escreveu,
+  achados pelo sentido e não pelas palavras exatas, em qualquer computador) e depois o que
+  depende da máquina. O aviso da placa passou para o tooltip do menu e da barra, ou seja,
+  antes do clique; dentro da janela, onde a resposta escrita não roda, o botão passa a se
+  chamar "✨ Buscar trechos" — não promete o que não entrega. Corrigido também um erro no
+  site: a busca por sentido **não** usa o Qwen. Ela usa um *encoder* de recuperação
+  (`multilingual-e5`) com um reordenador opcional (`bge-reranker`), que são pequenos e
+  rodam no processador; o Qwen só entra no que precisa *escrever* (resumo, resposta,
+  nomes de tema).
+
+- **"Aplicar todos os temas como códigos".** Faltava o passo entre descobrir os temas e
+  ter um codebook utilizável: era preciso ir tema a tema, marcando trecho a trecho. Agora
+  um botão cria um código por tema — reaproveitando os que já existem com o mesmo nome,
+  inclusive os que vieram do `contexto_pesquisa.md` — e o aplica a todos os trechos
+  daquele tema. Uma confirmação só, dizendo quantos temas e quantos trechos; "Sem tema
+  definido" não entra; e um "Desfazer" ao lado devolve codebook e codificação ao que
+  eram. Rodar duas vezes não duplica nada, e os trechos que só têm fala de quem ficou
+  de fora em "Quem entra" são contados na mensagem, não descartados em silêncio.
+
+- **O Estúdio de Transcrição sem tirar a mão do teclado.** Revisar era "muito clicar":
+  uma hora de entrevista tem cerca de 219 blocos, e cada um custava idas ao mouse para
+  ouvir, voltar, corrigir, juntar e seguir. Três coisas mudaram.
+  - **Atalhos que funcionam com o cursor dentro do texto.** Os três que existiam (Espaço,
+    Ctrl+← e Ctrl+→) nunca chegavam a quem estava digitando: o editor de texto consome as
+    três teclas. Agora há uma família que sobrevive — **F4** reproduz/pausa, **F3** repete
+    o bloco, **Alt+←/→** andam 5 segundos, **Alt+Shift+←/→** andam 2, **F7/F8** mudam a
+    velocidade, **Alt+↓/↑** vão para o bloco seguinte/anterior levando o áudio junto,
+    **Alt+Shift+↓/↑** pulam de um bloco marcado para o outro, **F6** troca o foco entre a
+    lista e o texto, **Alt+J** junta com o próximo, **Alt+Shift+J** com o anterior e
+    **Alt+D** divide. Os antigos continuam valendo. Todos aparecem escritos em
+    Editar → Bloco e reprodução.
+  - **"Juntar com anterior".** Só existia juntar com o próximo; para juntar com o bloco de
+    cima era preciso subir um bloco e juntar para a frente — o que troca o bloco aberto e
+    faz perder o cursor e o ponto de reprodução.
+  - **Sem caixas de confirmação em juntar e dividir.** Nenhuma das duas apaga texto e as
+    duas têm desfazer completo; eram duas caixas por bloco num ciclo de 219. O aviso agora
+    vai para a linha de estado, dizendo que Ctrl+Z desfaz. Junto com isso, o Ctrl+Z parou
+    de escapar do editor logo depois de clicar num desses botões (o foco ficava no botão e
+    o Ctrl+Z podia cair no "desfazer exclusão de arquivo" da Lixeira).
+
+- **Áudio curto e a contagem de falantes.** Um teste com um recorte de 1 minuto voltou
+  com a separação de vozes "ruim": o app passava ao pyannote `num_speakers: 2`, que é uma
+  ordem e não uma dica — o agrupamento fica obrigado a devolver dois grupos e, num trecho
+  em que só uma pessoa fala, parte a mesma voz em duas. Nenhum modelo melhor resolveria
+  isso, porque todos obedecem ao parâmetro. Agora, abaixo de 5 minutos, a configuração
+  do projeto vira uma faixa (de 1 até o número declarado): o teto continua valendo, e
+  quantas vozes há de fato passa a ser decisão do modelo. Medido contra a diarização da
+  entrevista inteira: erro de 28% e 32% nos recortes de 1 minuto impondo 2 falantes,
+  contra 0,3% deixando contar; na entrevista de 24 minutos, imposto e automático dão
+  exatamente o mesmo resultado.
+
+## 0.3.0b1 — 2026-09-03 (versão de teste, não publicada)
+
+Beta para uso lado a lado com a estável: `scripts\Instalar-Beta.bat` instala num
+ambiente próprio (`%LOCALAPPDATA%\Transcritorio\beta-venv`), compartilhando os modelos já
+baixados e as preferências. As duas podem ficar abertas ao mesmo tempo — a janela da beta
+diz "versão de teste" no título. Para remover, basta apagar a pasta. Não está no site nem
+no PyPI.
+
+Busca por sentido e "Perguntar às entrevistas com AI" refeitos, depois de um teste com
+8 entrevistas reais e um gabarito de 12 perguntas julgado à mão.
+
+- **Por que a busca trazia trechos sem relação.** O modelo antigo era de paráfrase
+  ("estas frases dizem o mesmo?"), não de busca ("este trecho responde a esta
+  pergunta?"); cada turno era pontuado junto com pedaços dos vizinhos, mas a lista
+  mostrava o turno sozinho ("Autorizo." como "muito próximo"); e os rótulos eram
+  absolutos. Agora a unidade é a **passagem** (turnos contíguos de ~100 palavras, com
+  quem fala), o encoder é de recuperação (`multilingual-e5-small`, mesmo tamanho do
+  antigo; `multilingual-e5-large-instruct` como opção de qualidade, aplicado quando
+  instalado), os acertos literais entram na disputa, e um **reordenador**
+  (`bge-reranker-v2-m3`, opcional) lê pergunta e trecho juntos e decide o que
+  "Responde" e o que é só "Relacionado" — o resto some. Precisão dos 5 primeiros no
+  gabarito: 0,48 → 0,67. Índices em `.npy` (menores), refeitos automaticamente quando a
+  transcrição muda ou o modelo troca.
+- **Um só botão.** "Encontrar trechos" e "Perguntar" eram a mesma busca; agora
+  "Perguntar" mostra primeiro os trechos que tratam do tema (em segundos, em qualquer
+  máquina) e, quando o modelo de análise está disponível, escreve a resposta citando-os
+  com `[n]` clicáveis. Campo "até N trechos" (padrão 20) — vem menos quando menos
+  trechos tratam do tema, e o rodapé diz quantos ficaram de fora e por quê. "Cancelar a
+  resposta" mantém os trechos; cancelar a reordenação mostra a ordem por semelhança.
+- **Perguntas sobre o conjunto** ("do que falam as entrevistas?") não são busca: a AI
+  responde pelos resumos por entrevista, citando as entrevistas `[ID]`, com o escape
+  "responder pelos trechos mesmo assim"; sem resumos, oferece "Resumir as N entrevistas
+  agora". Quando nada responde, a AI não é chamada e a janela explica.
+- Linha "Nesta máquina: …" na abertura da janela; a resposta escrita continua exigindo
+  placa NVIDIA, os trechos não. `contexto_pesquisa.md` (roteiro, codebook, nomes) nasce
+  com o projeto. Recusa da AI reconhecida com acentos; geração com a receita do
+  fabricante do Qwen. Notas de tema do Resumir passam a ser guardadas (base da função
+  de temas). CLI `search`/`ask` com o mesmo pipeline da janela.
+- **Entrevista que sumia da busca.** Um arquivo de índice corrompido (sincronização
+  interrompida, disco cheio) continuava valendo como atual: não era refeito, e aquela
+  entrevista simplesmente deixava de aparecer nos resultados, sem aviso. Agora o índice só
+  passa por atual se abrir e tiver o tamanho certo.
+- **O modelo lia as instruções do formulário.** O `contexto_pesquisa.md` passou a nascer
+  com o projeto, e o texto de exemplo ("Preencha o que fizer sentido…") ia para a AI como
+  se fosse o contexto do estudo, em todas as perguntas e resumos. Agora só vai quando você
+  escreveu alguma coisa nele.
+- **"A AI local falhou" com o trabalho feito.** Quando o ambiente de análise era criado
+  a partir do Python da Microsoft Store, o Windows redireciona o que ele grava em
+  `%LOCALAPPDATA%` para uma pasta privada do pacote: a resposta era escrita, mas o
+  aplicativo procurava o arquivo no caminho real e não achava nada. Os resultados das
+  análises (perguntar, visão geral, glossário, temas) agora voltam pela saída do próprio
+  processo, com o arquivo como reserva.
+
+**Temas das entrevistas, codificação e exportação para o QualiLab** (menu Analisar →
+"✨ Temas das entrevistas…"): a segunda metade do que a busca por sentido tornou possível.
+
+- **Os temas mais tratados, sem pergunta nenhuma.** A janela agrupa *todos* os trechos
+  das entrevistas escolhidas por semelhança de sentido e lista os temas com **todos** os
+  trechos de cada um — sem teto. O agrupamento é aritmética (numpy): roda em qualquer
+  computador, em segundos, e não usa a AI que escreve. Um trecho pode entrar em **mais de
+  um tema** (assuntos não são caixas separadas), e o que não se parece com nada fica em
+  "sem tema definido" em vez de ser empurrado para o tema mais próximo. "Quantos temas"
+  é ajustável (automático, ou de 1 a 40).
+- **Quem entra na análise.** Em entrevistas não se costuma codificar quem pergunta; em
+  grupos focais, quem modera — e os nomes desses papéis mudam de pesquisa para pesquisa.
+  Então o app **pergunta**, uma vez por projeto, na primeira descoberta: a janela lista os
+  falantes com o peso de cada um (turnos, palavras, entrevistas) e marca como "sugerido de
+  fora" quem parece conduzir. Você decide, e pode inclusive manter todo mundo. A fala de
+  quem fica de fora **continua na transcrição e no arquivo exportado**, logo acima da
+  resposta, como contexto: ela só deixa de influenciar o agrupamento e de receber código.
+  Um trecho em que quem você escolheu quase não fala — a leitura do termo de consentimento,
+  um "tá bom" respondendo a uma pergunta longa — não entra nos temas: aparece em «sem tema
+  definido», onde continua visível e codificável. Sem esse piso, as respostas de cortesia
+  ao roteiro se pareciam entre si e formavam um tema grande de nada (medido na cópia de
+  teste: 54 trechos em todas as 10 entrevistas).
+- **Nomes: imediatos, e melhores depois.** Cada tema nasce com seus termos
+  característicos (o que aparece nele e não nos outros). Com o modelo de análise
+  instalado, a AI lê os trechos centrais e escreve nome e descrição de cada tema **em
+  segundo plano** — a janela nunca espera por ela, e um nome que você tenha dado nunca é
+  sobrescrito. Sem placa NVIDIA, ficam os termos, e a janela diz por quê.
+- **Codificar.** Um ou mais códigos por trecho (códigos não são exclusivos), aplicados de
+  uma vez aos trechos marcados de um tema ou um a um. O codebook nasce com os códigos que
+  você tiver escrito no `contexto_pesquisa.md`. Fica em `Transcricoes/08_codificacao/`, em
+  arquivos legíveis, separado da transcrição — nada é alterado no texto original.
+- **Exportar para o QualiLab** (`.qualilab`) ou para planilha (CSV, com `;` — o separador
+  que o Excel em português espera). Cada entrevista vira um documento com o texto em
+  blocos "[hh:mm:ss] Falante: texto", e cada código aponta para a posição exata do trecho
+  nesse texto — a citação e o texto apontado são o mesmo, por construção. Se você editar a
+  transcrição **depois** de codificar (dividir um bloco, por exemplo), os trechos que
+  deixaram de bater não são exportados com o texto errado: ficam de fora e a janela diz
+  quantos foram.
+
 ## v0.2.8 — 2026-09-02
 
 Rodada de revisões de um lote real de 5 entrevistas (máquina com GPU):

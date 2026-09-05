@@ -169,6 +169,7 @@ def load_diarization_pipeline(
         return None
 
     torch.set_float32_matmul_precision("high")
+    _aplicar_orcamento_de_nucleos(torch)
 
     effective_device, fell_back = runtime.resolve_device(config.get("asr_device"))
     if fell_back:
@@ -265,7 +266,12 @@ def diarize_rows(
                 audio_seconds, effective_device, os.cpu_count() or 1)
             real_inner: dict[str, int] = {"pct": 0}
             pct_lo, pct_hi = file_start_pct, file_end_pct
-            cpu_note = " — sem placa de vídeo esta etapa é a mais demorada" if effective_device != "cuda" else ""
+            # Ate 2026-09-05 dizia "sem placa de vídeo esta etapa é a mais
+            # demorada". Medido num notebook de 4 nucleos, ela e a metade
+            # BARATA (6,0 min por hora de audio, contra 7,5 da transcricao) —
+            # a frase mandava a pessoa culpar a etapa errada.
+            cpu_note = " — sem placa de vídeo esta etapa leva alguns minutos por hora de áudio" \
+                if effective_device != "cuda" else ""
 
             def _mensagem(elapsed: float) -> str:
                 mins, secs = divmod(int(elapsed), 60)
@@ -323,7 +329,8 @@ def diarize_rows(
                         pass
 
             try:
-                output = pipeline(audio_tensor, hook=_hook, **speaker_kwargs(config))
+                output = pipeline(audio_tensor, hook=_hook,
+                                  **speaker_kwargs(config, tensor_audio_seconds(audio_tensor)))
             finally:
                 heartbeat_stop.set()
                 heartbeat_thread.join(timeout=2)
@@ -350,7 +357,9 @@ def diarize_rows(
             if exclusive is not None:
                 write_annotation_outputs(paths, interview_id, "exclusive", exclusive, model_name, audio_path)
             status = "ok" if exclusive is not None else "ok_no_exclusive"
-            log_job(paths, interview_id, status, model_name, audio_path, "")
+            log_job(paths, interview_id, status, model_name, audio_path, "",
+                    elapsed_s=time.monotonic() - t0,
+                    audio_seconds=tensor_audio_seconds(audio_tensor))
             print(f"[{_ts()}] [diarize] {interview_id} concluido: {status}", flush=True)
         except Exception as exc:  # noqa: BLE001 - preserve batch progress and log the failed file.
             failures += 1
@@ -466,10 +475,68 @@ def _custom_pipeline_params(config: dict) -> dict:
     return params
 
 
-def speaker_kwargs(config: dict) -> dict[str, int]:
+# Abaixo disto, a contagem exata de falantes vira uma FAIXA. Escolhido com
+# folga: medimos em 1 min (imposicao de 2 falantes erra 28-32% do tempo contra
+# 0,3% do automatico) e em 24 min (imposicao e automatico dao exatamente o
+# mesmo). O limiar fica no meio, do lado seguro — nada se perde por usar faixa
+# num audio de 4 min, e muito se perde por impor 2 num de 1 min.
+def diarization_threads() -> int:
+    """Threads do torch para a separacao de falantes; 0 = nao mexer (puro-ish).
+
+    O ambiente MANDA: quando o servidor de lote e aberto com um orcamento, ele
+    o passa em OMP_NUM_THREADS, e essa e a palavra final. Sem ambiente, vale a
+    preferencia da maquina ("quanto do computador usar").
+
+    Existe porque `OMP_NUM_THREADS` sozinho nem sempre amarra o pool intra-op
+    do torch, e `set_num_threads` precisa rodar antes da primeira operacao
+    paralela — ou seja, antes de `Pipeline.from_pretrained`.
+    """
+    bruto = os.environ.get("OMP_NUM_THREADS")
+    if bruto:
+        try:
+            return max(0, int(bruto))
+        except ValueError:
+            pass
+    try:
+        from . import app_settings, capabilities
+
+        _asr, diar = capabilities.cpu_budget(app_settings.computer_use(), runtime.cpu_cores())
+        return diar
+    except Exception:  # noqa: BLE001 - preferencia ilegivel nunca impede separar
+        return 0
+
+
+def _aplicar_orcamento_de_nucleos(torch) -> None:
+    n = diarization_threads()
+    if n <= 0:
+        return
+    try:
+        torch.set_num_threads(n)
+        # interop so pode ser definido antes da primeira operacao paralela;
+        # se ja rodou, o RuntimeError e esperado e nao e problema.
+        torch.set_num_interop_threads(1)
+    except (RuntimeError, ValueError, AttributeError) as exc:
+        print(f"[Transcritorio] nao consegui limitar as threads da separacao: {exc}")
+
+
+SHORT_AUDIO_SECONDS = 300.0
+
+
+def speaker_kwargs(config: dict, audio_seconds: float | None = None) -> dict[str, int]:
+    """Parametros de contagem de falantes para o pyannote (puro).
+
+    `num_speakers=N` e uma ORDEM, nao uma dica: o agrupamento e obrigado a
+    produzir N grupos. Num trecho curto em que so uma pessoa fala, isso parte a
+    mesma voz em duas — e nenhum modelo melhor resolveria, porque todos
+    obedecem ao parametro. Por isso, em audio curto a exigencia vira faixa
+    (1 a N): mantem a protecao de nunca inventar mais vozes do que o projeto
+    declara, e devolve ao modelo a decisao de quantas ha de fato."""
     num_speakers = config.get("diarization_num_speakers")
     if num_speakers is not None:
-        return {"num_speakers": int(num_speakers)}
+        alvo = int(num_speakers)
+        if audio_seconds is not None and 0 < float(audio_seconds) < SHORT_AUDIO_SECONDS:
+            return {"min_speakers": 1, "max_speakers": max(1, alvo)}
+        return {"num_speakers": alvo}
     result: dict[str, int] = {}
     if config.get("min_speakers") is not None:
         result["min_speakers"] = int(config["min_speakers"])
@@ -558,16 +625,34 @@ def annotation_to_segments(annotation) -> list[dict[str, Any]]:
     return segments
 
 
-def log_job(paths: Paths, interview_id: str, status: str, model_name: str, audio_path: Path, message: str) -> None:
-    append_jsonl(
-        paths.manifest_dir / "jobs.jsonl",
-        {
-            "interview_id": interview_id,
-            "stage": "diarize",
-            "status": status,
-            "started_at": now_utc(),
-            "model": model_name,
-            "audio_path": str(audio_path),
-            "message": message,
-        },
-    )
+def tensor_audio_seconds(audio_tensor: Any) -> float | None:
+    """Duracao do audio carregado por `_load_wav_as_tensor`, em segundos.
+    Formato: {"waveform": (canais, amostras), "sample_rate": int}. None quando
+    nao da para saber — a duracao e opcional no registro (puro)."""
+    try:
+        forma = audio_tensor["waveform"].shape
+        taxa = float(audio_tensor["sample_rate"])
+        return float(forma[-1]) / taxa if taxa > 0 else None
+    except Exception:  # noqa: BLE001 - registro nunca derruba a diarizacao
+        return None
+
+
+def log_job(paths: Paths, interview_id: str, status: str, model_name: str, audio_path: Path,
+            message: str, elapsed_s: float | None = None, audio_seconds: float | None = None) -> None:
+    entry = {
+        "interview_id": interview_id,
+        "stage": "diarize",
+        "status": status,
+        "started_at": now_utc(),
+        "model": model_name,
+        "audio_path": str(audio_path),
+        "message": message,
+    }
+    # Quanto levou e sobre quanto audio: sem isso o app nao consegue aprender
+    # a velocidade DESTA maquina e a estimativa fica presa a uma tabela medida
+    # em outra (relato de 2026-09-04: prometeu ~16 min para um lote de 3 h 39).
+    if elapsed_s is not None:
+        entry["elapsed_s"] = round(float(elapsed_s), 2)
+    if audio_seconds is not None:
+        entry["audio_seconds"] = round(float(audio_seconds), 2)
+    append_jsonl(paths.manifest_dir / "jobs.jsonl", entry)
