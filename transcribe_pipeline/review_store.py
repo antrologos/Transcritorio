@@ -343,6 +343,45 @@ def merge_turn_with_next(review: dict[str, Any], turn_id: str) -> str:
     return str(current["id"])
 
 
+def _marcador_de_fronteira() -> str:
+    """Marcador da nota da verificacao acustica de trocas de falante.
+
+    Import tardio: `boundary_check` puxa numpy, e `review_store` e um modulo
+    leve, usado em contextos que nao precisam dele. Se por algum motivo nao
+    carregar, as marcacoes simplesmente nao migram — o pedaco da direita nasce
+    limpo, que ja e melhor do que duplicar."""
+    try:
+        from .boundary_check import BOUNDARY_NOTE_MARKER
+
+        return BOUNDARY_NOTE_MARKER
+    except Exception:  # noqa: BLE001 - dividir um bloco nunca pode falhar por isto
+        return ""
+
+
+def _repartir_marcacoes(esquerda: dict[str, Any], direita: dict[str, Any]) -> None:
+    """Ao dividir, as marcacoes NAO se duplicam (puro sobre os dois turnos).
+
+    `split_turn` monta o bloco novo com deepcopy, entao flags e notas vinham
+    junto: dividir um bloco marcado pela verificacao acustica criava dois
+    blocos marcados, com a mesma nota, e a faixa 🔍 contava dois onde havia um.
+
+    A nota de FRONTEIRA acompanha o pedaco da DIREITA — a suspeita sempre foi
+    sobre a emenda com o bloco seguinte, e e a direita que passa a fazer essa
+    emenda. Todo o resto (inaudivel, sobreposicao, duvida posta a mao, notas
+    humanas) fica na esquerda, onde o usuario a pos."""
+    marcador = _marcador_de_fronteira()
+    notas = str(esquerda.get("notes") or "")
+    flags = [str(f) for f in (esquerda.get("flags") or [])]
+    if marcador and marcador in notas:
+        direita["flags"] = ["duvida"] if "duvida" in flags else []
+        direita["notes"] = notas
+        esquerda["flags"] = [f for f in flags if f != "duvida"]
+        esquerda["notes"] = ""
+    else:
+        direita["flags"] = []
+        direita["notes"] = ""
+
+
 def split_turn(review: dict[str, Any], turn_id: str, split_time: float | None = None, split_char: int | None = None) -> str:
     turns = review_turns(review)
     index = find_turn_index(review, turn_id)
@@ -361,6 +400,7 @@ def split_turn(review: dict[str, Any], turn_id: str, split_time: float | None = 
 
     next_id = next_turn_id(turns)
     new_turn = deepcopy(current)
+    _repartir_marcacoes(current, new_turn)
     current["end"] = round(float(split_time), 3)
     current["text"] = left_text
     current["edited"] = True
