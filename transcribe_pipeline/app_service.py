@@ -143,7 +143,7 @@ def open_project(project_reference: Path) -> ProjectContext:
     # qualquer virava projeto dentro dela sem o usuario pedir.
     raise FileNotFoundError(
         "Esta pasta não é um projeto do Transcritório. "
-        "Para criar um projeto novo, use Arquivo > Novo projeto."
+        "Para criar um projeto novo, use Projeto > Novo projeto."
     )
 
 

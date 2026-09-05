@@ -15,6 +15,20 @@
   - Um teste garante que **nenhuma tecla fica escondida**: se uma ação tem atalho e não
     aparece na consulta, a suíte quebra.
 
+- **O menu Ajuda deixou de ser um beco.** O item "Documentação" procurava um arquivo que
+  o programa nunca gerou, e por isso quase sempre respondia que a documentação "não foi
+  encontrada nesta pasta". Ele virou **Ajuda → Como usar o Transcritório**: um manual que
+  vem dentro do programa, funciona sem internet e é o da versão que você está rodando —
+  o caminho do começo ao fim, do projeto novo até a exportação, com o ciclo de revisão
+  pelo teclado. Um botão abre o manual completo, com imagens, no site.
+  - "Fluxo de trabalho", que era um aviso de uma frase só, virou o primeiro parágrafo
+    desse manual e saiu do menu.
+  - Dois textos ainda mandavam o usuário ao menu "Arquivo", que **não existe** desde a
+    reforma da interface — um deles no LEIA-ME gravado dentro de cada projeto. Corrigidos
+    para "Projeto".
+  - Um teste confere que **todo caminho de menu citado no manual existe de verdade** na
+    barra de menus. Renomear uma ação e esquecer o manual passou a quebrar a suíte.
+
 - **Consertar uma fronteira de falante virou um gesto.** Quando a separação
   automática erra, um bloco atribuído a uma pessoa contém, a partir de certo ponto, a
   fala de outra. Arrumar isso custava cinco gestos: clicar no ponto, dividir, abrir o

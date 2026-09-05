@@ -14,15 +14,45 @@ NAO e modal de proposito: consulta-se um atalho ENQUANTO se revisa.
 from __future__ import annotations
 
 import datetime
+import sys
+from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QAbstractItemView, QDialog, QFileDialog,
                                QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-                               QPushButton, QTabWidget, QTreeWidget,
-                               QTreeWidgetItem, QVBoxLayout, QWidget)
+                               QPushButton, QTabWidget, QTextBrowser,
+                               QTreeWidget, QTreeWidgetItem, QVBoxLayout,
+                               QWidget)
 
 from . import comandos as _comandos
 from . import ui_tokens
+
+SITE = "https://antrologos.github.io/Transcritorio/pt/"
+
+
+def texto_do_manual() -> str:
+    """O manual curto que viaja no wheel (assets/manual.md).
+
+    Vem embutido de proposito: e o manual da VERSAO que a pessoa esta
+    rodando, e abre sem internet — o site tem a versao longa, com imagens.
+    Ausente (canal PyInstaller legado, que copia so os assets da raiz do
+    repositorio), a aba degrada com um recado e o botao do site; nunca
+    quebra.
+    """
+    bases = []
+    empacotado = getattr(sys, "_MEIPASS", "")
+    if empacotado:
+        bases.append(Path(empacotado) / "assets")
+    bases.append(Path(__file__).resolve().parent / "assets")
+    for base in bases:
+        alvo = base / "manual.md"
+        try:
+            if alvo.exists():
+                return alvo.read_text(encoding="utf-8")
+        except OSError:
+            continue
+    return ""
 
 
 class HelpWindow(QDialog):
@@ -42,8 +72,39 @@ class HelpWindow(QDialog):
                                 ui_tokens.SP_3, ui_tokens.SP_3)
         self._tabs = QTabWidget()
         raiz.addWidget(self._tabs)
+        self._abas["manual"] = self._tabs.addTab(self._aba_manual(),
+                                                 "Como usar")
         self._abas["atalhos"] = self._tabs.addTab(self._aba_comandos(),
                                                   "Atalhos e comandos")
+
+    # --------------------------------------------------------------- manual
+    def _aba_manual(self) -> QWidget:
+        pagina = QWidget()
+        col = QVBoxLayout(pagina)
+        col.setContentsMargins(0, ui_tokens.SP_2, 0, 0)
+        col.setSpacing(ui_tokens.SP_2)
+
+        texto = texto_do_manual()
+        self.manual_view = QTextBrowser()
+        self.manual_view.setOpenExternalLinks(True)
+        if texto:
+            self.manual_view.setMarkdown(texto)
+        else:
+            self.manual_view.setPlainText(
+                "O manual não veio nesta instalação.\n\n"
+                "Ele está no site do Transcritório, no botão abaixo.")
+        col.addWidget(self.manual_view, 1)
+
+        rodape = QHBoxLayout()
+        rodape.addStretch(1)
+        self.site_button = QPushButton("Abrir o manual completo no site")
+        self.site_button.setToolTip(
+            "Abre o navegador no manual do Transcritório, com imagens e mais detalhes.")
+        self.site_button.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl(SITE)))
+        rodape.addWidget(self.site_button)
+        col.addLayout(rodape)
+        return pagina
 
     # ------------------------------------------------------------------ aba
     def _aba_comandos(self) -> QWidget:

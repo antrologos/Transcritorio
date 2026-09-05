@@ -50,7 +50,7 @@ O que está aqui dentro:
                       criadas quando você gera os arquivos no programa.
   - metadados.csv     Informações sobre cada gravação (idioma, falantes).
   - O arquivo .transcritorio identifica o projeto — abra-o pelo programa
-    (Arquivo > Abrir projeto).
+    (Projeto > Abrir projeto).
 
 Importante sobre as suas gravações:
 

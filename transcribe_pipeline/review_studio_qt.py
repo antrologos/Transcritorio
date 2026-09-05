@@ -7352,13 +7352,16 @@ if QT_IMPORT_ERROR is None:
                 "onde ele fica no menu. Dá para buscar, copiar e imprimir. (F1)")
             self.shortcuts_action.triggered.connect(lambda: self.open_help("atalhos"))
 
-            self.documentation_action = QAction("Documentação", self)
-            self.documentation_action.setToolTip("Abrir a documentação do projeto, se disponível.")
-            self.documentation_action.triggered.connect(self.show_documentation)
-
-            self.workflow_help_action = QAction("Fluxo de trabalho", self)
-            self.workflow_help_action.setToolTip("Ver o passo a passo básico do Transcritório.")
-            self.workflow_help_action.triggered.connect(self.show_workflow_help)
+            # Ate 2026-09-05 este item se chamava "Documentação" e era um
+            # beco: procurava um README_transcricoes.md que nenhuma parte
+            # do codigo gera, e respondia que nao encontrou. Agora abre o
+            # manual que viaja no wheel — funciona sem internet e e o
+            # manual da versao que a pessoa esta rodando.
+            self.documentation_action = QAction("Como usar o Transcritório", self)
+            self.documentation_action.setToolTip(
+                "O caminho do começo ao fim, em uma página: criar o projeto, transcrever, "
+                "dar nome às vozes, revisar e exportar.")
+            self.documentation_action.triggered.connect(lambda: self.open_help("manual"))
 
             self.cancel_job_action = QAction("Cancelar", self)
             self.cancel_job_action.setToolTip("Cancela o processamento atual. O motor é interrompido; outras etapas param no próximo ponto seguro.")
@@ -7758,7 +7761,6 @@ if QT_IMPORT_ERROR is None:
             ajuda_menu = self.menuBar().addMenu("Ajuda")
             ajuda_menu.addAction(self.shortcuts_action)
             ajuda_menu.addAction(self.documentation_action)
-            ajuda_menu.addAction(self.workflow_help_action)
             ajuda_menu.addSeparator()
             if not _install_tools.is_frozen():
                 ajuda_menu.addAction("Verificar atualizações…", self.show_upgrade_dialog)
@@ -7855,13 +7857,6 @@ if QT_IMPORT_ERROR is None:
             # CONFIRMADA (cuda_libs_present no proximo start) — mostrar o
             # dialog nao significa que o usuario rodou o comando.
 
-        def show_workflow_help(self) -> None:
-            QMessageBox.information(
-                self,
-                "Fluxo de trabalho",
-                "O caminho básico: + Adicionar mídia… → Transcrever → abrir a entrevista (duplo clique) → revisar o texto → Salvar transcrição → Exportar…",
-            )
-
         def show_about(self) -> None:
             from . import __build__, __version__
             # No canal oficial (uv/PyPI) o wheel publica __build__ == "dev";
@@ -7884,18 +7879,6 @@ if QT_IMPORT_ERROR is None:
                 self,
                 f"Sobre {APP_NAME}",
                 f"{APP_NAME} v{versao}\n\n{build_info}\n\nCréditos: {APP_CREDITS}\n\nTranscrição local com WhisperX e pyannote.",
-            )
-
-        def show_documentation(self) -> None:
-            if self.context is not None:
-                docs = [self.context.paths.project_root / "README_transcricoes.md"]
-                existing = [str(path) for path in docs if path.exists()]
-            else:
-                existing = []
-            QMessageBox.information(
-                self,
-                "Documentacao",
-                "\n".join(existing) if existing else "A documentacao do projeto nao foi encontrada nesta pasta.",
             )
 
         def show_queue(self) -> None:

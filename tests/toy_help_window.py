@@ -185,4 +185,42 @@ assert disparos, "F1 nao chega com o cursor dentro do texto do bloco"
 assert win.text_edit.toPlainText() == antes, "F1 nao pode escrever no bloco"
 print("OK: F1 dispara com o cursor no texto e nao mexe no texto")
 
+# ------------------------------------- 7. o manual nao pode apontar para um beco
+# O manual e prosa escrita a mao — o unico pedaco desta ajuda que pode
+# envelhecer. A guarda: todo caminho "Menu → Item" citado nele tem de
+# existir na barra de menus VIVA. Renomeou uma acao, o teste aponta.
+# (Era exatamente esse o defeito do antigo item "Documentação", e o dos
+# textos que ainda mandavam o usuario ao menu "Arquivo", extinto na R1.)
+import re  # noqa: E402
+
+from transcribe_pipeline import ui_help  # noqa: E402
+
+manual = ui_help.texto_do_manual()
+assert manual, "o manual embutido tem de ser encontrado a partir do pacote"
+
+menus = sorted({c.caminho.split(comandos.SETA.strip())[0].strip()
+                for c in catalogo if c.caminho}, key=len, reverse=True)
+ITEM = r"(?:[^\n.,;)→]*?…|[^\n.,;)→]+)"
+CITACAO = re.compile(
+    r"\b(" + "|".join(re.escape(m) for m in menus) + r")"
+    r"\s*→\s*(" + ITEM + r"(?:\s*→\s*" + ITEM + r")*)")
+
+caminhos_validos = {c.caminho for c in catalogo if c.caminho}
+comandos_validos = {(c.caminho, c.rotulo) for c in catalogo}
+
+citados, becos = [], []
+for menu, resto in CITACAO.findall(manual):
+    partes = [menu] + [p.strip() for p in resto.split("→")]
+    citados.append(" → ".join(partes))
+    caminho = comandos.SETA.join(partes[:-1])
+    if (caminho, partes[-1]) in comandos_validos:
+        continue
+    if comandos.SETA.join(partes) in caminhos_validos:
+        continue  # a citacao nomeia um submenu inteiro, e nao um comando
+    becos.append(" → ".join(partes))
+
+assert citados, "o manual precisa dizer ONDE ficam as coisas, com o caminho do menu"
+assert not becos, f"o manual manda o usuario a um caminho que nao existe: {becos}"
+print(f"OK: os {len(citados)} caminhos de menu citados no manual existem de verdade")
+
 print("PASS: toy_help_window")

@@ -118,8 +118,12 @@ check("1.4 Entrevista contem 'Apagar transcrição…' e 'Enviar para a Lixeira�
 assert "Abrir pasta Resultados" in menu_items_by_title["Projeto"], menu_items_by_title["Projeto"]
 check("1.5 Projeto contem 'Abrir pasta Resultados'")
 
-assert "Fluxo de trabalho" in menu_items_by_title["Ajuda"], menu_items_by_title["Ajuda"]
-check("1.6 Ajuda contem 'Fluxo de trabalho'")
+# "Fluxo de trabalho" (um QMessageBox de uma frase) foi absorvido pelo
+# manual embutido em 2026-09-05; o item de Ajuda que ensina o caminho
+# agora e "Como usar o Transcritório", e o de consulta e a F1.
+assert "Como usar o Transcritório" in menu_items_by_title["Ajuda"], menu_items_by_title["Ajuda"]
+assert "Atalhos e comandos" in menu_items_by_title["Ajuda"]
+check("1.6 Ajuda leva ao manual e a consulta de atalhos")
 
 # ==== FASE 2 ====
 header("FASE 2 - SAVE/EXPORT UX")
