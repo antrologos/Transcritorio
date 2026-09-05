@@ -87,6 +87,10 @@ MAPA = [
     # Alt+J / Alt+Shift+J, que e a operacao vizinha.
     ("move_tail_action", "Alt+P", Qt.Key.Key_P, ALT),
     ("move_head_action", "Alt+Shift+P", Qt.Key.Key_P, ALT | SHIFT),
+    # Quando a fala e de alguem que NAO e vizinho, nao ha fronteira a mover:
+    # o jeito e trocar o falante, e ate 2026-09-05 o seletor so era alcancavel
+    # pelo mouse.
+    ("focus_speaker_action", "Alt+E", Qt.Key.Key_E, ALT),
 ]
 
 # ---------------------------------------------------------------- 1. existem e tem a tecla

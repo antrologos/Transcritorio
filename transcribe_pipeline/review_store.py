@@ -361,8 +361,9 @@ def _mover_fronteira(review: dict[str, Any], turn_id: str, para_frente: bool,
         alvo = turn_id          # o bloco inteiro passa
 
     set_turn_speaker_label(review, alvo, rotulo)
-    sobrevivente = (merge_turn_with_next(review, alvo) if para_frente
-                    else merge_turn_with_previous(review, alvo))
+    # O rotulo ja foi igualado acima, entao nao ha falante adotado a anunciar.
+    sobrevivente, _adotado = (merge_turn_with_next(review, alvo) if para_frente
+                              else merge_turn_with_previous(review, alvo))
     # Um gesto do usuario deixa UM registro de edicao, nao os tres ou quatro
     # das operacoes internas.
     del edits[marca:]
@@ -382,7 +383,7 @@ def move_head_to_previous(review: dict[str, Any], turn_id: str, split_char: int 
     return _mover_fronteira(review, turn_id, False, split_char, split_time)
 
 
-def merge_turn_with_previous(review: dict[str, Any], turn_id: str) -> str:
+def merge_turn_with_previous(review: dict[str, Any], turn_id: str) -> tuple[str, str]:
     """Junta este bloco com o ANTERIOR; devolve o id do bloco que sobrou.
 
     Pedido do usuario (2026-09-04): so existia juntar com o proximo, e o
@@ -396,17 +397,29 @@ def merge_turn_with_previous(review: dict[str, Any], turn_id: str) -> str:
     return merge_turn_with_next(review, str(turns[index - 1].get("id")))
 
 
-def merge_turn_with_next(review: dict[str, Any], turn_id: str) -> str:
+def merge_turn_with_next(review: dict[str, Any], turn_id: str) -> tuple[str, str]:
+    """Junta este bloco com o proximo.
+
+    Devolve (id do bloco que sobrou, falante adotado). O falante adotado vem
+    vazio quando os dois blocos ja eram do mesmo — e so vem preenchido quando
+    houve troca, para quem chama poder DIZER o que mudou.
+
+    Ate 2026-09-05 isto RECUSAVA blocos de falantes diferentes. A trava
+    protegia contra fusao acidental, mas travava o conserto mais comum da
+    separacao automatica: era preciso trocar o falante antes, so para poder
+    juntar. Agora junta adotando o falante do bloco que sobrevive (o de cima) e
+    nomeia a mudanca — mesmo padrao que substituiu as caixas de confirmacao de
+    juntar e dividir: em vez de barrar, dizer o que aconteceu e deixar o Ctrl+Z
+    desfazer.
+    """
     turns = review_turns(review)
     index = find_turn_index(review, turn_id)
     if index >= len(turns) - 1:
         raise ValueError("Cannot merge the last turn with a next turn.")
     current = turns[index]
     following = turns.pop(index + 1)
-    if turn_speaker_key(current) != turn_speaker_key(following):
-        turns.insert(index + 1, following)
-        raise ValueError("Não é possível juntar blocos de falantes diferentes. "
-                         "Troque o falante primeiro, se essa for a correção desejada.")
+    adotado = "" if turn_speaker_key(current) == turn_speaker_key(following) \
+        else _rotulo_visivel(current)
     current["start"] = min(float(current.get("start", 0) or 0), float(following.get("start", 0) or 0))
     current["end"] = max(float(current.get("end", 0) or 0), float(following.get("end", 0) or 0))
     current["text"] = " ".join([str(current.get("text", "")).strip(), str(following.get("text", "")).strip()]).strip()
@@ -414,7 +427,7 @@ def merge_turn_with_next(review: dict[str, Any], turn_id: str) -> str:
     current["notes"] = " ".join([str(current.get("notes", "")).strip(), str(following.get("notes", "")).strip()]).strip()
     current["edited"] = True
     record_edit(review, "merge_next", str(current["id"]))
-    return str(current["id"])
+    return str(current["id"]), adotado
 
 
 def _marcador_de_fronteira() -> str:

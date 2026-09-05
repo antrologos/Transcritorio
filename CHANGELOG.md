@@ -2,6 +2,26 @@
 
 ## Em desenvolvimento (ramo beta)
 
+- **Consertar uma fronteira de falante virou um gesto.** Quando a separação
+  automática erra, um bloco atribuído a uma pessoa contém, a partir de certo ponto, a
+  fala de outra. Arrumar isso custava cinco gestos: clicar no ponto, dividir, abrir o
+  seletor de falante, escolher a pessoa certa e juntar com o bloco dela — e o último só
+  funcionava depois do quarto, porque juntar recusava falantes diferentes. Agora são
+  dois: clicar no ponto e **Alt+P** ("Passar o fim para o próximo") ou **Alt+Shift+P**
+  ("Passar o começo para o anterior"). O falante não é perguntado: vem do bloco vizinho,
+  que já tem o certo — por isso funciona igual numa entrevista a dois e num grupo focal.
+  Com o cursor na ponta do texto, o bloco inteiro passa. Um único Ctrl+Z desfaz tudo.
+  - **Juntar blocos de falantes diferentes deixou de ser recusado.** Agora junta,
+    adotando o falante do bloco de cima, e a linha de estado diz qual ficou. A proteção
+    não sumiu: mudou de barrar para avisar, com o desfazer à mão — o mesmo caminho que
+    as caixas de confirmação de juntar e dividir já tinham tomado.
+  - **Alt+E** abre a lista de falantes do bloco sem tirar a mão do teclado, para quando
+    a fala é de alguém que não é vizinho.
+  - **Dividir um bloco marcado com 🔍 não duplica mais a marcação.** A nota da
+    verificação acústica é sobre a emenda com o bloco seguinte, então ela acompanha o
+    pedaço da direita; antes os dois pedaços saíam marcados e o contador da faixa subia
+    em vez de descer, justamente quando a pessoa estava consertando.
+
 - **O lote ficou mais rápido em computadores sem placa de vídeo — e a janela parou de
   mentir sobre onde vai o tempo.** Tudo abaixo foi medido num notebook de 4 núcleos
   (simulado por afinidade de processo), sobre entrevistas inteiras do acervo real, e nada

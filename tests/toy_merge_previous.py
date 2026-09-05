@@ -35,9 +35,10 @@ def review() -> dict:
 
 # --- o caso do relato: a frase comecou no bloco de cima ---
 r = review()
-sobrou = review_store.merge_turn_with_previous(r, "t3")
+sobrou, adotado = review_store.merge_turn_with_previous(r, "t3")
 turns = review_store.review_turns(r)
 assert sobrou == "t2", f"o bloco que sobra e o de CIMA, nao o aberto: {sobrou}"
+assert adotado == "", "mesmo falante nos dois: nao ha troca a anunciar"
 assert len(turns) == 2
 assert turns[1]["text"] == "Eu cheguei aqui em 1998."
 assert turns[1]["start"] == 2.0 and turns[1]["end"] == 6.5, "a faixa de tempo cobre os dois"
@@ -47,8 +48,8 @@ print("PASS: junta com o de cima e o de cima e que sobra")
 
 # --- identidade com o caminho antigo: juntar t3 para tras == juntar t2 para frente ---
 a, b = review(), review()
-review_store.merge_turn_with_previous(a, "t3")
-review_store.merge_turn_with_next(b, "t2")
+assert (review_store.merge_turn_with_previous(a, "t3")
+        == review_store.merge_turn_with_next(b, "t2")), "mesmo resultado nos dois sentidos"
 assert review_store.review_turns(a) == review_store.review_turns(b), \
     "para tras tem de ser exatamente o mesmo caminho ja testado"
 print("PASS: mesma fusao, nenhuma logica nova")
@@ -65,17 +66,24 @@ else:
 assert len(review_store.review_turns(r)) == 3, "a recusa nao pode mexer nos blocos"
 print("PASS: primeiro bloco recusa e nao altera nada")
 
-# --- falantes diferentes: recusa e devolve a lista intacta ---
+# --- falantes diferentes: junta ADOTANDO o falante do bloco que sobra -------
+# Ate 2026-09-05 isto era recusa. A trava protegia contra fusao acidental, mas
+# travava o conserto mais comum da separacao automatica: o usuario tinha de
+# trocar o falante antes so para poder juntar. Agora junta, adota o falante do
+# bloco de cima e DIZ qual ficou — o mesmo padrao que substituiu as caixas de
+# confirmacao de juntar e dividir: em vez de barrar, contar o que aconteceu e
+# deixar o Ctrl+Z desfazer.
 r = review()
-try:
-    review_store.merge_turn_with_previous(r, "t2")   # Entrevistada apos Entrevistador
-except ValueError as exc:
-    assert "falantes diferentes" in str(exc), str(exc)
-else:
-    raise AssertionError("falantes diferentes tem de recusar")
+sobrou, adotado = review_store.merge_turn_with_previous(r, "t2")
+assert sobrou == "t1" and adotado == "Entrevistador", (sobrou, adotado)
 turns = review_store.review_turns(r)
-assert len(turns) == 3 and [t["id"] for t in turns] == ["t1", "t2", "t3"], \
-    "a recusa nao pode deixar o bloco fora de lugar"
-print("PASS: falantes diferentes recusa sem estragar a ordem")
+assert len(turns) == 2, [t["id"] for t in turns]
+assert review_store.turn_speaker_key(turns[0]) == "Entrevistador", \
+    "o bloco resultante e do falante do de cima"
+assert turns[0]["text"] == "Como foi Eu cheguei aqui", turns[0]["text"]
+# A voz CRUA do sobrevivente nao e reescrita — ela e o registro do que a
+# maquina ouviu, e so o rotulo humano muda.
+assert turns[0]["speaker"] == "Entrevistador", turns[0]["speaker"]
+print("PASS: falantes diferentes junta adotando o de cima, e anuncia qual")
 
 print("PASS: toy_merge_previous")

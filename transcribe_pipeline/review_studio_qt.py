@@ -7488,6 +7488,16 @@ if QT_IMPORT_ERROR is None:
                 "falante de lá. Com o cursor no fim, o bloco inteiro passa. (Alt+Shift+P)")
             self.move_head_action.triggered.connect(self.move_boundary_backward)
 
+            # Quando o trecho e de alguem que NAO e vizinho — uma fala encaixada
+            # no meio do bloco, ou um grupo focal — nao ha fronteira a mover: o
+            # jeito e trocar o falante. Ate agora o seletor so era alcancavel
+            # pelo mouse.
+            self.focus_speaker_action = QAction("Escolher o falante deste bloco", self)
+            self.focus_speaker_action.setShortcut(QKeySequence("Alt+E"))
+            self.focus_speaker_action.setToolTip(
+                "Abre a lista de falantes do bloco atual, sem tirar a mão do teclado. (Alt+E)")
+            self.focus_speaker_action.triggered.connect(self.focus_speaker_combo)
+
         def action_button(self, action: QAction, primary: bool = False) -> QPushButton:
             button = QPushButton(action.text())
             button.setToolTip(action.toolTip())
@@ -7661,6 +7671,7 @@ if QT_IMPORT_ERROR is None:
             bloco_menu.addAction(self.split_block_action)
             bloco_menu.addAction(self.move_head_action)
             bloco_menu.addAction(self.move_tail_action)
+            bloco_menu.addAction(self.focus_speaker_action)
 
             # --- Entrevista: tudo sobre a entrevista (abrir, transcrever,
             # falantes, propriedades, lista, destrutivas) ---
@@ -11651,7 +11662,8 @@ if QT_IMPORT_ERROR is None:
             motivo_bloco = reason_busy if busy else "Abra uma entrevista e escolha um bloco."
             for acao_bloco in (self.merge_prev_block_action, self.merge_block_action,
                                self.split_block_action, self.move_tail_action,
-                               self.move_head_action, self.repeat_turn_action,
+                               self.move_head_action, self.focus_speaker_action,
+                               self.repeat_turn_action,
                                self.next_block_action, self.prev_block_action,
                                self.next_flagged_action, self.prev_flagged_action,
                                self.focus_toggle_action):
@@ -11761,14 +11773,17 @@ if QT_IMPORT_ERROR is None:
             before = deepcopy(self.review)
             juntar = review_store.merge_turn_with_previous if para_tras else review_store.merge_turn_with_next
             try:
-                merged_id = juntar(self.review, self.current_turn_id)
+                merged_id, adotado = juntar(self.review, self.current_turn_id)
                 app_service.save_review(self.context, self.current_interview_id, self.review)
                 self.turns = review_store.review_turns(self.review)
                 self.load_turn_table()
                 self.select_turn_by_index(review_store.find_turn_index(self.review, merged_id), seek=False)
                 self.undo_stack.push(ReviewSnapshotCommand(self, "Juntar blocos", before, self.review, merged_id))
                 self.set_save_state(saved_status_message())
-                self._back_to_text("Blocos juntados. Ctrl+Z desfaz.")
+                # Falantes diferentes deixaram de ser recusa e viraram aviso: o
+                # bloco adota o falante do de cima, e a linha de estado diz qual.
+                aviso = f" O bloco ficou como «{adotado}»." if adotado else ""
+                self._back_to_text(f"Blocos juntados.{aviso} Ctrl+Z desfaz.")
             except Exception as exc:
                 self._edit_warning(f"Não foi possível juntar: {sanitize_message(str(exc))}")
 
@@ -11814,6 +11829,18 @@ if QT_IMPORT_ERROR is None:
                 self._back_to_text(f"Bloco dividido; {split_note}. Ctrl+Z desfaz.")
             except Exception as exc:
                 self._edit_warning(f"Não foi possível dividir: {sanitize_message(str(exc))}")
+
+        def focus_speaker_combo(self, *_args: object) -> None:
+            """Alt+E: leva o foco ao seletor de falante e abre a lista.
+
+            Existe para o caso em que a fala é de alguém que NÃO é vizinho —
+            encaixada no meio do bloco, ou um grupo focal com várias vozes —,
+            onde mover a fronteira não resolve e é preciso trocar o falante."""
+            combo = getattr(self, "speaker_combo", None)
+            if combo is None or not combo.isEnabled():
+                return
+            combo.setFocus(Qt.FocusReason.ShortcutFocusReason)
+            combo.showPopup()
 
         def move_boundary_forward(self, *_args: object) -> None:
             self._move_boundary(para_tras=False)
