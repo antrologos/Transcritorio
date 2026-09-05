@@ -54,7 +54,8 @@ print("PASS: apply_segmentation_step (pura)")
 
 # 3) estimativas do app acompanham a medicao (0,060x CPU 24 nucleos; 0,0065x GPU)
 assert abs(expected_diarization_seconds(3600, "cpu", 24) - (45 + 216)) < 1e-6
-assert abs(expected_diarization_seconds(3600, "cpu", 4) - (45 + 216 * 6)) < 1e-6
+# 2026-09-05: expoente 0,3 no lugar da escala linear (medido em 4 nucleos)
+assert abs(expected_diarization_seconds(3600, "cpu", 4) - (45 + 216 * (24 / 4) ** 0.3)) < 1e-6
 assert abs(expected_diarization_seconds(3600, "cuda", 24) - (20 + 23.4)) < 1e-6
 print("PASS: estimativas com o passo de 2 s")
 

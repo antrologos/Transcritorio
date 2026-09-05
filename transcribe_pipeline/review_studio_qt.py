@@ -9757,10 +9757,16 @@ if QT_IMPORT_ERROR is None:
                 asr_samples=asr_hist, diar_samples=diar_hist)
             medido = _caps_e.estimate_is_measured(asr_hist)
             onde = "sem placa de vídeo" if device != "cuda" else "com placa de vídeo"
+            # Ate 2026-09-05 este texto dizia que a separacao era "a etapa
+            # demorada" — a formula supunha escala linear com nucleos e a
+            # inflava por ~2x. Medida, ela e a metade barata, e adia-la economiza
+            # menos do que a frase antiga prometia. A dica agora diz quanto.
             dica = ("A separação é a etapa demorada — dá para deixá-la para depois "
                     "(a lista oferece um botão) e já revisar o texto."
                     if diar_s > asr_s else
-                    "Dá para deixar a separação para depois (a lista oferece um botão).")
+                    "A transcrição é a etapa demorada. Deixar a separação de falantes "
+                    f"para depois (a lista oferece um botão) adianta cerca de "
+                    f"{_caps_e.describe_seconds(diar_s)}.")
             base = ("com base no que este computador já levou nas transcrições anteriores"
                     if medido else "estimativa aproximada — ela se ajusta depois da primeira transcrição")
             return (f"Neste computador ({onde}), para {_caps_e.describe_seconds(total)} "

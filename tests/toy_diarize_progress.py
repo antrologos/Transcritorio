@@ -42,7 +42,13 @@ print("PASS: mapeamento do hook do pyannote")
 # de audio em 19,3 min); GPU 0,0065x (62 min em 23 s).
 assert abs(expected_diarization_seconds(300, "cpu", 24) - (45 + 18)) < 1e-6
 assert abs(expected_diarization_seconds(3600, "cpu", 24) - (45 + 216)) < 1e-6   # 1 h ~ 4,4 min
-assert abs(expected_diarization_seconds(3600, "cpu", 8) - (45 + 648)) < 1e-6    # 8 nucleos: 3x
+# 2026-09-05: a escala com nucleos NAO e linear. Medido com afinidade em
+# 4 nucleos fisicos e entrevistas inteiras: 0,100 s por segundo de audio,
+# contra os 0,36 que a escala linear previa — expoente 0,3, nao 1.
+_quatro = expected_diarization_seconds(3600, "cpu", 4)
+assert abs(_quatro - (45 + 216 * (24 / 4) ** 0.3)) < 1e-6
+assert 340 < _quatro < 430, f"1 h em 4 nucleos deve dar ~7 min, deu {_quatro/60:.1f} min"
+assert expected_diarization_seconds(3600, "cpu", 4) > expected_diarization_seconds(3600, "cpu", 8)     > expected_diarization_seconds(3600, "cpu", 24), "menos nucleos, mais tempo"
 assert abs(expected_diarization_seconds(3600, "cuda", 24) - (20 + 23.4)) < 1e-6
 assert expected_diarization_seconds(0, "cpu", 24) == 45.0
 assert expected_diarization_seconds(3600, "cpu", 0) > 0   # cores invalido nao explode

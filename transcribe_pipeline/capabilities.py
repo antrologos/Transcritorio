@@ -309,21 +309,24 @@ def profile_size(
 def cpu_speed_warning(hw: Hardware) -> str:
     """Aviso honesto de tempo em CPU; "" quando ha GPU (pura).
 
-    Ordem de grandeza, nao promessa, com o TAGARELA como motor (poucos
-    minutos por hora de audio em qualquer CPU) e a separacao de falantes
-    escalando com os nucleos (0,06x na maquina de 24 nucleos).
+    Diz as DUAS etapas com numero. Ate 2026-09-05 este texto so falava da
+    separacao de falantes, apresentada como a demorada, e sugeria desmarcar
+    "Separar falantes agora" a quem tivesse pressa. A medicao num notebook de
+    4 nucleos derrubou as duas coisas: transcrever 1 h leva ~7,5 min e separar
+    os falantes ~6 min. A separacao e a metade BARATA em qualquer contagem de
+    nucleos, entao o conselho antigo mandava adiar o que menos pesa.
     """
     if hw.has_gpu:
         return ""
-    # Mesma conta que a barra de progresso e a janela do lote usam
-    # (expected_diarization_seconds), para os textos nunca divergirem.
-    separacao = describe_seconds(expected_diarization_seconds(3600.0, "cpu", hw.cores))
-    if hw.cores >= 4:
-        return ("Sem placa de vídeo, 1 hora de entrevista leva poucos minutos para "
-                f"transcrever e cerca de {separacao} para separar os falantes.")
-    return ("Sem placa de vídeo e com poucos núcleos, transcrever é rápido, mas "
-            f"separar os falantes de 1 hora de entrevista leva cerca de {separacao} "
-            "— desmarque \"Separar falantes agora\" se tiver pressa.")
+    # Mesma conta da barra e da janela do lote, para os textos nunca divergirem.
+    transcricao, separacao = batch_time_estimate(3600.0, "parakeet_onnx", "cpu", hw.cores)
+    texto = ("Sem placa de vídeo, 1 hora de entrevista leva cerca de "
+             f"{describe_seconds(transcricao)} para transcrever e "
+             f"{describe_seconds(separacao)} para separar os falantes.")
+    if hw.cores < 4:
+        texto += (" Com poucos núcleos é mais devagar do que isso — um lote grande "
+                  "dá para deixar rodando e voltar depois.")
+    return texto
 
 
 # --- Estimativa de tempo de um lote (2026-09-02, puras) ---------------------
@@ -341,14 +344,35 @@ _ASR_SECONDS_PER_AUDIO_SECOND = {
     ("whisper", "cpu"): 1.1,
     ("whisper", "cuda"): 1 / 8.0,
 }
-# Como o TAGARELA escala com nucleos, MEDIDO nesta maquina de referencia com
-# 1 min de audio (segundos de maquina por segundo de audio): 1 thread 0,207;
-# 2 threads 0,107; 4 threads 0,093; 8 threads 0,080; 24 (referencia) 0,061.
-# Nao e linear — ele satura porque o gargalo e a banda de memoria (varre os
-# 2,4 GB de pesos a cada passada), nao a conta. Uma correcao 24/nucleos, como
-# a do Whisper, exageraria por 2-3x. A curva medida cai como uma potencia de
-# expoente ~0,25, e e isso que a formula usa.
-_PARAKEET_CORE_EXPONENT = 0.25
+# Como o TAGARELA escala com nucleos. A primeira medicao (2026-09-04) so
+# limitou o NUMERO DE THREADS nesta maquina de 24 nucleos: 1 thread 0,207;
+# 2 threads 0,107; 4 threads 0,093; 8 threads 0,080; 24 (referencia) 0,061 —
+# curva de expoente ~0,25. Mas limitar threads nao simula um notebook: as 4
+# threads continuavam com a banda de memoria e os caches de uma estacao de
+# trabalho, e o TAGARELA e limitado justamente por banda (varre 2,4 GB de pesos
+# a cada passada).
+#
+# Refeito em 2026-09-05 com AFINIDADE de processo (4 nucleos fisicos de
+# verdade) e entrevistas inteiras do acervo: 0,126 s por segundo de audio, e
+# nao os 0,093 de antes — 35% mais lento. Contra a referencia de 24 threads
+# isso da (24/4)^p = 0,126/0,0606, ou seja p = 0,41. A curva por afinidade,
+# em 4 min de audio: 1 thread 0,271; 2 threads 0,172; 3 threads 0,149;
+# 4 threads 0,138. Continua otimista para um notebook real (a banda de memoria
+# desta maquina e maior), e por isso `measured_ratio` manda quando ha
+# historico.
+_PARAKEET_CORE_EXPONENT = 0.4
+# A separacao de falantes TAMBEM satura, e a formula supunha escala LINEAR
+# (24/cores) — errava por quase 2x, para o lado pessimista. Medido em
+# 2026-09-05, 4 nucleos fisicos, entrevistas inteiras, com o modelo ja
+# carregado (que e o que o servidor de lote faz): 0,100 s por segundo de audio,
+# contra os 0,36 que a escala linear previa. (24/4)^p = 0,100/0,060 da p = 0,29.
+# Curva por afinidade em 4 min: 1 thread 0,273; 2 threads 0,176; 3 threads
+# 0,142; 4 threads 0,123.
+#
+# A consequencia dessa correcao nao e cosmetica: com a escala linear o app
+# dizia que separar falantes era 79% do tempo do lote, quando sao 44% — e
+# aconselhava adiar justamente a etapa BARATA.
+_DIARIZATION_CORE_EXPONENT = 0.3
 # Numero minimo de transcricoes ja feitas para preferir a MEDICAO desta
 # maquina a qualquer formula (ver measured_asr_ratio).
 MIN_SAMPLES_FOR_MEASURED = 2
@@ -359,7 +383,7 @@ def expected_diarization_seconds(audio_seconds: float, device: str, cores: int) 
     audio = max(0.0, float(audio_seconds))
     if device == "cuda":
         return 20.0 + 0.0065 * audio
-    escala = _REF_LOGICAL_CORES / max(1, int(cores or 1))
+    escala = (_REF_LOGICAL_CORES / max(1, int(cores or 1))) ** _DIARIZATION_CORE_EXPONENT
     return 45.0 + 0.06 * audio * escala
 
 

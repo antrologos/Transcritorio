@@ -43,7 +43,10 @@ ref, _ = caps.batch_time_estimate(HORA, "parakeet_onnx", "cpu", 24)
 poucos, _ = caps.batch_time_estimate(HORA, "parakeet_onnx", "cpu", 4)
 assert poucos > ref, "antes o TAGARELA prometia o mesmo em qualquer maquina"
 fator = poucos / ref
-assert 1.4 < fator < 1.7, f"esperado ~1,57 (medido 0,093 vs 0,061); veio {fator:.2f}"
+# 2026-09-05: expoente 0,25 -> 0,4. Os 0,093 vinham de limitar so o NUMERO DE
+# THREADS nesta maquina de 24 nucleos; com afinidade de 4 nucleos fisicos de
+# verdade, e entrevistas inteiras, sao 0,126 — 2,05x a referencia.
+assert 1.9 < fator < 2.2, f"esperado ~2,05 (medido 0,126 vs 0,061); veio {fator:.2f}"
 # ...e NÃO cai linearmente como o Whisper (24/4 = 6x), que exageraria
 w_ref, _ = caps.batch_time_estimate(HORA, "whisper", "cpu", 24)
 w_poucos, _ = caps.batch_time_estimate(HORA, "whisper", "cpu", 4)
