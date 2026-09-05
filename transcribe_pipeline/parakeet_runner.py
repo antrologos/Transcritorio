@@ -69,29 +69,79 @@ _CPU_MODEL: Any = None
 _CPU_MODEL_KEY: tuple[str, float] | None = None
 
 
-def _model_cache_key(snap: Path) -> tuple[str, float]:
+def _model_cache_key(snap: Path, threads: int = 0) -> tuple[str, float, int]:
     """Identidade do modelo carregado.
 
     O caminho do snapshot ja embute repo, revisao e pasta de cache (vem de
     `model_manager.cached_snapshot_path`), entao trocar de modelo ou de projeto
     muda a chave sozinho. O mtime cobre o caso de um download ter sobrescrito o
-    snapshot no lugar."""
+    snapshot no lugar. E `threads` entra porque SessionOptions so vale na
+    CRIACAO da sessao: sem isso, mudar "quanto do computador usar" nao teria
+    efeito nenhum ate reiniciar o app."""
     try:
         mtime = snap.stat().st_mtime
     except OSError:
         mtime = 0.0
-    return (str(snap), mtime)
+    return (str(snap), mtime, max(0, int(threads)))
 
 
-def _load_cpu_model(snap: Path) -> Any:
+def session_options_for(threads: int):
+    """SessionOptions do ORT, ou None quando nao ha orcamento de nucleos.
+
+    None e LITERALMENTE a chamada de hoje (`sess_options` default), entao o
+    caminho padrao fica identico por construcao. Nunca mexer em
+    `graph_optimization_level` (ja e ORT_ENABLE_ALL) nem em
+    `optimized_model_filepath` (escreveria dentro do cache do modelo)."""
+    if not threads or int(threads) <= 0:
+        return None
+    import onnxruntime
+
+    opcoes = onnxruntime.SessionOptions()
+    opcoes.intra_op_num_threads = int(threads)
+    opcoes.inter_op_num_threads = 1
+    return opcoes
+
+
+def cpu_threads_for(config: dict) -> int:
+    """Threads do ORT para a transcricao; 0 = nao mexer.
+
+    `asr_threads` no config vem de quem ja sabe o orcamento (a GUI, quando
+    sobrepoe as etapas); sem ele, vale a preferencia da maquina."""
+    bruto = config.get("asr_threads")
+    if bruto is not None:
+        try:
+            return max(0, int(bruto))
+        except (TypeError, ValueError):
+            return 0
+    try:
+        from . import app_settings, capabilities
+
+        asr, _diar = capabilities.cpu_budget(app_settings.computer_use(), runtime.cpu_cores())
+        return asr
+    except Exception:  # noqa: BLE001 - preferencia ilegivel nunca impede transcrever
+        return 0
+
+
+def _load_cpu_model(snap: Path, threads: int = 0) -> Any:
     """Devolve o modelo de CPU, carregando so quando a chave muda."""
     global _CPU_MODEL, _CPU_MODEL_KEY
-    chave = _model_cache_key(snap)
+    chave = _model_cache_key(snap, threads)
     if _CPU_MODEL is not None and _CPU_MODEL_KEY == chave:
         return _CPU_MODEL
     import onnx_asr
 
-    modelo = onnx_asr.load_model("nemo-parakeet-tdt-0.6b-v3", str(snap)).with_timestamps()
+    opcoes = session_options_for(threads)
+    extras = {"sess_options": opcoes} if opcoes is not None else {}
+    try:
+        modelo = onnx_asr.load_model(
+            "nemo-parakeet-tdt-0.6b-v3", str(snap), **extras).with_timestamps()
+    except TypeError:
+        # O pino e onnx-asr>=0.12,<1.0. Se a assinatura mudar, transcrever sem
+        # o orcamento vale muito mais do que nao transcrever.
+        print("[Transcritorio] onnx-asr recusou sess_options; "
+              "carregando sem orcamento de nucleos.")
+        modelo = onnx_asr.load_model("nemo-parakeet-tdt-0.6b-v3", str(snap)).with_timestamps()
+        chave = _model_cache_key(snap, 0)
     _CPU_MODEL = modelo
     _CPU_MODEL_KEY = chave
     return modelo
@@ -482,6 +532,7 @@ def run_parakeet(
         print(f"[Transcritorio] Parakeet: {plan_motivo} — transcrevendo no processador.")
 
     model = None  # do cache de modulo (_load_cpu_model), uma vez por lote
+    cpu_threads = cpu_threads_for(config)
     failures = 0
     for row in selected_rows(rows, ids):
         if should_cancel is not None and should_cancel():
@@ -548,7 +599,7 @@ def run_parakeet(
                         _emit(progress_callback, interview_id,
                               {"event": "asr_progress", "progress": 1,
                                "message": "Carregando o modelo Parakeet pt-BR..."})
-                    model = _load_cpu_model(snap)
+                    model = _load_cpu_model(snap, cpu_threads)
 
                 audio = _read_wav_mono16k(wav, np)
                 total_s = len(audio) / SAMPLE_RATE

@@ -86,6 +86,26 @@ def alignment_default() -> bool:
     return install_profile() != "essencial"
 
 
+COMPUTER_USE_MODES = ("tudo", "metade")
+COMPUTER_USE_DEFAULT = "tudo"
+
+
+def computer_use() -> str:
+    """Quanto do computador o app pode usar enquanto transcreve (por maquina).
+
+    "tudo" (padrao) e o comportamento de sempre: o app NAO define numero de
+    threads nenhum, e os motores usam o que acharem. "metade" deixa o
+    computador utilizavel enquanto o lote roda, ao custo medido de ~25% a mais
+    de tempo (2026-09-05, notebook de 4 nucleos: 0,172 contra 0,138 s por
+    segundo de audio) — com a transcricao saindo IDENTICA byte a byte.
+
+    Preferencia da MAQUINA, nunca do projeto: um projeto viaja pelo Dropbox
+    para outro computador com outra contagem de nucleos.
+    """
+    valor = str(load().get("computer_use") or "").strip().lower()
+    return valor if valor in COMPUTER_USE_MODES else COMPUTER_USE_DEFAULT
+
+
 SEARCH_MAX_RESULTS_DEFAULT = 20
 SEARCH_MAX_RESULTS_RANGE = (5, 100)
 

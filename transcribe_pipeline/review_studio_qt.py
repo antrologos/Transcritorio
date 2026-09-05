@@ -3115,6 +3115,29 @@ if QT_IMPORT_ERROR is None:
                     "Desmarcada: este lote sai só com o texto; a lista oferece "
                     "\"Separar falantes agora\" para completar depois, em lote.")
                 layout.addWidget(self.diarize_now_check)
+            # Uso do computador: escolha da MÁQUINA (app_settings), oferecida
+            # aqui porque é onde a decisão acontece — a pessoa está prestes a
+            # entregar o computador a um lote longo. Só aparece sem placa de
+            # vídeo, que é quando o processador é o recurso disputado.
+            self.uso_rapido_radio: QRadioButton | None = None
+            self.uso_leve_radio: QRadioButton | None = None
+            if estimate_text:
+                from . import app_settings as _st_uso
+
+                layout.addWidget(QLabel("Enquanto o lote roda:"))
+                self.uso_rapido_radio = QRadioButton("Mais rápido — usa o computador inteiro")
+                self.uso_rapido_radio.setToolTip(
+                    "O computador fica lento para as outras tarefas enquanto transcreve.")
+                self.uso_leve_radio = QRadioButton("Posso usar o computador enquanto roda")
+                self.uso_leve_radio.setToolTip(
+                    "Usa metade da máquina: cerca de 25% mais devagar, com a "
+                    "transcrição idêntica (medido em 2026-09-05).")
+                if _st_uso.computer_use() == "metade":
+                    self.uso_leve_radio.setChecked(True)
+                else:
+                    self.uso_rapido_radio.setChecked(True)
+                layout.addWidget(self.uso_rapido_radio)
+                layout.addWidget(self.uso_leve_radio)
             buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
             buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Transcrever")
             buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Cancelar")
@@ -3125,6 +3148,12 @@ if QT_IMPORT_ERROR is None:
         def diarize_now(self) -> bool:
             """Decisao do lote: True sem a caixa (GPU) ou com ela marcada."""
             return True if self.diarize_now_check is None else self.diarize_now_check.isChecked()
+
+        def computer_use(self) -> str | None:
+            """Escolha de uso do computador, ou None quando nem foi oferecida."""
+            if self.uso_leve_radio is None:
+                return None
+            return "metade" if self.uso_leve_radio.isChecked() else "tudo"
 
         def updates(self) -> dict[str, str]:
             """Mesmas chaves do MetadataDialog + marcador speaker_setup."""
@@ -9531,7 +9560,8 @@ if QT_IMPORT_ERROR is None:
                 return
             try:
                 from .diarize_client import DiarizeServer
-                server = DiarizeServer(self.context.paths.project_root)
+                server = DiarizeServer(self.context.paths.project_root,
+                                       threads=self._core_budget()[1])
                 if server.start():
                     self._diarize_server = server
             except Exception as exc:  # noqa: BLE001 - sem servidor = rota por arquivo
@@ -9545,6 +9575,21 @@ if QT_IMPORT_ERROR is None:
                     server.stop()
                 except Exception as exc:  # noqa: BLE001
                     _logger.warning("servidor de diarizacao nao encerrou limpo: %s", exc)
+
+        def _core_budget(self, *, concurrent: bool = False) -> tuple[int, int]:
+            """(threads da transcrição, threads da separação) para este lote.
+
+            (0, 0) significa "não mexer": é o padrão, e reproduz o
+            comportamento de sempre sem passar SessionOptions nem variável de
+            ambiente nenhuma."""
+            from . import app_settings as _st_b, capabilities as _caps_b, runtime as _rt_b
+
+            try:
+                return _caps_b.cpu_budget(_st_b.computer_use(), _rt_b.cpu_cores(),
+                                          concurrent=concurrent)
+            except Exception as exc:  # noqa: BLE001 - preferencia ilegivel = padrao
+                _logger.warning("orçamento de núcleos indisponível: %s", exc)
+                return (0, 0)
 
         def _release_batch_models(self) -> None:
             """Solta os modelos que ficam vivos ENTRE arquivos de um lote.
@@ -12819,6 +12864,17 @@ if QT_IMPORT_ERROR is None:
                             _logger.warning("Falha ao gravar configuracao de falantes: %s", exc)
                     if estimate_text and diarize_now is None:
                         diarize_now = dialog.diarize_now()
+                    # Uso do computador: preferencia da MAQUINA, nao do projeto
+                    # (um projeto viaja pelo Dropbox para outro computador).
+                    escolha_uso = dialog.computer_use()
+                    if escolha_uso is not None:
+                        try:
+                            from . import app_settings as _st_uso2
+
+                            if escolha_uso != _st_uso2.computer_use():
+                                _st_uso2.save({"computer_use": escolha_uso})
+                        except Exception as exc:  # noqa: BLE001 - nunca impede o lote
+                            _logger.warning("não consegui gravar o uso do computador: %s", exc)
                 if diarize_now is not False:
                     self._reset_speakers_confirmed(ids)
             steps: list[tuple] = []

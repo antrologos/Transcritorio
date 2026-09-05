@@ -57,8 +57,11 @@ class DiarizeServer:
     READY_TIMEOUT = 900.0
     STOP_TIMEOUT = 5.0
 
-    def __init__(self, project_root: Path, command: list[str] | None = None) -> None:
+    def __init__(self, project_root: Path, command: list[str] | None = None,
+                 threads: int = 0) -> None:
         self.project_root = Path(project_root)
+        # 0 = nao mexer (o filho fica como sempre foi).
+        self.threads = max(0, int(threads or 0))
         self._command = list(command) if command else runtime.cli_command(
             "--project", str(self.project_root), "diarize-serve",
         )
@@ -69,6 +72,19 @@ class DiarizeServer:
         self._dead = False
         self.failure_reason = ""
         self.served = 0
+
+    def _child_env(self) -> dict[str, str]:
+        """Ambiente do filho, composto LOCALMENTE sobre o funil comum.
+
+        `secure_subprocess_env()` vale para TODO subprocesso do app — ffmpeg,
+        ffprobe, canais, worker da LLM. Por um limite de threads la dentro
+        reafinaria todos eles em silencio, entao a composicao acontece aqui.
+        As variaveis precisam existir ANTES de o filho importar torch."""
+        from .capabilities import thread_env
+
+        env = dict(secure_subprocess_env())
+        env.update(thread_env(self.threads))
+        return env
 
     # --- ciclo de vida -------------------------------------------------
     def start(self) -> bool:
@@ -85,7 +101,7 @@ class DiarizeServer:
                 encoding="utf-8",
                 errors="replace",
                 bufsize=1,
-                env=secure_subprocess_env(),
+                env=self._child_env(),
                 **_no_window_flags(),
             )
         except Exception as exc:  # noqa: BLE001 - sem servidor, sem drama: fallback

@@ -169,6 +169,7 @@ def load_diarization_pipeline(
         return None
 
     torch.set_float32_matmul_precision("high")
+    _aplicar_orcamento_de_nucleos(torch)
 
     effective_device, fell_back = runtime.resolve_device(config.get("asr_device"))
     if fell_back:
@@ -474,6 +475,45 @@ def _custom_pipeline_params(config: dict) -> dict:
 # 0,3% do automatico) e em 24 min (imposicao e automatico dao exatamente o
 # mesmo). O limiar fica no meio, do lado seguro — nada se perde por usar faixa
 # num audio de 4 min, e muito se perde por impor 2 num de 1 min.
+def diarization_threads() -> int:
+    """Threads do torch para a separacao de falantes; 0 = nao mexer (puro-ish).
+
+    O ambiente MANDA: quando o servidor de lote e aberto com um orcamento, ele
+    o passa em OMP_NUM_THREADS, e essa e a palavra final. Sem ambiente, vale a
+    preferencia da maquina ("quanto do computador usar").
+
+    Existe porque `OMP_NUM_THREADS` sozinho nem sempre amarra o pool intra-op
+    do torch, e `set_num_threads` precisa rodar antes da primeira operacao
+    paralela — ou seja, antes de `Pipeline.from_pretrained`.
+    """
+    bruto = os.environ.get("OMP_NUM_THREADS")
+    if bruto:
+        try:
+            return max(0, int(bruto))
+        except ValueError:
+            pass
+    try:
+        from . import app_settings, capabilities
+
+        _asr, diar = capabilities.cpu_budget(app_settings.computer_use(), runtime.cpu_cores())
+        return diar
+    except Exception:  # noqa: BLE001 - preferencia ilegivel nunca impede separar
+        return 0
+
+
+def _aplicar_orcamento_de_nucleos(torch) -> None:
+    n = diarization_threads()
+    if n <= 0:
+        return
+    try:
+        torch.set_num_threads(n)
+        # interop so pode ser definido antes da primeira operacao paralela;
+        # se ja rodou, o RuntimeError e esperado e nao e problema.
+        torch.set_num_interop_threads(1)
+    except (RuntimeError, ValueError, AttributeError) as exc:
+        print(f"[Transcritorio] nao consegui limitar as threads da separacao: {exc}")
+
+
 SHORT_AUDIO_SECONDS = 300.0
 
 

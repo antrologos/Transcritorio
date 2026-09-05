@@ -378,6 +378,53 @@ _DIARIZATION_CORE_EXPONENT = 0.3
 MIN_SAMPLES_FOR_MEASURED = 2
 
 
+def cpu_budget(mode: str, cores: int, *, concurrent: bool = False) -> tuple[int, int]:
+    """Quantas threads para transcrever e para separar falantes (pura).
+
+    `(0, 0)` e o SENTINELA "nao mexer": nenhum SessionOptions, nenhuma variavel
+    de ambiente, nenhum set_num_threads — o caminho de hoje, identico por
+    construcao e nao por teste. So acontece no modo "tudo" sem sobreposicao,
+    que e o padrao; quem nunca abrir a opcao nao ve diferenca nenhuma.
+
+    Com sobreposicao NUNCA devolve 0. Medido em 2026-09-05: dois motores com o
+    pool dimensionado pela maquina inteira, disputando 4 nucleos, custam 5,9x o
+    de um pool do tamanho certo (0,815 contra 0,138 s por segundo de audio).
+    Sobrepor sem orcamento explicito seria pior que o sequencial de hoje.
+
+    A divisao ao meio na sobreposicao vem da medicao: as duas etapas custam a
+    mesma ordem de grandeza, e dar mais nucleos a uma so faz a outra virar
+    gargalo (3/1 e 1/3 ficaram 30% PIORES que o sequencial).
+    """
+    n = max(1, int(cores or 1))
+    metade = max(1, n // 2)
+    if not concurrent:
+        return (metade, metade) if mode == "metade" else (0, 0)
+    if mode == "metade":
+        quarto = max(1, n // 4)
+        return (quarto, quarto)
+    return (metade, max(1, n - metade))
+
+
+def thread_env(threads: int) -> dict[str, str]:
+    """Variaveis que amarram os pools de BLAS/OpenMP num processo filho (pura).
+
+    Vazio quando nao ha orcamento — o filho fica como hoje. Precisam existir
+    ANTES de o filho importar torch, por isso ambiente e nao chamada de funcao.
+    Quem compoe isto sobre `secure_subprocess_env()` faz a composicao LOCAL:
+    aquela funcao e o funil de todo subprocesso (ffmpeg, ffprobe, canais, LLM)
+    e um limite la dentro reafinaria todos em silencio.
+    """
+    if not threads or int(threads) <= 0:
+        return {}
+    valor = str(int(threads))
+    return {
+        "OMP_NUM_THREADS": valor,
+        "MKL_NUM_THREADS": valor,
+        "OPENBLAS_NUM_THREADS": valor,
+        "NUMEXPR_NUM_THREADS": valor,
+    }
+
+
 def expected_diarization_seconds(audio_seconds: float, device: str, cores: int) -> float:
     """Tempo esperado da separacao de falantes: carga do modelo + processamento."""
     audio = max(0.0, float(audio_seconds))
