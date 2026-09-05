@@ -2,6 +2,19 @@
 
 ## Em desenvolvimento (ramo beta)
 
+- **F1 abre a lista de tudo o que o Transcritório faz.** O programa passou a ter 67
+  comandos e 38 teclas de atalho, e não havia nenhuma tela onde consultá-los: quem
+  esquecia uma tecla tinha de caçá-la nos menus. Agora **F1** (ou Ajuda → "Atalhos e
+  comandos") abre uma janela com todos eles, agrupados pelo menu onde moram, com a
+  tecla de cada um e o que faz — e uma caixa de busca que aceita tanto o nome quanto a
+  tecla: digitar `altp` acha "Passar o fim para o próximo". A janela não é modal e não
+  interrompe nada, porque atalho se consulta no meio da revisão; dá para copiar a lista
+  ou salvá-la em texto para imprimir e deixar ao lado do computador.
+  - A lista **não é escrita à mão**: é lida da própria barra de menus toda vez que a
+    janela abre. Comando novo aparece nela sozinho, e nunca fica desatualizada.
+  - Um teste garante que **nenhuma tecla fica escondida**: se uma ação tem atalho e não
+    aparece na consulta, a suíte quebra.
+
 - **Consertar uma fronteira de falante virou um gesto.** Quando a separação
   automática erra, um bloco atribuído a uma pessoa contém, a partir de certo ponto, a
   fala de outra. Arrumar isso custava cinco gestos: clicar no ponto, dividir, abrir o

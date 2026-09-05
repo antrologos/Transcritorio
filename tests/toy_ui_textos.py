@@ -66,6 +66,7 @@ from transcribe_pipeline.review_studio_qt import (
     ReviewStudioWindow,
     _apply_dark_theme,
 )
+from transcribe_pipeline.ui_help import HelpWindow
 
 _apply_dark_theme(app)
 win = ReviewStudioWindow(project_root=tmp)
@@ -113,6 +114,7 @@ dialogos = {
     "novo-projeto/": NewProjectDialog(),
     "preparar-modelos/": ModelSetupDialog(),
     "gerenciar-modelos/": ModelManagerDialog(lambda: None),
+    "ajuda/": HelpWindow(None),
 }
 for prefixo, dlg in dialogos.items():
     for act in dlg.findChildren(QAction):

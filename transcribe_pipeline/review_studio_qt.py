@@ -7342,6 +7342,16 @@ if QT_IMPORT_ERROR is None:
             self.about_action.setToolTip("Informações sobre o Transcritório: versão e créditos.")
             self.about_action.triggered.connect(self.show_about)
 
+            # F1 literal, nao StandardKey.HelpContents: no macOS a
+            # StandardKey vira Ctrl+? e o tooltip "(F1)" viraria mentira
+            # — o CI roda macos-latest.
+            self.shortcuts_action = QAction("Atalhos e comandos", self)
+            self.shortcuts_action.setShortcut(QKeySequence("F1"))
+            self.shortcuts_action.setToolTip(
+                "Lista tudo o que o Transcritório faz, com a tecla de cada comando e "
+                "onde ele fica no menu. Dá para buscar, copiar e imprimir. (F1)")
+            self.shortcuts_action.triggered.connect(lambda: self.open_help("atalhos"))
+
             self.documentation_action = QAction("Documentação", self)
             self.documentation_action.setToolTip("Abrir a documentação do projeto, se disponível.")
             self.documentation_action.triggered.connect(self.show_documentation)
@@ -7622,6 +7632,10 @@ if QT_IMPORT_ERROR is None:
             projeto_menu.addAction(self.new_project_action)
             projeto_menu.addAction(self.open_project_action)
             recent_menu = projeto_menu.addMenu("Projetos recentes")
+            # Lista montada em tempo de execucao: sao caminhos desta
+            # maquina, nao comandos a aprender. A janela F1 pula a
+            # subarvore por esta property (e nao pelo nome do menu).
+            recent_menu.menuAction().setProperty("catalogo_ignorar", True)
             from . import recent_projects
             for rp in recent_projects.load_recent()[:5]:
                 recent_menu.addAction(str(rp), lambda p=rp: self._open_project_path(p))
@@ -7742,6 +7756,7 @@ if QT_IMPORT_ERROR is None:
 
             # --- Ajuda ---
             ajuda_menu = self.menuBar().addMenu("Ajuda")
+            ajuda_menu.addAction(self.shortcuts_action)
             ajuda_menu.addAction(self.documentation_action)
             ajuda_menu.addAction(self.workflow_help_action)
             ajuda_menu.addSeparator()
@@ -10476,6 +10491,31 @@ if QT_IMPORT_ERROR is None:
                 self._themes_dialog._announce_readiness()
             self._themes_dialog.show()
             self._themes_dialog.raise_()
+
+        def open_help(self, aba: str = "atalhos") -> None:
+            """Janela de ajuda (F1) — cacheada e NAO modal.
+
+            Sem _require_project e sem _explain_busy de proposito, ao
+            contrario de open_explore/open_themes: consultar um atalho
+            durante um lote, ou antes de abrir projeto, e exatamente
+            quando se consulta. Sem reset_for_project tambem: o catalogo
+            e do app, nao do projeto — e e relido do menu a cada
+            abertura, entao nunca fica velho.
+            """
+            from . import __version__ as _versao
+            from . import comandos as _cmds
+            from . import ui_help as _ui_help
+
+            if getattr(self, "_help_dialog", None) is None:
+                self._help_dialog = _ui_help.HelpWindow(self)
+            catalogo = _cmds.percorrer_menu(
+                self.menuBar(),
+                fmt_portavel=QKeySequence.SequenceFormat.PortableText,
+                fmt_nativo=QKeySequence.SequenceFormat.NativeText)
+            self._help_dialog.set_comandos(catalogo, versao=_versao)
+            self._help_dialog.mostrar_aba(aba)
+            self._help_dialog.show()
+            self._help_dialog.raise_()
 
         def open_search_hit(self, interview_id: str, start: float) -> None:
             """Abre a entrevista no bloco mais proximo do tempo dado (busca)."""
