@@ -59,6 +59,51 @@ WORKER_EXIT_NO_CUDA = 42
 # app.
 _GPU_FAILED_THIS_SESSION = False
 
+# Modelo de CPU vivo entre chamadas, pelo MESMO motivo do flag acima: a GUI
+# chama run_whisperx uma vez por arquivo, e carregar o TAGARELA custa 3,4-5,2 s
+# e 2,18 GB de RSS (medido em 2026-09-05,
+# tests/benchmarks/cpu_4nucleos/resultado_2026-09-05.md). Num lote de dez
+# entrevistas isso eram dez leituras dos mesmos 2,4 GB de pesos. A GUI solta o
+# modelo ao fim do lote com release_cpu_model().
+_CPU_MODEL: Any = None
+_CPU_MODEL_KEY: tuple[str, float] | None = None
+
+
+def _model_cache_key(snap: Path) -> tuple[str, float]:
+    """Identidade do modelo carregado.
+
+    O caminho do snapshot ja embute repo, revisao e pasta de cache (vem de
+    `model_manager.cached_snapshot_path`), entao trocar de modelo ou de projeto
+    muda a chave sozinho. O mtime cobre o caso de um download ter sobrescrito o
+    snapshot no lugar."""
+    try:
+        mtime = snap.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    return (str(snap), mtime)
+
+
+def _load_cpu_model(snap: Path) -> Any:
+    """Devolve o modelo de CPU, carregando so quando a chave muda."""
+    global _CPU_MODEL, _CPU_MODEL_KEY
+    chave = _model_cache_key(snap)
+    if _CPU_MODEL is not None and _CPU_MODEL_KEY == chave:
+        return _CPU_MODEL
+    import onnx_asr
+
+    modelo = onnx_asr.load_model("nemo-parakeet-tdt-0.6b-v3", str(snap)).with_timestamps()
+    _CPU_MODEL = modelo
+    _CPU_MODEL_KEY = chave
+    return modelo
+
+
+def release_cpu_model() -> None:
+    """Solta os 2,2 GB do modelo. Idempotente — a GUI chama ao fim do lote,
+    na falha e ao fechar."""
+    global _CPU_MODEL, _CPU_MODEL_KEY
+    _CPU_MODEL = None
+    _CPU_MODEL_KEY = None
+
 
 class ParakeetGpuError(RuntimeError):
     """Falha do worker GPU — recuperavel via fallback CPU."""
@@ -436,7 +481,7 @@ def run_parakeet(
         # aceleracao mora na GUI (antes do job).
         print(f"[Transcritorio] Parakeet: {plan_motivo} — transcrevendo no processador.")
 
-    model = None  # carregado no primeiro uso (3-4 s; uma vez por lote)
+    model = None  # do cache de modulo (_load_cpu_model), uma vez por lote
     failures = 0
     for row in selected_rows(rows, ids):
         if should_cancel is not None and should_cancel():
@@ -499,11 +544,11 @@ def run_parakeet(
 
             if plan == "cpu":
                 if model is None:
-                    _emit(progress_callback, interview_id,
-                          {"event": "asr_progress", "progress": 1,
-                           "message": "Carregando o modelo Parakeet pt-BR..."})
-                    model = onnx_asr.load_model(
-                        "nemo-parakeet-tdt-0.6b-v3", str(snap)).with_timestamps()
+                    if _CPU_MODEL is None:
+                        _emit(progress_callback, interview_id,
+                              {"event": "asr_progress", "progress": 1,
+                               "message": "Carregando o modelo Parakeet pt-BR..."})
+                    model = _load_cpu_model(snap)
 
                 audio = _read_wav_mono16k(wav, np)
                 total_s = len(audio) / SAMPLE_RATE

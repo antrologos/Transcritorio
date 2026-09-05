@@ -9546,6 +9546,20 @@ if QT_IMPORT_ERROR is None:
                 except Exception as exc:  # noqa: BLE001
                     _logger.warning("servidor de diarizacao nao encerrou limpo: %s", exc)
 
+        def _release_batch_models(self) -> None:
+            """Solta os modelos que ficam vivos ENTRE arquivos de um lote.
+
+            O TAGARELA em CPU custa 2,2 GB e passou a ser carregado uma vez por
+            lote (2026-09-05) — sem soltar ao fim, o app ficaria segurando isso
+            enquanto a pessoa revisa. Chamado nos mesmos tres pontos do
+            servidor de diarizacao: fim, falha e fechar a janela."""
+            try:
+                from . import parakeet_runner as _pk_rel
+
+                _pk_rel.release_cpu_model()
+            except Exception as exc:  # noqa: BLE001 - soltar memoria nunca derruba nada
+                _logger.warning("nao consegui soltar o modelo de transcricao: %s", exc)
+
         # --- preparo dos audios em paralelo (B2, 2026-09-02) ---
         def _prepare_batch(
             self,
@@ -14350,6 +14364,7 @@ if QT_IMPORT_ERROR is None:
         def on_worker_done(self, message: str) -> None:
             finished_label = self.current_job_label
             self._stop_diarize_server()
+            self._release_batch_models()
             # Qualquer job pode ter mexido em modelos (Preparar modelos,
             # downloads no meio de acoes): invalidar o retrato de
             # capacidades evita tooltips/notas mentindo apos o download.
@@ -14468,6 +14483,7 @@ if QT_IMPORT_ERROR is None:
 
         def on_worker_failed(self, message: str) -> None:
             self._stop_diarize_server()
+            self._release_batch_models()
             self._voice_batch_ids = []
             self.progress_bar.setRange(0, 100)
             self.progress_label.setText("Falha.")
@@ -14523,6 +14539,7 @@ if QT_IMPORT_ERROR is None:
                     self.worker = None
             # Servidor de separacao do lote (B1): nao sobreviver a janela.
             self._stop_diarize_server()
+            self._release_batch_models()
             # Trash worker: NUNCA terminate() (pode corromper copy in-flight)
             if getattr(self, "_trash_worker", None) is not None and self._trash_worker.isRunning():
                 self._trash_worker.request_cancel()
