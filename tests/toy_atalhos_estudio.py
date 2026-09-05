@@ -82,6 +82,11 @@ MAPA = [
     ("merge_prev_block_action", "Alt+Shift+J", Qt.Key.Key_J, ALT | SHIFT),
     ("merge_block_action", "Alt+J", Qt.Key.Key_J, ALT),
     ("split_block_action", "Alt+D", Qt.Key.Key_D, ALT),
+    # Passar a fala para o bloco vizinho (2026-09-05): o conserto da fronteira
+    # que a separacao automatica colocou no lugar errado. Espelha o par
+    # Alt+J / Alt+Shift+J, que e a operacao vizinha.
+    ("move_tail_action", "Alt+P", Qt.Key.Key_P, ALT),
+    ("move_head_action", "Alt+Shift+P", Qt.Key.Key_P, ALT | SHIFT),
 ]
 
 # ---------------------------------------------------------------- 1. existem e tem a tecla
@@ -119,7 +124,7 @@ for act in win.menuBar().actions():
 assert titulo_bloco == "Bloco e reprodução", f"submenu do Estudio: {titulo_bloco!r}"
 sem_casa = [nome for nome, *_ in MAPA if id(getattr(win, nome)) not in no_menu]
 assert not sem_casa, f"atalho invisivel (fora do submenu Editar > Bloco): {sem_casa}"
-print("OK: os 16 atalhos aparecem escritos no menu Editar > Bloco e reprodução")
+print(f"OK: os {len(MAPA)} atalhos aparecem escritos no menu Editar > Bloco e reprodução")
 
 # ---------------------------------------------------------------- 3. disparam DENTRO do texto
 # Troca as conexoes reais por contadores: aqui se testa o roteamento da tecla,
@@ -167,7 +172,7 @@ for nome, _atalho, tecla, mod in MAPA:
 mudos = [nome for nome, *_ in MAPA if not disparos.get(nome)]
 assert not mudos, f"atalho que NAO chega com o cursor no texto: {mudos}"
 assert win.text_edit.toPlainText() == antes, "os atalhos nao podem escrever no texto do bloco"
-print("OK: os 16 disparam com o cursor no texto e nao mexem no texto")
+print(f"OK: os {len(MAPA)} disparam com o cursor no texto e nao mexem no texto")
 
 # ---------------------------------------------------------------- 4. o que o texto sequestra
 # Documenta POR QUE existe a segunda tecla: a mesma acao play_action responde a

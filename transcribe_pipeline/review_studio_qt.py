@@ -7468,6 +7468,26 @@ if QT_IMPORT_ERROR is None:
                 "ou no tempo exato da palavra sob o cursor do texto. (Alt+D)")
             self.split_block_action.triggered.connect(self.split_current_turn)
 
+            # Fronteira mal colocada pela separacao automatica: o bloco e de A,
+            # mas a partir de certo ponto quem fala e B. Custava CINCO gestos
+            # (dividir, abrir o seletor, escolher B, juntar — e o juntar so
+            # passava depois de trocar o falante). O falante nao e perguntado:
+            # vem do bloco vizinho, que ja tem o certo — e por isso serve igual
+            # em entrevista a dois e em grupo focal.
+            self.move_tail_action = QAction("Passar o fim para o próximo", self)
+            self.move_tail_action.setShortcut(QKeySequence("Alt+P"))
+            self.move_tail_action.setToolTip(
+                "O texto a partir do cursor é do bloco seguinte: passa para lá,\n"
+                "com o falante de lá. Com o cursor no início, o bloco inteiro passa. (Alt+P)")
+            self.move_tail_action.triggered.connect(self.move_boundary_forward)
+
+            self.move_head_action = QAction("Passar o começo para o anterior", self)
+            self.move_head_action.setShortcut(QKeySequence("Alt+Shift+P"))
+            self.move_head_action.setToolTip(
+                "O texto até o cursor é do bloco anterior: passa para lá, com o\n"
+                "falante de lá. Com o cursor no fim, o bloco inteiro passa. (Alt+Shift+P)")
+            self.move_head_action.triggered.connect(self.move_boundary_backward)
+
         def action_button(self, action: QAction, primary: bool = False) -> QPushButton:
             button = QPushButton(action.text())
             button.setToolTip(action.toolTip())
@@ -7639,6 +7659,8 @@ if QT_IMPORT_ERROR is None:
             bloco_menu.addAction(self.merge_prev_block_action)
             bloco_menu.addAction(self.merge_block_action)
             bloco_menu.addAction(self.split_block_action)
+            bloco_menu.addAction(self.move_head_action)
+            bloco_menu.addAction(self.move_tail_action)
 
             # --- Entrevista: tudo sobre a entrevista (abrir, transcrever,
             # falantes, propriedades, lista, destrutivas) ---
@@ -9294,6 +9316,10 @@ if QT_IMPORT_ERROR is None:
             button_row.addWidget(self.merge_button)
             self.split_button = self.action_button(self.split_block_action)
             button_row.addWidget(self.split_button)
+            self.move_head_button = self.action_button(self.move_head_action)
+            button_row.addWidget(self.move_head_button)
+            self.move_tail_button = self.action_button(self.move_tail_action)
+            button_row.addWidget(self.move_tail_button)
             button_row.addStretch()
             grid.addLayout(button_row, 3, 0, 1, 4)
 
@@ -11624,7 +11650,8 @@ if QT_IMPORT_ERROR is None:
             # vai no tooltip — botão cinza sem explicação foi reclamação de campo.
             motivo_bloco = reason_busy if busy else "Abra uma entrevista e escolha um bloco."
             for acao_bloco in (self.merge_prev_block_action, self.merge_block_action,
-                               self.split_block_action, self.repeat_turn_action,
+                               self.split_block_action, self.move_tail_action,
+                               self.move_head_action, self.repeat_turn_action,
                                self.next_block_action, self.prev_block_action,
                                self.next_flagged_action, self.prev_flagged_action,
                                self.focus_toggle_action):
@@ -11787,6 +11814,74 @@ if QT_IMPORT_ERROR is None:
                 self._back_to_text(f"Bloco dividido; {split_note}. Ctrl+Z desfaz.")
             except Exception as exc:
                 self._edit_warning(f"Não foi possível dividir: {sanitize_message(str(exc))}")
+
+        def move_boundary_forward(self, *_args: object) -> None:
+            self._move_boundary(para_tras=False)
+
+        def move_boundary_backward(self, *_args: object) -> None:
+            self._move_boundary(para_tras=True)
+
+        def _move_boundary(self, *, para_tras: bool) -> None:
+            """Passa a fala de um lado do cursor para o bloco vizinho.
+
+            É o conserto da fronteira que a separação automática colocou no
+            lugar errado. Um gesto: divide no cursor, dá ao pedaço o falante do
+            vizinho e junta os dois — tudo num único item de desfazer."""
+            if not self.review or not self.current_interview_id or not self.current_turn_id:
+                return
+            if not self.save_current_turn():
+                return
+            try:
+                indice = review_store.find_turn_index(self.review, self.current_turn_id)
+            except KeyError as exc:
+                self._edit_warning(f"Não foi possível passar a fala: {sanitize_message(str(exc))}")
+                return
+            before = deepcopy(self.review)
+            turno = self.turns[indice]
+            inicio = float(turno.get("start", 0) or 0)
+            fim = float(turno.get("end", inicio) or inicio)
+            texto = self.text_edit.toPlainText().strip()
+            cursor = self.text_edit.textCursor().position()
+            # Aqui NÃO se usa choose_split_char: o cursor na ponta não é um
+            # engano a corrigir, é o pedido de passar o bloco inteiro.
+            corta = review_store.split_fits(texto, cursor)
+            split_char = cursor if corta else None
+            split_time = None
+            if corta:
+                from . import words as words_mod
+                split_time, _nota = choose_split_time(
+                    inicio, fim,
+                    self.waveform_widget.edit_cursor,
+                    bool(getattr(self.waveform_widget, "edit_cursor_from_click", False)),
+                    self.player.position() / 1000 if self.player.position() else None,
+                    self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState,
+                    words_mod.words_in_range(self.word_index, inicio, fim),
+                    texto, split_char,
+                )
+            mover = (review_store.move_head_to_previous if para_tras
+                     else review_store.move_tail_to_next)
+            try:
+                alvo = mover(self.review, self.current_turn_id,
+                             split_char=split_char, split_time=split_time)
+                app_service.save_review(self.context, self.current_interview_id, self.review)
+                self.turns = review_store.review_turns(self.review)
+                self.load_turn_table()
+                self.select_turn_by_index(review_store.find_turn_index(self.review, alvo), seek=False)
+                if split_time is not None:
+                    self.waveform_widget.set_edit_cursor(split_time)
+                self.undo_stack.push(ReviewSnapshotCommand(
+                    self, "Passar a fala para o bloco vizinho", before, self.review, alvo))
+                self.set_save_state(saved_status_message())
+                destino = "anterior" if para_tras else "seguinte"
+                quanto = "O bloco" if not corta else ("O começo" if para_tras else "O fim")
+                rotulo = display_speaker(self.turns[review_store.find_turn_index(self.review, alvo)])
+                self._back_to_text(
+                    f"{quanto} passou para o bloco {destino}, como «{rotulo}». Ctrl+Z desfaz.")
+            except ValueError as exc:
+                # Mensagens já escritas em português por review_store.
+                self._edit_warning(sanitize_message(str(exc)))
+            except Exception as exc:  # noqa: BLE001
+                self._edit_warning(f"Não foi possível passar a fala: {sanitize_message(str(exc))}")
 
         def use_player_as_start(self) -> None:
             self.apply_player_time_to_boundary("start")
