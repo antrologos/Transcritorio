@@ -223,4 +223,68 @@ assert citados, "o manual precisa dizer ONDE ficam as coisas, com o caminho do m
 assert not becos, f"o manual manda o usuario a um caminho que nao existe: {becos}"
 print(f"OK: os {len(citados)} caminhos de menu citados no manual existem de verdade")
 
+# ------------------------------------- 8. a faixa de novidades cede o lugar
+# As quatro faixas da lista sao QFrame empilhados, SEM prioridade: podem
+# aparecer juntas. Se a novidade nao cedesse, ela empurraria para baixo o
+# aviso de lote em andamento e o de vozes por identificar, que pedem acao.
+from transcribe_pipeline import novidades as _novidades  # noqa: E402
+from transcribe_pipeline import runtime as _runtime  # noqa: E402
+
+# Antes da faixa, os tres casos da semente. O do meio e o que faz o
+# recurso valer a pena: sem ele, a primeira versao a trazer o aviso seria
+# a unica incapaz de anunciar as suas proprias novidades.
+_settings = _runtime.app_data_dir() / "app_settings.json"
+_settings.parent.mkdir(parents=True, exist_ok=True)
+
+_settings.write_text("{}", encoding="utf-8")
+win._init_novidades()
+assert win._novidades_pendentes == (), "maquina recem-instalada nao recebe aviso"
+
+_settings.write_text('{"install_profile": "padrao"}', encoding="utf-8")
+win._init_novidades()
+assert win._novidades_pendentes, "quem ja usava o app tem de ver as novidades desta versao"
+win._init_novidades()
+assert win._novidades_pendentes == (), "a semente ja foi gravada: nao repete"
+print("OK: a semente distingue maquina nova de instalacao que ja existia")
+
+win._novidades_pendentes = _novidades.NOVIDADES[:1]
+for nome in ("engine_offer_banner", "diar_offer_banner",
+             "busy_hint_banner", "voice_batch_banner"):
+    getattr(win, nome).setVisible(False)
+win._update_novidades_banner()
+assert win.novidades_banner.isVisible(), "sozinha, a faixa de novidades aparece"
+assert "Novidade" in win.novidades_label.text(), win.novidades_label.text()
+
+win.diar_offer_banner.setVisible(True)
+win._update_novidades_banner()
+assert not win.novidades_banner.isVisible(), \
+    "com uma faixa que pede acao na tela, a novidade cede o lugar"
+win.diar_offer_banner.setVisible(False)
+
+
+class _LoteFalso:
+    def isRunning(self): return True
+
+
+anterior_worker = win.worker
+win.worker = _LoteFalso()
+win._update_novidades_banner()
+assert not win.novidades_banner.isVisible(), "durante um lote, nada de novidade"
+win.worker = anterior_worker
+
+# Dispensar grava e nao volta na mesma sessao.
+win._update_novidades_banner()
+assert win.novidades_banner.isVisible()
+win._on_novidades_dispensar()
+assert not win.novidades_banner.isVisible()
+win._update_novidades_banner()
+assert not win.novidades_banner.isVisible(), "dispensada e dispensada"
+print("OK: a faixa de novidades cede o lugar, e sai de vez quando dispensada")
+
+# A aba existe sempre — e a resposta a "e depois que eu dispensei?".
+win.open_help("novidades")
+assert primeira._tabs.tabText(primeira._tabs.currentIndex()) == "Novidades desta versão"
+assert "0" in primeira.novidades_view.toPlainText()[:200]
+print("OK: a aba Novidades desta versão abre com a lista da versão instalada")
+
 print("PASS: toy_help_window")

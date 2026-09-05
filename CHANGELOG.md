@@ -29,6 +29,17 @@
   - Um teste confere que **todo caminho de menu citado no manual existe de verdade** na
     barra de menus. Renomear uma ação e esquecer o manual passou a quebrar a suíte.
 
+- **Quem já usa o programa passa a saber o que mudou.** Quem instala pela primeira vez
+  explora; quem já usa aprendeu um caminho, ele funciona, e nunca mais abre os menus para
+  ver se apareceu algo novo — então um recurso feito ontem simplesmente não existia para
+  essa pessoa. Agora, quando você abre uma versão nova, uma faixa discreta na lista diz o
+  que mudou, com o caminho ou a tecla de cada coisa. **Ajuda → Novidades desta versão**
+  mostra a lista quando você quiser, inclusive depois de dispensar o aviso.
+  - A faixa **cede o lugar**: some enquanto um lote está rodando e enquanto houver
+    qualquer outro aviso na tela que peça uma ação sua.
+  - Em computador recém-instalado ela não aparece: quem acabou de instalar não tem
+    novidade em relação a nada.
+
 - **Consertar uma fronteira de falante virou um gesto.** Quando a separação
   automática erra, um bloco atribuído a uma pessoa contém, a partir de certo ponto, a
   fala de outra. Arrumar isso custava cinco gestos: clicar no ponto, dividir, abrir o

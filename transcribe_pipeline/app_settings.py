@@ -124,6 +124,28 @@ def search_max_results() -> int:
     return max(lo, min(hi, valor))
 
 
+def novidades_vista() -> str | None:
+    """Ultima versao cujas novidades ja foram mostradas (por maquina).
+
+    None significa "instalacao que ainda nao conhece este registro" — e
+    nesse caso NAO se mostra nada: a semente e gravada em silencio, para
+    maquina recem-instalada nao receber um aviso do que nunca usou.
+    """
+    valor = str(load().get("novidades_versao_vista") or "").strip()
+    return valor or None
+
+
+def instalacao_ja_usada() -> bool:
+    """Existe alguma preferencia gravada nesta maquina?
+
+    Distingue "instalei agora" de "ja usava antes deste registro existir".
+    Sem isso, a primeira versao a trazer o aviso de novidades seria
+    justamente a unica que nao conseguiria anunciar as suas — e quem ja
+    usa o app e exatamente quem precisa do aviso.
+    """
+    return bool(load())
+
+
 def language_default() -> str:
     """Idioma default de projetos NOVOS (escolha do assistente, etapa 4).
 

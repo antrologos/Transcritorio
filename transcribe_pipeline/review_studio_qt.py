@@ -7063,6 +7063,9 @@ if QT_IMPORT_ERROR is None:
             self._build_ui()
             self.set_editor_enabled(False)
             self._connect_player()
+            # Uma leitura do app_settings por SESSAO, antes do primeiro
+            # refresh: refresh_interviews roda de uns quinze lugares.
+            self._init_novidades()
             self.refresh_interviews()
             # Global drag-and-drop: users can drop audio/video files from
             # Explorer/Finder/Nautilus anywhere on the window.
@@ -8609,6 +8612,34 @@ if QT_IMPORT_ERROR is None:
             project_search_button.clicked.connect(lambda: self.open_word_search())
             filter_row.addWidget(project_search_button)
             layout.addLayout(filter_row)
+            # Novidades da versao (2026-09-05): quem JA usa o app nunca
+            # descobre um recurso novo — o Alt+P de ontem ninguem acha.
+            # Em SUCCESS, e nao INFO como as outras quatro: e "bom notar",
+            # nao "faca algo". Atencao: as faixas desta coluna NAO usam a
+            # BannerArea com prioridade (sao QFrame empilhados, e as
+            # quatro podem aparecer juntas), entao a regra de supressao
+            # desta esta escrita a mao em _update_novidades_banner.
+            self.novidades_banner = QFrame()
+            self.novidades_banner.setVisible(False)
+            self.novidades_banner.setStyleSheet(
+                f"QFrame {{ {ui_tokens.banner_style(ui_tokens.SUCCESS)} }}"
+            )
+            novidades_layout = QHBoxLayout(self.novidades_banner)
+            novidades_layout.setContentsMargins(10, 6, 10, 6)
+            self.novidades_label = QLabel("")
+            self.novidades_label.setWordWrap(True)
+            novidades_layout.addWidget(self.novidades_label, 1)
+            novidades_ver_button = QPushButton("Ver as novidades")
+            novidades_ver_button.setToolTip(
+                "Abre a lista do que mudou nesta versão, com o caminho de cada coisa.")
+            novidades_ver_button.clicked.connect(self._on_novidades_ver)
+            novidades_layout.addWidget(novidades_ver_button)
+            novidades_ok_button = QPushButton("Entendi")
+            novidades_ok_button.setToolTip(
+                "Fecha o aviso. Ele volta só quando houver uma versão nova.")
+            novidades_ok_button.clicked.connect(self._on_novidades_dispensar)
+            novidades_layout.addWidget(novidades_ok_button)
+            layout.addWidget(self.novidades_banner)
             # 2026-09-02: migracao VISIVEL para o TAGARELA em maquinas sem
             # GPU — quem instalou antes da 0.2.2 ficou no Whisper, e a
             # QMessageBox ao Transcrever era facil de nao ver. Decisao pura:
@@ -9559,6 +9590,81 @@ if QT_IMPORT_ERROR is None:
                         f"⏳ Aguardando o lote terminar{detalhe} — as análises com AI voltam sozinhas")
                 self.busy_menu_hint_action.setVisible(busy)
                 self.busy_menu_hint_separator.setVisible(busy)
+            self._update_novidades_banner()
+
+        # --- novidades da versao (2026-09-05) ---
+        def _init_novidades(self) -> None:
+            """Le uma vez por sessao o que ainda nao foi mostrado.
+
+            Tres casos, e o do meio e o que faz o recurso valer a pena:
+            - maquina recem-instalada: grava a versao atual EM SILENCIO.
+              Quem acabou de instalar nao tem novidade em relacao a nada.
+            - instalacao que ja existia mas ainda nao conhece este registro:
+              mostra as novidades DESTA versao. Sem isto, a primeira versao
+              a trazer o aviso seria a unica incapaz de anunciar as suas.
+            - registro conhecido: o intervalo entre a versao vista e esta.
+            """
+            from . import __version__ as _versao
+            from . import app_settings as _st, novidades as _nv
+
+            self._novidades_pendentes = ()
+            try:
+                vista = _st.novidades_vista()
+                if vista is None:
+                    ja_usava = _st.instalacao_ja_usada()
+                    _st.save({"novidades_versao_vista": _versao})
+                    if ja_usava:
+                        self._novidades_pendentes = tuple(
+                            e for e in _nv.NOVIDADES if e[0] == _versao)
+                    return
+                self._novidades_pendentes = _nv.pendentes(_versao, vista)
+            except Exception as exc:  # noqa: BLE001
+                _logger.warning("novidades indisponiveis: %s", exc)
+
+        def _update_novidades_banner(self) -> None:
+            """A faixa so aparece quando ninguem mais quer o espaco.
+
+            As quatro faixas da lista sao QFrame empilhados, sem prioridade:
+            sem esta regra, a novidade empurraria para baixo o aviso de lote
+            em andamento ou o de vozes por identificar, que pedem ACAO.
+            Aqui ela cede o lugar, e volta quando as outras saem.
+            """
+            if not hasattr(self, "novidades_banner"):
+                return
+            from . import novidades as _nv
+
+            entradas = getattr(self, "_novidades_pendentes", ()) or ()
+            ocupado = bool(self.worker and self.worker.isRunning())
+            outras = any(
+                getattr(self, nome).isVisible()
+                for nome in ("engine_offer_banner", "diar_offer_banner",
+                             "busy_hint_banner", "voice_batch_banner")
+                if hasattr(self, nome))
+            visivel = bool(entradas) and not ocupado and not outras
+            if visivel:
+                self.novidades_label.setText(f"✨ Novidade: {_nv.resumo(entradas)}")
+            self.novidades_banner.setVisible(visivel)
+
+        def _marcar_novidades_vistas(self) -> None:
+            from . import __version__ as _versao
+            from . import app_settings as _st
+
+            self._novidades_pendentes = ()
+            try:
+                _st.save({"novidades_versao_vista": _versao})
+            except Exception as exc:  # noqa: BLE001
+                _logger.warning("nao foi possivel gravar novidades_versao_vista: %s", exc)
+            if hasattr(self, "novidades_banner"):
+                self.novidades_banner.setVisible(False)
+
+        def _on_novidades_ver(self) -> None:
+            self._marcar_novidades_vistas()
+            self.open_help("novidades")
+
+        def _on_novidades_dispensar(self) -> None:
+            self._marcar_novidades_vistas()
+            self.progress_label.setText(
+                "Novidades dispensadas. Ajuda → Novidades desta versão mostra a lista quando quiser.")
 
         def _explain_busy(self, acao: str) -> bool:
             """True (e explica na faixa) quando uma acao foi acionada durante um
@@ -10487,10 +10593,12 @@ if QT_IMPORT_ERROR is None:
             """
             from . import __version__ as _versao
             from . import comandos as _cmds
+            from . import novidades as _nv
             from . import ui_help as _ui_help
 
             if getattr(self, "_help_dialog", None) is None:
                 self._help_dialog = _ui_help.HelpWindow(self)
+            self._help_dialog.set_novidades(_nv.texto_markdown(_versao))
             catalogo = _cmds.percorrer_menu(
                 self.menuBar(),
                 fmt_portavel=QKeySequence.SequenceFormat.PortableText,

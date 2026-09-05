@@ -76,6 +76,34 @@ class HelpWindow(QDialog):
                                                  "Como usar")
         self._abas["atalhos"] = self._tabs.addTab(self._aba_comandos(),
                                                   "Atalhos e comandos")
+        # Sempre presente, e nao so quando a faixa esta na tela: e o que
+        # responde "e depois que eu dispensei o aviso?".
+        self._abas["novidades"] = self._tabs.addTab(self._aba_novidades(),
+                                                    "Novidades desta versão")
+
+    # ------------------------------------------------------------ novidades
+    def _aba_novidades(self) -> QWidget:
+        pagina = QWidget()
+        col = QVBoxLayout(pagina)
+        col.setContentsMargins(0, ui_tokens.SP_2, 0, 0)
+        col.setSpacing(ui_tokens.SP_2)
+        self.novidades_view = QTextBrowser()
+        self.novidades_view.setOpenExternalLinks(True)
+        self.novidades_view.setPlainText("")
+        col.addWidget(self.novidades_view, 1)
+        rodape = QHBoxLayout()
+        rodape.addStretch(1)
+        self.historico_button = QPushButton("Ver o histórico completo no site")
+        self.historico_button.setToolTip(
+            "Abre no navegador a lista de mudanças de todas as versões.")
+        self.historico_button.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl(SITE)))
+        rodape.addWidget(self.historico_button)
+        col.addLayout(rodape)
+        return pagina
+
+    def set_novidades(self, markdown: str) -> None:
+        self.novidades_view.setMarkdown(markdown or "")
 
     # --------------------------------------------------------------- manual
     def _aba_manual(self) -> QWidget:
