@@ -405,6 +405,33 @@ def cpu_budget(mode: str, cores: int, *, concurrent: bool = False) -> tuple[int,
     return (metade, max(1, n - metade))
 
 
+def should_overlap(hw: Hardware, device: str) -> tuple[bool, str]:
+    """Vale sobrepor transcricao e separacao de falantes? (motivo junto, pura)
+
+    Medido em 2026-09-05 num notebook de 4 nucleos: sobrepor corta 10,8% do
+    relogio do lote (706,9 s -> 630,7 s em 53 min de audio, duas repeticoes
+    intercaladas), com a saida identica — transcricao byte a byte, separacao
+    com DER 0,000%.
+
+    Os "nao" tem motivo medido, nao cautela:
+    - com placa, as duas etapas ja sao rapidas E disputariam a MESMA placa;
+      os pesos do pipeline em CUDA (70 contra 25) dizem que nao ha o que ganhar;
+    - com 2 nucleos ou menos, cada etapa ficaria com uma thread: o ASR sozinho
+      cai de 0,172 para 0,271 s por segundo de audio, e a margem some;
+    - com menos de 8 GB, as duas juntas arriscam paginar — e paginar e o pior
+      desfecho possivel aqui, porque o ASR ja e limitado por banda de memoria.
+      Um lote que pagina fica MAIS LENTO que o sequencial: a melhoria viraria
+      prejuizo.
+    """
+    if device == "cuda":
+        return False, "com placa de vídeo as duas etapas já são rápidas e disputariam a mesma placa"
+    if int(hw.cores or 1) <= 2:
+        return False, "com poucos núcleos, dividir a máquina deixaria as duas etapas lentas"
+    if hw.ram_gb is not None and float(hw.ram_gb) < 8.0:
+        return False, "a memória não comporta as duas etapas ao mesmo tempo"
+    return True, ""
+
+
 def thread_env(threads: int) -> dict[str, str]:
     """Variaveis que amarram os pools de BLAS/OpenMP num processo filho (pura).
 

@@ -13,6 +13,7 @@ import glob
 import re
 import subprocess
 import sys
+import threading
 import time
 import wave
 from bisect import bisect_left
@@ -9550,18 +9551,22 @@ if QT_IMPORT_ERROR is None:
             return True
 
         # --- servidor de separacao de falantes do lote (B1, 2026-09-02) ---
-        def _start_diarize_server(self, n_files: int) -> None:
+        def _start_diarize_server(self, n_files: int, sobrepor: bool = False) -> None:
             """Um processo `diarize-serve` por LOTE em vez de um `diarize` por
             arquivo: o modelo carrega uma vez, em paralelo com o preparo e a
-            transcricao do 1o arquivo (start() nao espera). Lote de 1
-            arquivo segue na rota antiga — nada a ganhar."""
+            transcricao do 1o arquivo (start() nao espera).
+
+            Lote de 1 arquivo seguia na rota antiga — nada a ganhar. Com
+            SOBREPOSICAO (2026-09-05) isso deixou de valer: o arquivo unico e
+            justamente quem mais ganha, porque a separacao inteira se esconde
+            atras da transcricao."""
             self._stop_diarize_server()
-            if n_files < 2 or self.context is None:
+            if self.context is None or (n_files < 2 and not sobrepor):
                 return
             try:
                 from .diarize_client import DiarizeServer
                 server = DiarizeServer(self.context.paths.project_root,
-                                       threads=self._core_budget()[1])
+                                       threads=self._core_budget(concurrent=sobrepor)[1])
                 if server.start():
                     self._diarize_server = server
             except Exception as exc:  # noqa: BLE001 - sem servidor = rota por arquivo
@@ -9591,6 +9596,16 @@ if QT_IMPORT_ERROR is None:
                 _logger.warning("orçamento de núcleos indisponível: %s", exc)
                 return (0, 0)
 
+        def _overlap_decision(self, device: str) -> tuple[bool, str]:
+            """Sobrepor transcrição e separação de vozes neste computador?"""
+            from . import capabilities as _caps_o
+
+            try:
+                return _caps_o.should_overlap(_caps_o.hardware_snapshot(), device)
+            except Exception as exc:  # noqa: BLE001 - na duvida, o caminho de sempre
+                _logger.warning("nao consegui decidir sobre a sobreposicao: %s", exc)
+                return False, ""
+
         def _release_batch_models(self) -> None:
             """Solta os modelos que ficam vivos ENTRE arquivos de um lote.
 
@@ -9598,6 +9613,7 @@ if QT_IMPORT_ERROR is None:
             lote (2026-09-05) — sem soltar ao fim, o app ficaria segurando isso
             enquanto a pessoa revisa. Chamado nos mesmos tres pontos do
             servidor de diarizacao: fim, falha e fechar a janela."""
+            self._diar_ahead_join_all()
             try:
                 from . import parakeet_runner as _pk_rel
 
@@ -9671,21 +9687,32 @@ if QT_IMPORT_ERROR is None:
             asr_model: str,
             progress_callback: Callable[[dict[str, Any]], None] | None = None,
             should_cancel: Callable[[], bool] | None = None,
+            diarize_ahead: bool = False,
+            asr_threads: int = 0,
         ) -> app_service.JobResult:
             """Passo de transcricao de um arquivo do lote: recusa quem falhou
             no preparo em paralelo — o worker pula o resto DESTE arquivo e
-            segue com os outros."""
+            segue com os outros.
+
+            `diarize_ahead`: dispara a separacao de vozes DESTE arquivo antes
+            de comecar a transcrever, para as duas correrem juntas. O passo
+            seguinte so espera (ver _diar_ahead_take)."""
             if interview_id in getattr(self, "_prepare_failed", set()):
                 raise RuntimeError(
                     "não foi possível converter o áudio para WAV (ffmpeg) — "
                     "veja a fila de processamento em Ferramentas")
+            if diarize_ahead:
+                self._diar_ahead_start(interview_id, should_cancel)
             return app_service.transcribe_interviews(
                 self.context,
                 ids=[interview_id],
                 # asr_model efetivo SEMPRE no override: igual a config no
                 # fluxo normal; o escolhido na rodada de "Transcrever
                 # novamente…".
-                overrides={"diarize": False, "asr_model": asr_model},
+                # asr_threads > 0 só quando há orçamento de núcleos (opção de
+                # uso do computador, ou sobreposição); 0 não vira SessionOptions.
+                overrides={"diarize": False, "asr_model": asr_model,
+                           **({"asr_threads": asr_threads} if asr_threads else {})},
                 progress_callback=progress_callback,
                 should_cancel=should_cancel,
             )
@@ -12895,6 +12922,19 @@ if QT_IMPORT_ERROR is None:
             # SO para este lote: nada e gravado no run_config.yaml.
             do_diarize, do_boundary = job_step_flags(
                 do_diarize, bool(self.context.config.get("boundary_check", True)), diarize_now)
+            # Sobrepor a transcricao e a separacao de vozes do MESMO arquivo
+            # (2026-09-05): as duas so leem o WAV, e quem junta e o render.
+            # Medido num notebook de 4 nucleos: 10,8% menos relogio, saida
+            # identica. `should_overlap` recusa onde a medicao nao sustenta
+            # (placa, poucos nucleos, pouca memoria) — e a recusa vem com motivo.
+            sobrepor, motivo_sem_sobrepor = self._overlap_decision(asr_device)
+            sobrepor = bool(sobrepor and do_diarize)
+            threads_asr, _threads_diar = self._core_budget(concurrent=sobrepor)
+            if sobrepor:
+                _logger.info("lote com transcricao e separacao ao mesmo tempo "
+                             "(%s threads para transcrever)", threads_asr)
+            elif motivo_sem_sobrepor and do_diarize:
+                _logger.info("etapas em serie: %s", motivo_sem_sobrepor)
             w5 = _pipeline_weights(asr_model, asr_device)
             # 7 fases: [prepare, asr, diarize, render, conferir trocas,
             # recriar transcricao editavel, qc]. Conferencia e recriacao
@@ -12948,7 +12988,8 @@ if QT_IMPORT_ERROR is None:
                         r[1],
                         r[2],
                         lambda progress, should_cancel, item=interview_id: self._transcribe_prepared(
-                            item, asr_model, progress, should_cancel),
+                            item, asr_model, progress, should_cancel,
+                            diarize_ahead=sobrepor, asr_threads=threads_asr),
                         accepts_progress=True,
                     ),
                 )
@@ -13034,7 +13075,8 @@ if QT_IMPORT_ERROR is None:
             # B1: servidor de separacao para o lote (abre agora, carrega em
             # paralelo). C: as vozes destes arquivos entram na faixa ao fim.
             if do_diarize:
-                self._start_diarize_server(len(ids))
+                self._start_diarize_server(len(ids), sobrepor)
+            self._diar_ahead = {}
             self._voice_batch_ids = list(ids)
             self.start_worker(
                 f"Transcrever {len(ids)} arquivo(s)",
@@ -13245,12 +13287,128 @@ if QT_IMPORT_ERROR is None:
             rotulos com os centroides do pyannote; e best-effort (nunca
             muda o resultado da diarizacao) e, em arquivos mono, nem o
             subprocesso e lancado.
+
+            Quando a separacao foi ADIANTADA (comecou junto com a transcricao
+            deste mesmo arquivo — ver _diar_ahead_start), este passo so espera
+            e reporta: o trabalho ja aconteceu.
             """
+            adiantado = self._diar_ahead_take(interview_id, progress_callback)
+            if adiantado is not None:
+                return adiantado
+            return self._diarize_then_channels_now(interview_id, progress_callback, should_cancel)
+
+        def _diarize_then_channels_now(
+            self,
+            interview_id: str,
+            progress_callback: Callable[[dict[str, Any]], None] | None = None,
+            should_cancel: Callable[[], bool] | None = None,
+        ) -> app_service.JobResult:
             result = self._diarize_via_subprocess(interview_id, progress_callback, should_cancel)
             channels_result = self._channels_via_subprocess(interview_id, progress_callback, should_cancel)
             if channels_result.failures:
                 _logger.warning("analise de canais de %s falhou", interview_id)
             return result
+
+        # --- separar as vozes JUNTO com a transcricao (2026-09-05) ----------
+        # As duas etapas sao independentes: as duas so leem o WAV, e quem junta
+        # e o render, depois. Medido num notebook de 4 nucleos: sobrepor corta
+        # 10,8% do relogio do lote, com a saida identica (transcricao byte a
+        # byte, separacao com DER 0,000%).
+        #
+        # A separacao ja rodava em SUBPROCESSO — o que a serializava era o
+        # passo esperar por ela. Entao nao ha executor novo: a thread daqui so
+        # bombeia um cano. E ela NAO escreve em jobs.json (so guarda o ultimo
+        # percentual), porque `project_store.update_job` e leitura-modificacao-
+        # escrita sem rename atomico (regra do Dropbox): dois escritores
+        # perderiam atualizacoes.
+        def _diar_ahead_start(
+            self,
+            interview_id: str,
+            should_cancel: Callable[[], bool] | None = None,
+        ) -> bool:
+            estado = getattr(self, "_diar_ahead", None)
+            if estado is None:
+                estado = self._diar_ahead = {}
+            if interview_id in estado:
+                return False
+            parar = getattr(self, "_diar_ahead_stop", None)
+            if parar is None:
+                parar = self._diar_ahead_stop = threading.Event()
+            registro: dict[str, Any] = {"pct": 0, "resultado": None, "erro": None}
+
+            def cancelado() -> bool:
+                # O evento e o freio de mao do fim de lote: sem ele, uma thread
+                # orfa poderia abrir um pyannote novo depois que tudo acabou.
+                return parar.is_set() or bool(should_cancel is not None and should_cancel())
+
+            def anotar(detail: dict[str, Any]) -> None:
+                try:
+                    registro["pct"] = max(0, min(100, int(detail.get("progress", 0))))
+                except (TypeError, ValueError):
+                    pass
+
+            def trabalhar() -> None:
+                try:
+                    registro["resultado"] = self._diarize_then_channels_now(
+                        interview_id, anotar, cancelado)
+                except Exception as exc:  # noqa: BLE001 - relancada no passo de espera
+                    registro["erro"] = exc
+
+            thread = threading.Thread(target=trabalhar, name=f"diar-{interview_id}", daemon=True)
+            registro["thread"] = thread
+            estado[interview_id] = registro
+            thread.start()
+            return True
+
+        def _diar_ahead_take(
+            self,
+            interview_id: str,
+            progress_callback: Callable[[dict[str, Any]], None] | None = None,
+        ) -> app_service.JobResult | None:
+            """Espera a separacao adiantada deste arquivo; None se nao havia."""
+            estado = getattr(self, "_diar_ahead", None) or {}
+            registro = estado.pop(interview_id, None)
+            if registro is None:
+                return None
+            thread = registro["thread"]
+            while thread.is_alive():
+                if progress_callback is not None:
+                    progress_callback({
+                        "event": "diarize_progress", "progress": registro["pct"],
+                        "message": "Terminando de separar as vozes...",
+                    })
+                thread.join(timeout=1.0)
+            if progress_callback is not None:
+                progress_callback({"event": "diarize_progress", "progress": 100,
+                                   "message": "Vozes separadas."})
+            if registro["erro"] is not None:
+                # Relancar preserva o optional=True do job_step: falha na
+                # separacao vira "falantes pendentes", nunca falha do lote.
+                raise registro["erro"]
+            return registro["resultado"]
+
+        def _diar_ahead_join_all(self) -> None:
+            """Nao deixar thread de separacao viva ao fim do lote.
+
+            Um arquivo cuja TRANSCRICAO falhou pula o passo de espera
+            (skip-and-continue), e a thread dele ficaria orfa. Roda depois de
+            `_stop_diarize_server`: sem o servidor, `server.run()` devolve None
+            e a thread termina sozinha em seguida."""
+            parar = getattr(self, "_diar_ahead_stop", None)
+            if parar is not None:
+                parar.set()
+            estado = getattr(self, "_diar_ahead", None) or {}
+            for interview_id, registro in list(estado.items()):
+                thread = registro.get("thread")
+                if thread is not None and thread.is_alive():
+                    # Roda na thread da GUI: prazo curto de proposito. Com o
+                    # freio de mao acionado a thread sai em segundos; se nao
+                    # sair, ela e daemon e o log conta o que aconteceu.
+                    thread.join(timeout=10.0)
+                    if thread.is_alive():
+                        _logger.warning("separacao de %s ainda rodando ao fim do lote", interview_id)
+            estado.clear()
+            self._diar_ahead_stop = None
 
         def _channels_via_subprocess(
             self,
@@ -13330,6 +13488,12 @@ if QT_IMPORT_ERROR is None:
                         "servidor de diarizacao indisponivel (%s); usando subprocesso por arquivo",
                         server.failure_reason,
                     )
+                    # O servidor tambem "morre" quando o LOTE acaba ou e
+                    # cancelado (_stop_diarize_server). Sem reconferir aqui, o
+                    # fallback abriria um pyannote novo depois do fim — a
+                    # checagem do topo do laco ja passou nesta volta.
+                    if should_cancel is not None and should_cancel():
+                        break
 
                 def on_output(line: str) -> None:
                     detail = parse_progress_json_line(line)

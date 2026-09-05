@@ -99,7 +99,8 @@ print("PASS: _prepare_batch — cancelar interrompe")
 capturado: dict = {}
 servidor: list[int] = []
 win.start_worker = lambda label, steps, weights=None: capturado.update(label=label, steps=steps, weights=weights)  # type: ignore[method-assign]
-win._start_diarize_server = servidor.append  # type: ignore[method-assign]
+win._start_diarize_server = (  # type: ignore[method-assign]
+    lambda n, sobrepor=False: servidor.append((n, sobrepor)))
 win.ensure_models_ready = lambda *a, **k: True  # type: ignore[method-assign]
 win._maybe_offer_parakeet_cpu = lambda *a, **k: False  # type: ignore[method-assign]
 win._maybe_offer_parakeet_gpu = lambda *a, **k: None  # type: ignore[method-assign]
@@ -117,7 +118,7 @@ assert len(steps) == 1 + 6 * 3, len(steps)
 assert "convertendo" not in " ".join(str(s[0]) for s in steps[1:])
 w5 = rsq._pipeline_weights("parakeet-pt", "cuda")
 assert weights[0] == max(1, w5[0] * 3), (weights[0], w5)
-assert servidor == [3] and win._voice_batch_ids == IDS
+assert servidor == [(3, False)] and win._voice_batch_ids == IDS, servidor
 print("PASS: lote de 3 — passo unico de preparo, pesos alinhados, servidor e faixa acionados")
 
 capturado.clear()
@@ -126,7 +127,40 @@ win.run_full_transcription_job(ids=["E1"])
 steps, weights = capturado["steps"], capturado["weights"]
 assert len(steps) == len(weights) == 7, (len(steps), len(weights))
 assert "convertendo" in steps[0][0], steps[0][0]
-assert servidor == [1]
+assert servidor == [(1, False)], servidor
 print("PASS: lote de 1 — rota antiga (preparo por arquivo)")
+
+# --- sobreposicao (2026-09-05): maquina de CPU com nucleos e memoria ---------
+# A separacao passa a comecar JUNTO com a transcricao do mesmo arquivo. A lista
+# de passos NAO muda de forma (o passo de separacao vira espera, nao some), e o
+# servidor passa a ser aberto tambem com UM arquivo — que e quem mais ganha.
+capturado.clear()
+servidor.clear()
+runtime.resolve_device = lambda device=None: ("cpu", False)
+parakeet_runner.planned_device = lambda device: "cpu"
+rsq_caps = sys.modules["transcribe_pipeline.capabilities"]
+rsq_caps.hardware_snapshot = lambda: rsq_caps.Hardware(   # type: ignore[assignment]
+    has_gpu=False, vram_gb=None, ram_gb=16.0, cores=4, free_disk_gb=100.0)
+
+# diarize_now=True pula a janela pre-lote: em CPU ela e MODAL e travaria o toy.
+win.run_full_transcription_job(ids=["E1"], diarize_now=True)
+steps, weights = capturado["steps"], capturado["weights"]
+assert len(steps) == len(weights) == 7, (len(steps), len(weights))
+assert servidor == [(1, True)], f"1 arquivo tambem abre o servidor ao sobrepor: {servidor}"
+assert any("separando as vozes" in str(s[0]) for s in steps), \
+    "o passo de separacao continua existindo — ele passa a ESPERAR, nao some"
+print("PASS: sobreposicao — mesma forma de lote, servidor tambem com 1 arquivo")
+
+# --- e a maquina apertada continua em serie, com motivo ----------------------
+for _hw, _motivo in (
+    (rsq_caps.Hardware(has_gpu=False, vram_gb=None, ram_gb=16.0, cores=2, free_disk_gb=100.0), "núcleos"),
+    (rsq_caps.Hardware(has_gpu=False, vram_gb=None, ram_gb=4.0, cores=8, free_disk_gb=100.0), "memória"),
+):
+    ok, motivo = rsq_caps.should_overlap(_hw, "cpu")
+    assert ok is False and _motivo in motivo, (ok, motivo)
+assert rsq_caps.should_overlap(
+    rsq_caps.Hardware(has_gpu=True, vram_gb=8.0, ram_gb=16.0, cores=8, free_disk_gb=100.0),
+    "cuda")[0] is False
+print("PASS: recusa de sobrepor vem com motivo")
 
 print("PASS: toy_prepare_batch")

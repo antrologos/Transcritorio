@@ -2,6 +2,29 @@
 
 ## Em desenvolvimento (ramo beta)
 
+- **O lote ficou mais rápido em computadores sem placa de vídeo — e a janela parou de
+  mentir sobre onde vai o tempo.** Tudo abaixo foi medido num notebook de 4 núcleos
+  (simulado por afinidade de processo), sobre entrevistas inteiras do acervo real, e nada
+  disso muda a qualidade: a transcrição sai **idêntica caractere por caractere** e a
+  separação de vozes com **DER 0,000%**, mesmos segmentos e mesmos falantes.
+  - **A separação de falantes não é a etapa demorada.** O app dizia que separar as vozes
+    de 1 hora de entrevista levava ~22 minutos e transcrever ~6 — e concluía que valia a
+    pena "deixar a separação para depois". Medido: transcrever leva ~7,5 min e separar
+    ~6 min. Ele errava o total pelo dobro e invertia a proporção; quem seguia o conselho
+    adiava justamente a etapa barata. A conta usava uma regra que supunha ganho
+    proporcional ao número de núcleos, e as duas etapas na verdade saturam.
+  - **Transcrever e separar as vozes agora acontecem ao mesmo tempo**, no mesmo arquivo.
+    As duas só leem o áudio, e quem junta as saídas é o passo seguinte — não havia motivo
+    para esperar uma para começar a outra. **Cerca de 11% menos tempo de lote.** Onde a
+    medição não sustenta o ganho, o app não sobrepõe: com placa de vídeo (as duas
+    disputariam a mesma placa), com 2 núcleos ou menos, ou com menos de 8 GB de memória.
+  - **O modelo de transcrição é carregado uma vez por lote**, não uma vez por entrevista.
+    Eram 5 segundos e 2,2 GB relidos do disco a cada arquivo.
+  - **Nova escolha, antes de cada lote: "Mais rápido — usa o computador inteiro" ou
+    "Posso usar o computador enquanto roda".** A segunda usa metade da máquina: cerca de
+    25% mais devagar, com a transcrição idêntica. O padrão continua sendo usar tudo, e
+    quem não mexer não vê diferença nenhuma.
+
 - **"Perguntar às entrevistas com AI" passou a se chamar "Buscar por sentido e
   perguntar".** O nome antigo prometia a todo mundo uma resposta escrita que só roda com
   placa NVIDIA — e a maioria dos computadores não tem. O nome novo diz primeiro o que a
