@@ -266,7 +266,12 @@ def diarize_rows(
                 audio_seconds, effective_device, os.cpu_count() or 1)
             real_inner: dict[str, int] = {"pct": 0}
             pct_lo, pct_hi = file_start_pct, file_end_pct
-            cpu_note = " — sem placa de vídeo esta etapa é a mais demorada" if effective_device != "cuda" else ""
+            # Ate 2026-09-05 dizia "sem placa de vídeo esta etapa é a mais
+            # demorada". Medido num notebook de 4 nucleos, ela e a metade
+            # BARATA (6,0 min por hora de audio, contra 7,5 da transcricao) —
+            # a frase mandava a pessoa culpar a etapa errada.
+            cpu_note = " — sem placa de vídeo esta etapa leva alguns minutos por hora de áudio" \
+                if effective_device != "cuda" else ""
 
             def _mensagem(elapsed: float) -> str:
                 mins, secs = divmod(int(elapsed), 60)

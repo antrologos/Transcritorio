@@ -132,6 +132,12 @@ FAKE.write_text(textwrap.dedent('''
         ids = req["ids"]
         if mode == "crash" and ids == ["B"]:
             sys.exit(3)
+        if mode == "desalinhado":
+            # Responde por um arquivo que NAO foi pedido: e o que acontece
+            # quando uma resposta antiga sobra na fila compartilhada.
+            out("@DONE ", {"ids": ["OUTRO"], "failures": 0})
+            out("@DONE ", {"ids": ids, "failures": 0})
+            continue
         if mode == "slow":
             for i in range(60):
                 out("@PROGRESS ", {"event": "diarize_progress", "progress": i, "message": f"{ids[0]} passo {i}"})
@@ -196,5 +202,38 @@ print("PASS: DiarizeServer — cancelar mata o servidor rapido")
 # comando inexistente: start() False, sem excecao
 assert not DiarizeServer(_tmp, command=[str(_tmp / "nao_existe.exe")]).start()
 print("PASS: DiarizeServer — comando inexistente = start False")
+
+# --- resposta de OUTRO pedido nao pode ser aceita (2026-09-05) --------------
+# O protocolo atende um pedido por vez e a fila de linhas e compartilhada. Sem
+# conferir os ids, um @DONE atrasado daria "pronto" a um arquivo que o servidor
+# ainda nem comecou — e o render sairia sem falantes, em silencio.
+srv = _server("desalinhado")
+assert srv.start() and srv.wait_ready()
+assert srv.run(["A"]) == 0, "tem de esperar o @DONE de A, ignorando o de OUTRO"
+srv.stop()
+print("PASS: DiarizeServer — @DONE de outro pedido e ignorado")
+
+# --- @DONE {"error": ...} nunca vira sucesso --------------------------------
+# `failures` ausente viraria 0 pelo .get(): o arquivo seria marcado como
+# separado sem nada ter rodado.
+FAKE_ERRO = _tmp / "fake_erro.py"
+FAKE_ERRO.write_text(textwrap.dedent('''
+    import json, sys
+    def out(prefix, payload):
+        print(prefix + json.dumps(payload, ensure_ascii=False), flush=True)
+    out("@READY ", {"device": "cpu", "model": "fake"})
+    for line in sys.stdin:
+        req = json.loads(line)
+        if req.get("quit"):
+            break
+        out("@DONE ", {"error": "pyannote caiu no meio"})
+    sys.exit(0)
+'''), encoding="utf-8")
+srv = DiarizeServer(_tmp, command=[sys.executable, "-B", str(FAKE_ERRO)])
+assert srv.start() and srv.wait_ready()
+assert srv.run(["A"]) is None, "erro do servidor tem de virar fallback, nunca 0 falhas"
+assert "pyannote caiu" in srv.failure_reason, srv.failure_reason
+srv.stop()
+print("PASS: DiarizeServer — @DONE com erro nao vira sucesso")
 
 print("PASS: toy_diarize_serve")

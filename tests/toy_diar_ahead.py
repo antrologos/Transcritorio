@@ -166,4 +166,63 @@ assert visto == [True], ("o fim do lote tem de chegar ao trabalho mesmo sem "
 win._diar_ahead_join_all()
 print("PASS: o fim do lote freia a thread, mesmo sem cancelamento")
 
+# --- NUNCA duas threads ao mesmo tempo (revisão adversarial, 2026-09-05) -----
+# O achado: a transcrição de F1 falha -> o skip-and-continue pula o passo que
+# recolhe a thread de F1 -> F1 segue separando -> F2 abre a SEGUNDA thread. As
+# duas falam com um DiarizeServer que atende um pedido por vez e cuja fila de
+# linhas é compartilhada: o @DONE de F1 seria consumido pela thread de F2, que
+# declararia F2 pronto antes de o servidor começar — e o render sairia sem
+# falantes, em silêncio.
+vivas: list[str] = []
+segura = threading.Event()
+
+
+def trabalho_que_fica(interview_id, progress_callback=None, should_cancel=None):
+    vivas.append(interview_id)
+    while not segura.is_set() and not (should_cancel and should_cancel()):
+        time.sleep(0.02)
+    vivas.remove(interview_id)
+    return app_service.JobResult("diarize", 0)
+
+
+win._diarize_then_channels_now = trabalho_que_fica   # type: ignore[method-assign]
+win._diar_ahead_start("F1")
+_pump = time.monotonic()
+while not vivas and time.monotonic() - _pump < 5:
+    time.sleep(0.02)
+assert vivas == ["F1"], vivas
+segura.set()                       # F1 pode terminar quando for recolhida
+win._diar_ahead_start("F2")        # tem de recolher F1 ANTES de abrir F2
+assert list(win._diar_ahead) == ["F2"], f"so pode existir uma: {list(win._diar_ahead)}"
+assert len(vivas) <= 1, f"duas threads vivas ao mesmo tempo: {vivas}"
+win._diar_ahead_join_all()
+print("PASS: nunca duas threads adiantadas ao mesmo tempo")
+
+# --- transcrição que falha desiste da separação daquele arquivo -------------
+# Sem isto, o arquivo sem transcrição continuaria sendo separado por minutos e
+# gravaria um exclusive.json que antes nunca existiria.
+segura.clear()
+win._diarize_then_channels_now = trabalho_que_fica   # type: ignore[method-assign]
+win._transcrever_agora = (   # type: ignore[method-assign]
+    lambda *a, **k: app_service.JobResult("transcribe", 1))
+win._prepare_failed = set()
+resultado = win._transcribe_prepared("F3", "parakeet-pt", None, None, diarize_ahead=True)
+assert resultado.failures == 1
+assert "F3" not in win._diar_ahead, "a separação de um arquivo sem transcrição é abandonada"
+assert vivas == [], f"a thread do arquivo que falhou continuou viva: {vivas}"
+print("PASS: transcrição falhou -> a separação daquele arquivo é abandonada")
+
+
+def _explode(*a, **k):
+    raise RuntimeError("motor caiu")
+
+
+win._transcrever_agora = _explode   # type: ignore[method-assign]
+try:
+    win._transcribe_prepared("F4", "parakeet-pt", None, None, diarize_ahead=True)
+except RuntimeError:
+    pass
+assert "F4" not in win._diar_ahead and vivas == [], vivas
+print("PASS: exceção na transcrição também abandona a separação")
+
 print("PASS: toy_diar_ahead")

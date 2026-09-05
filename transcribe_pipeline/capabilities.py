@@ -416,8 +416,11 @@ def should_overlap(hw: Hardware, device: str) -> tuple[bool, str]:
     Os "nao" tem motivo medido, nao cautela:
     - com placa, as duas etapas ja sao rapidas E disputariam a MESMA placa;
       os pesos do pipeline em CUDA (70 contra 25) dizem que nao ha o que ganhar;
-    - com 2 nucleos ou menos, cada etapa ficaria com uma thread: o ASR sozinho
-      cai de 0,172 para 0,271 s por segundo de audio, e a margem some;
+    - com menos de 4 nucleos a divisao nao fecha. Com 3, o orcamento sairia
+      1 e 2 — e as divisoes ASSIMETRICAS foram as piores de toda a medicao
+      (3/1 deu 0,284 e 1/3 deu 0,291 s por segundo de audio, contra 0,220 do
+      sequencial): a etapa que fica com uma thread vira o gargalo e o `max()`
+      piora em vez de melhorar. Com 2, cada uma ficaria com uma so;
     - com menos de 8 GB, as duas juntas arriscam paginar — e paginar e o pior
       desfecho possivel aqui, porque o ASR ja e limitado por banda de memoria.
       Um lote que pagina fica MAIS LENTO que o sequencial: a melhoria viraria
@@ -425,7 +428,7 @@ def should_overlap(hw: Hardware, device: str) -> tuple[bool, str]:
     """
     if device == "cuda":
         return False, "com placa de vídeo as duas etapas já são rápidas e disputariam a mesma placa"
-    if int(hw.cores or 1) <= 2:
+    if int(hw.cores or 1) < 4:
         return False, "com poucos núcleos, dividir a máquina deixaria as duas etapas lentas"
     if hw.ram_gb is not None and float(hw.ram_gb) < 8.0:
         return False, "a memória não comporta as duas etapas ao mesmo tempo"

@@ -188,6 +188,21 @@ class DiarizeServer:
                 if on_progress is not None:
                     on_progress(payload)
             elif kind == "done":
+                if "error" in payload:
+                    # O servidor avisa falha de carga por @DONE {"error": ...}.
+                    # Sem este ramo, `failures` ausente viraria 0 — sucesso
+                    # falso, com o arquivo marcado como separado sem nada ter
+                    # rodado.
+                    self._mark_dead(str(payload.get("error") or "")[:300])
+                    return None
+                recebidos = [str(item) for item in (payload.get("ids") or [])]
+                if recebidos and recebidos != ids:
+                    # Resposta de um pedido ANTERIOR. Nao ha correlacao no
+                    # protocolo, e a fila de linhas e compartilhada: aceitar
+                    # isto daria "pronto" a um arquivo que o servidor ainda nem
+                    # comecou. Continuar esperando o nosso.
+                    _logger.warning("@DONE de %s chegou enquanto se esperava %s", recebidos, ids)
+                    continue
                 self.served += 1
                 try:
                     return int(payload.get("failures", 0))

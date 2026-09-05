@@ -9703,6 +9703,29 @@ if QT_IMPORT_ERROR is None:
                     "veja a fila de processamento em Ferramentas")
             if diarize_ahead:
                 self._diar_ahead_start(interview_id, should_cancel)
+            try:
+                resultado = self._transcrever_agora(interview_id, asr_model, progress_callback,
+                                                    should_cancel, asr_threads)
+            except BaseException:
+                # Transcricao falhou: a separacao adiantada deste arquivo perdeu
+                # o sentido (o passo que a recolheria vai ser PULADO pelo
+                # skip-and-continue). Sem isto ela seguiria viva, gastando
+                # processador e deixando uma thread orfa para o proximo arquivo
+                # topar com ela.
+                self._diar_ahead_cancel(interview_id)
+                raise
+            if getattr(resultado, "failures", 0):
+                self._diar_ahead_cancel(interview_id)
+            return resultado
+
+        def _transcrever_agora(
+            self,
+            interview_id: str,
+            asr_model: str,
+            progress_callback: Callable[[dict[str, Any]], None] | None = None,
+            should_cancel: Callable[[], bool] | None = None,
+            asr_threads: int = 0,
+        ) -> app_service.JobResult:
             return app_service.transcribe_interviews(
                 self.context,
                 ids=[interview_id],
@@ -12939,8 +12962,15 @@ if QT_IMPORT_ERROR is None:
             # 7 fases: [prepare, asr, diarize, render, conferir trocas,
             # recriar transcricao editavel, qc]. Conferencia e recriacao
             # (pos-render) tem peso pequeno e fixo: custam segundos.
+            # Com sobreposicao o passo de separacao vira ESPERA: o trabalho
+            # aconteceu durante a transcricao. Manter o peso cheio faria a
+            # barra parar em ~49% por arquivo e depois saltar. Sobra so o
+            # residuo — quanto a separacao passa da transcricao.
+            peso_diar = w5[2] if do_diarize else 0
+            if do_diarize and sobrepor:
+                peso_diar = max(1, w5[2] - w5[1])
             w = [
-                w5[0], w5[1], w5[2] if do_diarize else 0, w5[3],
+                w5[0], w5[1], peso_diar, w5[3],
                 1 if do_boundary else 0, 1, w5[4],
             ]
             # Pesos POR STEP: a lista precisa ter exatamente um item por step
@@ -13331,15 +13361,29 @@ if QT_IMPORT_ERROR is None:
                 estado = self._diar_ahead = {}
             if interview_id in estado:
                 return False
-            parar = getattr(self, "_diar_ahead_stop", None)
-            if parar is None:
-                parar = self._diar_ahead_stop = threading.Event()
-            registro: dict[str, Any] = {"pct": 0, "resultado": None, "erro": None}
+            # NUNCA duas threads ao mesmo tempo. O DiarizeServer atende um
+            # pedido por vez, com uma fila de linhas COMPARTILHADA: duas
+            # threads trocariam respostas entre si, e um arquivo seria dado
+            # como separado enquanto o servidor ainda nem comecou — a saida
+            # mudaria em silencio. Uma orfa so existe quando a transcricao de
+            # um arquivo falhou (o passo que a recolhe e pulado); recolher
+            # agora custa a espera dela, e essa e a troca certa.
+            if any(r["thread"].is_alive() for r in estado.values()):
+                _logger.warning("separacao adiantada anterior ainda viva; recolhendo antes de %s",
+                                interview_id)
+            self._diar_ahead_join_all()
+            estado = self._diar_ahead = {}
+            parar = self._diar_ahead_stop = threading.Event()
+            registro: dict[str, Any] = {"pct": 0, "resultado": None, "erro": None,
+                                        "parar": threading.Event()}
 
             def cancelado() -> bool:
-                # O evento e o freio de mao do fim de lote: sem ele, uma thread
-                # orfa poderia abrir um pyannote novo depois que tudo acabou.
-                return parar.is_set() or bool(should_cancel is not None and should_cancel())
+                # Tres freios: o do usuario, o do fim de lote e o deste arquivo
+                # (acionado quando a transcricao dele falha — separar um
+                # arquivo sem transcricao so gasta tempo e grava saida que
+                # antes nao existia).
+                return (parar.is_set() or registro["parar"].is_set()
+                        or bool(should_cancel is not None and should_cancel()))
 
             def anotar(detail: dict[str, Any]) -> None:
                 try:
@@ -13387,6 +13431,39 @@ if QT_IMPORT_ERROR is None:
                 raise registro["erro"]
             return registro["resultado"]
 
+        def _diar_ahead_cancel(self, interview_id: str) -> None:
+            """Desiste da separacao adiantada DESTE arquivo.
+
+            Chamado quando a transcricao dele falha: sem transcricao a
+            separacao nao serve para nada neste lote, e deixa-la correr gastaria
+            minutos de processador e gravaria um exclusive.json que, antes desta
+            mudanca, nunca teria existido."""
+            estado = getattr(self, "_diar_ahead", None) or {}
+            registro = estado.pop(interview_id, None)
+            if registro is None:
+                return
+            registro["parar"].set()
+            thread = registro.get("thread")
+            if thread is not None and thread.is_alive():
+                thread.join(timeout=10.0)
+                if thread.is_alive():
+                    _logger.warning("separacao adiantada de %s nao parou a tempo", interview_id)
+
+        def _diar_ahead_stop_now(self) -> None:
+            """Aciona o freio de mao ANTES de o servidor ser encerrado.
+
+            A ordem importa: `_stop_diarize_server` mata o servidor, e uma
+            thread que esteja dentro de `run()` recebe None e CAI PARA O
+            SUBPROCESSO DE RESERVA — abrindo um pyannote novo depois do fim do
+            lote. Com o freio acionado antes, ela desiste em vez de recomecar."""
+            parar = getattr(self, "_diar_ahead_stop", None)
+            if parar is not None:
+                parar.set()
+            for registro in (getattr(self, "_diar_ahead", None) or {}).values():
+                freio = registro.get("parar")
+                if freio is not None:
+                    freio.set()
+
         def _diar_ahead_join_all(self) -> None:
             """Nao deixar thread de separacao viva ao fim do lote.
 
@@ -13394,9 +13471,7 @@ if QT_IMPORT_ERROR is None:
             (skip-and-continue), e a thread dele ficaria orfa. Roda depois de
             `_stop_diarize_server`: sem o servidor, `server.run()` devolve None
             e a thread termina sozinha em seguida."""
-            parar = getattr(self, "_diar_ahead_stop", None)
-            if parar is not None:
-                parar.set()
+            self._diar_ahead_stop_now()
             estado = getattr(self, "_diar_ahead", None) or {}
             for interview_id, registro in list(estado.items()):
                 thread = registro.get("thread")
@@ -14589,6 +14664,7 @@ if QT_IMPORT_ERROR is None:
 
         def on_worker_done(self, message: str) -> None:
             finished_label = self.current_job_label
+            self._diar_ahead_stop_now()      # ANTES de matar o servidor
             self._stop_diarize_server()
             self._release_batch_models()
             # Qualquer job pode ter mexido em modelos (Preparar modelos,
@@ -14708,6 +14784,7 @@ if QT_IMPORT_ERROR is None:
                 )
 
         def on_worker_failed(self, message: str) -> None:
+            self._diar_ahead_stop_now()      # ANTES de matar o servidor
             self._stop_diarize_server()
             self._release_batch_models()
             self._voice_batch_ids = []
@@ -14764,6 +14841,7 @@ if QT_IMPORT_ERROR is None:
                     _ABANDONED_WORKERS.append(self.worker)
                     self.worker = None
             # Servidor de separacao do lote (B1): nao sobreviver a janela.
+            self._diar_ahead_stop_now()      # ANTES de matar o servidor
             self._stop_diarize_server()
             self._release_batch_models()
             # Trash worker: NUNCA terminate() (pode corromper copy in-flight)
