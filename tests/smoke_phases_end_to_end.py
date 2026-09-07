@@ -18,6 +18,13 @@ import tempfile
 from pathlib import Path
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
+# Estado da MAQUINA fora do teste, ANTES de construir qualquer janela.
+# Construir a ReviewStudioWindow grava em app_settings (a semente das
+# novidades, 2026-09-05); sem isto, a janela da linha ~81 escrevia no
+# app_settings.json REAL do usuario — e foi exatamente isso que escondeu a
+# faixa de novidades na maquina do Rogerio.
+_HOME_ISOLADO = tempfile.mkdtemp()
+os.environ["TRANSCRITORIO_HOME"] = _HOME_ISOLADO
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
@@ -325,7 +332,9 @@ if sys.platform == "win32":
             else:
                 fail("clear incompleto")
         finally:
-            del os.environ["TRANSCRITORIO_HOME"]
+            # Volta ao HOME isolado do topo, nao ao real: o resto do
+            # arquivo continua construindo janelas.
+            os.environ["TRANSCRITORIO_HOME"] = _HOME_ISOLADO
 
 for name in ("setup_transcription_env.sh", "review_studio.sh", "transcribe.sh"):
     p = REPO / "scripts" / name
