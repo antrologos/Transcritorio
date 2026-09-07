@@ -7352,8 +7352,17 @@ if QT_IMPORT_ERROR is None:
             self.shortcuts_action.setShortcut(QKeySequence("F1"))
             self.shortcuts_action.setToolTip(
                 "Lista tudo o que o Transcritório faz, com a tecla de cada comando e "
-                "onde ele fica no menu. Dá para buscar, copiar e imprimir. (F1)")
+                "onde ele fica no menu. Dá para buscar, copiar e salvar em texto. (F1)")
             self.shortcuts_action.triggered.connect(lambda: self.open_help("atalhos"))
+
+            # A aba de novidades precisa de um item de menu: a faixa e
+            # dispensavel, e "Ajuda → Novidades desta versão" era citado
+            # na linha de estado e no CHANGELOG sem existir (revisao
+            # 2026-09-07 — o mesmo beco do antigo "Documentação").
+            self.novidades_action = QAction("Novidades desta versão", self)
+            self.novidades_action.setToolTip(
+                "O que mudou na versão instalada, com o caminho ou a tecla de cada coisa.")
+            self.novidades_action.triggered.connect(self._on_novidades_ver)
 
             # Ate 2026-09-05 este item se chamava "Documentação" e era um
             # beco: procurava um README_transcricoes.md que nenhuma parte
@@ -7764,6 +7773,7 @@ if QT_IMPORT_ERROR is None:
             ajuda_menu = self.menuBar().addMenu("Ajuda")
             ajuda_menu.addAction(self.shortcuts_action)
             ajuda_menu.addAction(self.documentation_action)
+            ajuda_menu.addAction(self.novidades_action)
             ajuda_menu.addSeparator()
             if not _install_tools.is_frozen():
                 ajuda_menu.addAction("Verificar atualizações…", self.show_upgrade_dialog)
@@ -9533,6 +9543,7 @@ if QT_IMPORT_ERROR is None:
                     "sem separação de vozes — dá para separar sem transcrever "
                     "de novo.")
             self.diar_offer_banner.setVisible(bool(ids))
+            self._update_novidades_banner()
 
         def _on_diar_offer_clicked(self) -> None:
             ids = list(getattr(self, "_diar_offer_ids", []) or [])
@@ -9558,6 +9569,7 @@ if QT_IMPORT_ERROR is None:
                 visivel = (not idioma_fora) and engine_offer_due(
                     device, engine, sys.platform, self._engine_offer_declined(flag), busy)
             self.engine_offer_banner.setVisible(visivel)
+            self._update_novidades_banner()
 
         def _busy_state_text(self) -> str:
             """Texto atual do lote (a barra de baixo), so enquanto ha worker."""
@@ -9635,14 +9647,20 @@ if QT_IMPORT_ERROR is None:
 
             entradas = getattr(self, "_novidades_pendentes", ()) or ()
             ocupado = bool(self.worker and self.worker.isRunning())
+            # isVisibleTo(self), nao isVisible(): no arranque este metodo
+            # roda ANTES de window.show(), quando isVisible() de toda
+            # faixa e False mesmo para as que acabaram de ser ligadas — e
+            # a novidade nascia empilhada com a oferta do TAGARELA
+            # (revisao 2026-09-07). isVisibleTo le a INTENCAO da faixa.
             outras = any(
-                getattr(self, nome).isVisible()
+                getattr(self, nome).isVisibleTo(self)
                 for nome in ("engine_offer_banner", "diar_offer_banner",
                              "busy_hint_banner", "voice_batch_banner")
                 if hasattr(self, nome))
             visivel = bool(entradas) and not ocupado and not outras
             if visivel:
-                self.novidades_label.setText(f"✨ Novidade: {_nv.resumo(entradas)}")
+                # Sem ✨: o glifo e reservado a AI assistiva (guia verbal).
+                self.novidades_label.setText(f"Novidade: {_nv.resumo(entradas)}")
             self.novidades_banner.setVisible(visivel)
 
         def _marcar_novidades_vistas(self) -> None:
@@ -9909,6 +9927,9 @@ if QT_IMPORT_ERROR is None:
                     f"🎙 {n} entrevista{plural} com vozes por identificar — diga "
                     f"quem fala em cada uma, em sequência.")
             self.voice_batch_banner.setVisible(bool(pendentes))
+            # Esta faixa e ligada DEPOIS do _sync_busy_hints do fim do lote;
+            # sem reavaliar aqui, a de novidades ficava empilhada com ela.
+            self._update_novidades_banner()
 
         def _on_voice_batch_identify(self) -> None:
             """Percorre as pendentes: abre a transcricao e pergunta "De quem é

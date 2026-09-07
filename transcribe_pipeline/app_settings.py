@@ -135,15 +135,27 @@ def novidades_vista() -> str | None:
     return valor or None
 
 
+# Chaves que NAO provam uso: o app as grava sozinho, antes de a janela
+# nascer (install_tools.ensure_first_run_setup cria o atalho da area de
+# trabalho e grava shortcut_created no PRIMEIRO run). Conta-las como
+# "ja usava" fazia a faixa de novidades aparecer em maquina recem-
+# instalada no Windows — o contrario do prometido (revisao 2026-09-07).
+_CHAVES_AUTOMATICAS = frozenset({
+    "shortcut_created", "cuda_extra_installed", "novidades_versao_vista",
+})
+
+
 def instalacao_ja_usada() -> bool:
-    """Existe alguma preferencia gravada nesta maquina?
+    """Ha alguma preferencia que so um USO anterior grava?
 
     Distingue "instalei agora" de "ja usava antes deste registro existir".
     Sem isso, a primeira versao a trazer o aviso de novidades seria
     justamente a unica que nao conseguiria anunciar as suas — e quem ja
-    usa o app e exatamente quem precisa do aviso.
+    usa o app e exatamente quem precisa do aviso. So contam as chaves que
+    o assistente ou uma escolha da pessoa gravam (perfil, motor, idioma,
+    separacao de falantes, uso do computador...).
     """
-    return bool(load())
+    return any(chave not in _CHAVES_AUTOMATICAS for chave in load())
 
 
 def language_default() -> str:

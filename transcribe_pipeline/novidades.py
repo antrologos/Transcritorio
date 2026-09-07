@@ -50,16 +50,24 @@ def _versoes() -> list[str]:
 def pendentes(atual: str, vista: str | None):
     """As novidades entre a versao ja vista e a de agora.
 
-    Devolve vazio — de proposito — em todo caso duvidoso: primeira
-    execucao (nada visto), mesma versao, ou versao que nao esta na tabela
-    (builds de desenvolvimento entre releases). Melhor nao avisar do que
-    avisar errado.
+    Devolve vazio em todo caso duvidoso: primeira execucao (nada visto),
+    mesma versao, ou versao ATUAL fora da tabela (build de desenvolvimento
+    entre releases). Melhor nao avisar do que avisar errado.
+
+    Excecao deliberada: `vista` desconhecida com `atual` conhecida. E o
+    caso de quem veio de uma versao que nao esta na tabela (uma beta
+    antiga, outro canal). Devolver vazio ai TRAVAVA o recurso para sempre
+    naquela maquina — a faixa nunca aparece, entao `vista` nunca e
+    atualizada, entao nunca mais ha pendentes (revisao 2026-09-07). Em vez
+    disso, mostra-se o que mudou NESTA versao.
     """
     if not vista:
         return ()
     versoes = _versoes()
-    if atual not in versoes or vista not in versoes:
+    if atual not in versoes:
         return ()
+    if vista not in versoes:
+        return tuple(e for e in NOVIDADES if e[0] == atual)
     aqui, antes = versoes.index(atual), versoes.index(vista)
     if antes <= aqui:
         return ()  # a versao vista e a mesma ou mais nova

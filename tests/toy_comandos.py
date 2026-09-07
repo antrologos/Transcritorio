@@ -77,7 +77,11 @@ raiz = FalsoMenu([
     FalsaAcao("Projetos recentes", submenu=recentes,
               props={"catalogo_ignorar": True}),
     FalsaAcao("Aguardando o lote…", "só enquanto roda", visivel=False),
-    FalsaAcao("Separar falantes", "Identifica quem está falando.", checavel=True),
+    # Tooltip de duas linhas, como os das acoes de AI: a segunda linha e o
+    # selo que a cola e a coluna "O que faz" NAO podem engolir.
+    FalsaAcao("Separar falantes",
+              "Identifica quem está falando.\nAI local — nada sai do seu computador.",
+              checavel=True),
     FalsaAcao("Transcrever selecionados",
               props={"tooltip_base": "O tooltip original."},
               dica="O tooltip original.\n(Selecione um arquivo na lista.)"),
@@ -148,8 +152,13 @@ cola = comandos.texto_da_cola(achados, versao="0.3.0b1", data="2026-09-05")
 assert "EDITAR › BLOCO E REPRODUÇÃO" in cola, cola
 assert "Alt+J" in cola and "versão 0.3.0b1" in cola
 assert "—" in cola, "comando sem atalho aparece com travessao"
-# So a primeira linha da explicacao: os tooltips de AI tem 6 linhas.
-assert "(Selecione um arquivo na lista.)" not in cola
+# A explicacao INTEIRA, numa linha so: a segunda linha do tooltip vira
+# continuacao da primeira, nao desaparece (revisao 2026-09-07 — mostrar so
+# a primeira linha escondia o selo "AI local" dos comandos de AI).
+assert "Identifica quem está falando. AI local — nada sai do seu computador." in cola, cola
+# E o tooltip_base (o original guardado por _set_action) e o que vale —
+# nao a versao reescrita com o motivo de estar cinza.
+assert "(Selecione um arquivo na lista.)" not in cola, cola
 for linha in cola.splitlines():
     assert linha == linha.rstrip(), "sem espaco sobrando no fim da linha"
 print("PASS: cola agrupada por menu, com uma linha de explicacao por comando")

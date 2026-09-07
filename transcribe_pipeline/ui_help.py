@@ -28,7 +28,11 @@ from PySide6.QtWidgets import (QAbstractItemView, QDialog, QFileDialog,
 from . import comandos as _comandos
 from . import ui_tokens
 
-SITE = "https://antrologos.github.io/Transcritorio/pt/"
+SITE_MANUAL = "https://antrologos.github.io/Transcritorio/pt/manual/"
+# Ate a pagina de novidades do site existir, a lista completa e o CHANGELOG
+# no GitHub — que ja e escrito em lingua de usuario. Mandar para a landing
+# era um beco (revisao 2026-09-07).
+SITE_HISTORICO = "https://github.com/antrologos/Transcritorio/blob/beta/CHANGELOG.md"
 
 
 def texto_do_manual() -> str:
@@ -93,11 +97,11 @@ class HelpWindow(QDialog):
         col.addWidget(self.novidades_view, 1)
         rodape = QHBoxLayout()
         rodape.addStretch(1)
-        self.historico_button = QPushButton("Ver o histórico completo no site")
+        self.historico_button = QPushButton("Ver o histórico completo")
         self.historico_button.setToolTip(
             "Abre no navegador a lista de mudanças de todas as versões.")
         self.historico_button.clicked.connect(
-            lambda: QDesktopServices.openUrl(QUrl(SITE)))
+            lambda: QDesktopServices.openUrl(QUrl(SITE_HISTORICO)))
         rodape.addWidget(self.historico_button)
         col.addLayout(rodape)
         return pagina
@@ -127,9 +131,9 @@ class HelpWindow(QDialog):
         rodape.addStretch(1)
         self.site_button = QPushButton("Abrir o manual completo no site")
         self.site_button.setToolTip(
-            "Abre o navegador no manual do Transcritório, com imagens e mais detalhes.")
+            "Abre o navegador no manual do Transcritório, capítulo por capítulo.")
         self.site_button.clicked.connect(
-            lambda: QDesktopServices.openUrl(QUrl(SITE)))
+            lambda: QDesktopServices.openUrl(QUrl(SITE_MANUAL)))
         rodape.addWidget(self.site_button)
         col.addLayout(rodape)
         return pagina
@@ -211,13 +215,13 @@ class HelpWindow(QDialog):
                 pai.setFlags(Qt.ItemFlag.ItemIsEnabled)
             rotulo = f"{cmd.rotulo} (liga/desliga)" if cmd.chave else cmd.rotulo
             teclas = " / ".join(cmd.atalhos_exibidos or cmd.atalhos) or "—"
-            # So a primeira linha na coluna: os tooltips de AI tem 6 linhas
-            # e esticariam a altura de todas as linhas da tabela. O texto
-            # inteiro fica no tooltip do item.
-            linhas = [ln for ln in cmd.dica.split("\n") if ln.strip()]
-            resumo = linhas[0] if linhas else ""
-            if len(linhas) > 1:
-                resumo = f"{resumo} …"
+            # A explicacao INTEIRA numa linha so (o Qt corta com "…" no
+            # que nao cabe; alargar a coluna revela o resto, e o tooltip
+            # do item tem o texto original). Mostrar so a primeira linha
+            # cortava frases no meio e escondia justamente o selo "AI
+            # local — nada sai do seu computador" (revisao 2026-09-07).
+            linhas = [ln.strip() for ln in cmd.dica.split("\n") if ln.strip()]
+            resumo = " · ".join(linhas)
             item = QTreeWidgetItem(pai, [rotulo, teclas, resumo])
             if cmd.dica:
                 item.setToolTip(2, cmd.dica)
@@ -249,7 +253,13 @@ class HelpWindow(QDialog):
             return
         from pathlib import Path
 
-        Path(caminho).write_text(self._texto_atual(), encoding="utf-8")
+        try:
+            Path(caminho).write_text(self._texto_atual(), encoding="utf-8")
+        except OSError as exc:
+            # Pasta sem permissao ou disco cheio: dizer, nao morrer em
+            # silencio no slot.
+            self.contagem.setText(f"Não foi possível salvar em {caminho}: {exc.strerror or exc}")
+            return
         self.contagem.setText(f"Lista salva em {caminho}")
 
     # ------------------------------------------------------------------ abas

@@ -164,8 +164,11 @@ def filtrar(comandos, termo: str) -> list[Comando]:
 def texto_da_cola(comandos, versao: str = "", data: str = "") -> str:
     """A lista em texto puro, para copiar, salvar ou imprimir.
 
-    So a PRIMEIRA linha da explicacao: os tooltips das acoes de AI tem
-    seis linhas e arrebentariam o alinhamento de uma cola de parede.
+    A explicacao inteira, numa linha so por comando: as quebras dos
+    tooltips de AI viram espacos. Mostrar so a primeira linha cortava
+    frases no meio e escondia o selo "AI local — nada sai do seu
+    computador" (revisao 2026-09-07). Linha longa quebra no editor de quem
+    imprime; frase pela metade nao se conserta.
     """
     linhas: list[str] = ["Transcritório — atalhos e comandos"]
     marca = " · ".join(p for p in (f"versão {versao}" if versao else "", data) if p)
@@ -186,10 +189,10 @@ def texto_da_cola(comandos, versao: str = "", data: str = "") -> str:
             linhas.append("")
             linhas.append((caminho_atual or "Outros comandos").upper())
         atalho = " / ".join(cmd.atalhos) or "—"
-        primeira = cmd.dica.split("\n")[0].strip()
+        explicacao = " ".join(p.strip() for p in cmd.dica.split("\n") if p.strip())
         linha = f"  {cmd.rotulo:<{largura}}  {atalho:<{atalho_w}}"
-        if primeira:
-            linha = f"{linha}  {primeira}"
+        if explicacao:
+            linha = f"{linha}  {explicacao}"
         linhas.append(linha.rstrip())
     linhas.append("")
     return "\n".join(linhas)

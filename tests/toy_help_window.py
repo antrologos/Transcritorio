@@ -82,7 +82,8 @@ for nome, obj in vars(win).items():
         continue
     for seq in obj.shortcuts():
         tecla = seq.toString(QKeySequence.SequenceFormat.PortableText)
-        if obj.text() not in por_atalho.get(tecla, []):
+        # Mesma limpeza de mnemonico que o catalogo aplica ao rotulo.
+        if comandos._limpar_rotulo(obj.text()) not in por_atalho.get(tecla, []):
             faltando.append(f"{nome} ({obj.text()!r}, {tecla})")
 assert not faltando, f"acoes com atalho fora da consulta: {faltando}"
 print(f"OK: as {len(por_atalho)} teclas de atalho do app aparecem na consulta")
@@ -102,7 +103,12 @@ assert win.busy_menu_hint_action.text() not in rotulos, \
 assert win.cancel_job_action.text() not in rotulos, \
     "Cancelar mora na statusbar, nao no menu"
 assert "Atalhos e comandos" in rotulos, "a propria consulta tem de se listar"
-print("OK: lista dinamica, dica de lote e Cancelar ficam fora; a F1 se lista")
+# "Ajuda → Novidades desta versão" e citado na linha de estado e no CHANGELOG:
+# tem de EXISTIR como item de menu, nao so como aba (revisao 2026-09-07 — o
+# mesmo beco do antigo "Documentação").
+assert ("Ajuda", "Novidades desta versão") in {(c.caminho, c.rotulo) for c in catalogo}, \
+    "Ajuda → Novidades desta versão nao existe no menu"
+print("OK: lista dinamica, dica de lote e Cancelar ficam fora; F1 e Novidades se listam")
 
 # --------------------------------------------------- 3. sem linha repetida
 pares = [(c.caminho, c.rotulo) for c in catalogo]
@@ -200,17 +206,18 @@ assert manual, "o manual embutido tem de ser encontrado a partir do pacote"
 
 menus = sorted({c.caminho.split(comandos.SETA.strip())[0].strip()
                 for c in catalogo if c.caminho}, key=len, reverse=True)
-ITEM = r"(?:[^\n.,;)→]*?…|[^\n.,;)→]+)"
+SEP = r"(?:→|›)"  # o manual usa →; o catalogo escreve ›. Os dois contam.
+ITEM = r"(?:[^\n.,;)→›]*?…|[^\n.,;)→›]+)"
 CITACAO = re.compile(
     r"\b(" + "|".join(re.escape(m) for m in menus) + r")"
-    r"\s*→\s*(" + ITEM + r"(?:\s*→\s*" + ITEM + r")*)")
+    r"\s*" + SEP + r"\s*(" + ITEM + r"(?:\s*" + SEP + r"\s*" + ITEM + r")*)")
 
 caminhos_validos = {c.caminho for c in catalogo if c.caminho}
 comandos_validos = {(c.caminho, c.rotulo) for c in catalogo}
 
 citados, becos = [], []
 for menu, resto in CITACAO.findall(manual):
-    partes = [menu] + [p.strip() for p in resto.split("→")]
+    partes = [menu] + [p.strip() for p in re.split(r"→|›", resto)]
     citados.append(" → ".join(partes))
     caminho = comandos.SETA.join(partes[:-1])
     if (caminho, partes[-1]) in comandos_validos:
@@ -222,6 +229,23 @@ for menu, resto in CITACAO.findall(manual):
 assert citados, "o manual precisa dizer ONDE ficam as coisas, com o caminho do menu"
 assert not becos, f"o manual manda o usuario a um caminho que nao existe: {becos}"
 print(f"OK: os {len(citados)} caminhos de menu citados no manual existem de verdade")
+
+# As TECLAS ensinadas no manual tambem tem de existir. O manual escreve as
+# setas (Alt+←); o Qt escreve Alt+Left. Uma tecla inventada no manual e um
+# beco tao ruim quanto um caminho de menu morto (revisao 2026-09-07).
+SETAS = {"←": "Left", "→": "Right", "↑": "Up", "↓": "Down"}
+teclas_reais = set(por_atalho)
+teclas_citadas = set(re.findall(r"\*\*((?:Ctrl|Alt|Shift)(?:\+[^*\s]+)+|F\d{1,2})\*\*", manual))
+assert teclas_citadas, "o manual precisa ensinar teclas"
+inventadas = []
+for tecla in teclas_citadas:
+    portavel = tecla
+    for seta, nome in SETAS.items():
+        portavel = portavel.replace(seta, nome)
+    if portavel not in teclas_reais:
+        inventadas.append(tecla)
+assert not inventadas, f"teclas ensinadas no manual que nao existem no app: {sorted(inventadas)}"
+print(f"OK: as {len(teclas_citadas)} teclas ensinadas no manual sao atalhos reais")
 
 # ------------------------------------- 8. a faixa de novidades cede o lugar
 # As quatro faixas da lista sao QFrame empilhados, SEM prioridade: podem
@@ -239,6 +263,15 @@ _settings.parent.mkdir(parents=True, exist_ok=True)
 _settings.write_text("{}", encoding="utf-8")
 win._init_novidades()
 assert win._novidades_pendentes == (), "maquina recem-instalada nao recebe aviso"
+
+# O estado REAL do primeiro run no Windows nao e "{}": main() cria o atalho
+# da area de trabalho e grava shortcut_created ANTES de a janela nascer.
+# Isso nao e uso — e a faixa aparecia para quem acabou de instalar
+# (revisao 2026-09-07).
+_settings.write_text('{"shortcut_created": true}', encoding="utf-8")
+win._init_novidades()
+assert win._novidades_pendentes == (), \
+    "shortcut_created e gravado pelo proprio app no 1o run; nao prova uso anterior"
 
 _settings.write_text('{"install_profile": "padrao"}', encoding="utf-8")
 win._init_novidades()
@@ -272,6 +305,40 @@ win._update_novidades_banner()
 assert not win.novidades_banner.isVisible(), "durante um lote, nada de novidade"
 win.worker = anterior_worker
 
+# Fim de lote, na ordem REAL: on_worker_done faz o sync (novidades volta) e
+# so DEPOIS liga a faixa de vozes por identificar. Sem a reavaliacao no fim
+# de _update_voice_batch_banner, as duas ficavam empilhadas.
+import transcribe_pipeline.review_studio_qt as _rsq  # noqa: E402
+
+_pendentes_original = _rsq.voice_naming_pending
+_rsq.voice_naming_pending = lambda *_a, **_k: ["E1"]
+try:
+    win._update_novidades_banner()
+    assert win.novidades_banner.isVisible(), "ponto de partida: novidade na tela"
+    win._voice_batch_ids = ["E1"]
+    win._update_voice_batch_banner()
+    assert win.voice_batch_banner.isVisible(), "a faixa de vozes ligou"
+    assert not win.novidades_banner.isVisible(), \
+        "vozes por identificar pede acao: a novidade cede o lugar tambem aqui"
+finally:
+    _rsq.voice_naming_pending = _pendentes_original
+    win._voice_batch_ids = []
+    win._update_voice_batch_banner()
+
+# Antes de window.show(): isVisible() de TODA faixa e False, mesmo das
+# ligadas — o predicado tem de ler a INTENCAO (isVisibleTo). Sem isso a
+# novidade nascia empilhada com a oferta do TAGARELA no arranque.
+janela_fechada = ReviewStudioWindow(project_root=tmp)
+janela_fechada._novidades_pendentes = _novidades.NOVIDADES[:1]
+janela_fechada.diar_offer_banner.setVisible(True)
+assert not janela_fechada.diar_offer_banner.isVisible(), "premissa: janela nao mostrada"
+janela_fechada._update_novidades_banner()
+assert not janela_fechada.novidades_banner.isVisibleTo(janela_fechada), \
+    "antes do show, a novidade tem de ceder a uma faixa que ja esta LIGADA"
+janela_fechada.deleteLater()
+app.processEvents()
+print("OK: a novidade cede no fim do lote e antes de a janela aparecer")
+
 # Dispensar grava e nao volta na mesma sessao.
 win._update_novidades_banner()
 assert win.novidades_banner.isVisible()
@@ -284,7 +351,10 @@ print("OK: a faixa de novidades cede o lugar, e sai de vez quando dispensada")
 # A aba existe sempre — e a resposta a "e depois que eu dispensei?".
 win.open_help("novidades")
 assert primeira._tabs.tabText(primeira._tabs.currentIndex()) == "Novidades desta versão"
-assert "0" in primeira.novidades_view.toPlainText()[:200]
+from transcribe_pipeline import __version__ as _versao_app  # noqa: E402
+
+assert _versao_app in primeira.novidades_view.toPlainText()[:200], \
+    "a aba tem de abrir na versao instalada"
 print("OK: a aba Novidades desta versão abre com a lista da versão instalada")
 
 print("PASS: toy_help_window")

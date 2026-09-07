@@ -2,8 +2,8 @@
 
 ## Em desenvolvimento (ramo beta)
 
-- **F1 abre a lista de tudo o que o Transcritório faz.** O programa passou a ter 67
-  comandos e 38 teclas de atalho, e não havia nenhuma tela onde consultá-los: quem
+- **F1 abre a lista de tudo o que o Transcritório faz.** O programa passou a ter mais de
+  sessenta comandos e quase quarenta teclas de atalho, e não havia nenhuma tela onde consultá-los: quem
   esquecia uma tecla tinha de caçá-la nos menus. Agora **F1** (ou Ajuda → "Atalhos e
   comandos") abre uma janela com todos eles, agrupados pelo menu onde moram, com a
   tecla de cada um e o que faz — e uma caixa de busca que aceita tanto o nome quanto a
@@ -39,6 +39,25 @@
     qualquer outro aviso na tela que peça uma ação sua.
   - Em computador recém-instalado ela não aparece: quem acabou de instalar não tem
     novidade em relação a nada.
+
+- **Correções da revisão de 7 de setembro**, sobre as três novidades acima, antes que
+  saíssem do canal de teste:
+  - **Ajuda → Novidades desta versão** passou a existir de verdade como item de menu. Era
+    citado na barra de baixo e neste registro, mas só existia como aba da janela de ajuda —
+    o mesmo beco do antigo "Documentação".
+  - A faixa de novidades **aparecia em computador recém-instalado no Windows**, ao contrário
+    do prometido: o próprio programa grava uma marca ao criar o atalho da área de trabalho,
+    antes de a janela nascer, e isso contava como "já usava". E ela **não cedia o lugar** em
+    dois momentos reais — no arranque, antes da janela aparecer, e no fim de um lote, quando
+    a faixa de vozes por identificar acende depois dela. Os três casos corrigidos e testados.
+  - Na janela F1, a coluna "O que faz" e a lista salva em texto mostravam **só a primeira
+    frase** da explicação, cortando o resto — e escondendo justamente o "AI local — nada sai
+    do seu computador" das ações de análise. Agora vem a explicação inteira.
+  - Os botões "no site" da ajuda levavam à página inicial; agora o do manual abre o manual e
+    o do histórico abre a lista completa de mudanças. A frase do manual sobre gravações
+    movidas descrevia um fluxo que não existe; agora diz o que o programa realmente faz.
+  - Um teste da suíte gravava no `app_settings.json` real de quem a roda. Corrigido, com um
+    gate novo que impede o padrão de voltar.
 
 - **Consertar uma fronteira de falante virou um gesto.** Quando a separação
   automática erra, um bloco atribuído a uma pessoa contém, a partir de certo ponto, a

@@ -6,8 +6,8 @@ O caminho básico é este:
 revisar o texto → **Salvar transcrição** → **Exportar…**
 
 O resto desta página explica cada passo em uma ou duas frases. Ela vem dentro do
-programa e funciona sem internet. O manual completo, com imagens, está em
-[antrologos.github.io/Transcritorio](https://antrologos.github.io/Transcritorio/pt/).
+programa e funciona sem internet. O manual completo, capítulo por capítulo, está em
+[antrologos.github.io/Transcritorio/pt/manual](https://antrologos.github.io/Transcritorio/pt/manual/).
 
 ## 1. Criar um projeto
 
@@ -15,8 +15,9 @@ Um projeto é **uma pasta única** com todo o trabalho de uma pesquisa:
 Projeto → Novo projeto…
 
 Suas gravações **não são copiadas nem alteradas**. O projeto apenas aponta para
-onde elas estão. Se você mover ou renomear os áudios depois, o projeto pede que
-você os localize de novo.
+onde elas estão. Se você mover ou renomear um áudio depois, o programa avisa que
+não encontrou a gravação ao abrir aquela entrevista — devolva o arquivo ao lugar
+de origem, ou adicione-o de novo ao projeto.
 
 ## 2. Adicionar as gravações
 

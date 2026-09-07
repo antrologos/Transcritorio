@@ -55,8 +55,12 @@ uma, outra = versoes[0], versoes[-1]
 assert novidades.pendentes(uma, None) == (), "instalacao nova nao recebe aviso"
 assert novidades.pendentes(uma, "") == ()
 assert novidades.pendentes(uma, uma) == (), "mesma versao, nada pendente"
-assert novidades.pendentes(uma, "9.9.9") == (), "versao desconhecida: silencio"
 assert novidades.pendentes("9.9.9", uma) == (), "build fora da tabela: silencio"
+# `vista` desconhecida (veio de uma beta antiga, de outro canal): mostra o
+# que mudou NESTA versao. Devolver vazio aqui travava o recurso para sempre
+# na maquina — sem faixa, `vista` nunca era atualizada (revisao 2026-09-07).
+de_fora = novidades.pendentes(uma, "0.0.1-desconhecida")
+assert de_fora == tuple(e for e in TABELA if e[0] == uma), de_fora
 if len(versoes) > 1:
     devidas = novidades.pendentes(uma, outra)
     assert len(devidas) == len(versoes) - 1, devidas
