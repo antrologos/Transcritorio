@@ -425,9 +425,14 @@ def download_models(
     include_alignment: bool = True,
     align_languages: tuple[str, ...] | None = None,
 ) -> JobResult:
-    failures = model_manager.download_required_models(token=token, progress_callback=progress_callback, should_cancel=should_cancel, asr_variants=asr_variants, include_diarization=include_diarization, include_alignment=include_alignment, align_languages=align_languages)
+    relatorio: list[str] = []
+    failures = model_manager.download_required_models(token=token, progress_callback=progress_callback, should_cancel=should_cancel, asr_variants=asr_variants, include_diarization=include_diarization, include_alignment=include_alignment, align_languages=align_languages, relatorio=relatorio)
     if failures:
-        return JobResult("models", failures, "Falha ao baixar um ou mais modelos.")
+        # A causa NOMEADA chega a caixa de erro (Mostrar detalhes) via
+        # failure_summary — "Falha ao baixar um ou mais modelos." mandava o
+        # usuario procurar no lugar errado (incidente 2026-09-05).
+        detalhe = "; ".join(relatorio) if relatorio else "um ou mais modelos não puderam ser baixados."
+        return JobResult("models", failures, f"Não foi possível preparar: {detalhe}")
     verify_failures = model_manager.verify_required_models(progress_callback=progress_callback, asr_variants=asr_variants, include_diarization=include_diarization, include_alignment=include_alignment, align_languages=align_languages)
     # Ternario CRITICO: sem isto a mensagem seria "Modelos prontos..."
     # mesmo em falha, causando UI mostrar sucesso como erro. Bug visto

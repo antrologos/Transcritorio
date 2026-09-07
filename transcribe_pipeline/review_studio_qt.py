@@ -8346,6 +8346,17 @@ if QT_IMPORT_ERROR is None:
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 return
             token = dialog.token()
+            if not token:
+                # O dialogo so PEDE token quando falta um modelo restrito; mas
+                # o lote re-verifica tudo, inclusive o restrito que ja esta no
+                # disco (com force, ou com cache parcial). Usar o token que a
+                # pessoa ja guardou nao custa nada — e o cofre nunca levanta
+                # por regra (token_vault), o try e cinto de seguranca.
+                try:
+                    from . import token_vault as _vault
+                    token = _vault.retrieve() or ""
+                except Exception:  # noqa: BLE001
+                    token = ""
             self.start_worker(
                 "Preparar modelos",
                 [

@@ -40,6 +40,22 @@
   - Em computador recém-instalado ela não aparece: quem acabou de instalar não tem
     novidade em relação a nada.
 
+- **Preparar modelos não vai mais à internet pelo que já está no seu disco.** Uma transcrição
+  em espanhol falhou com "A tarefa terminou com erro" — e a causa não era o espanhol. Faltava
+  só o pacote de alinhamento desse idioma, que é aberto; a caixa de preparação, vendo isso,
+  não pediu o token do Hugging Face. Mas o passo seguinte conferia **todos** os modelos pela
+  rede, um por um, inclusive o de separação de falantes, que é restrito e **já estava inteiro
+  no disco**. Sem token, o servidor respondeu 401; um modelo "falhou"; a preparação inteira foi
+  dada como falha; e a transcrição, que esperava por ela, nunca começou. Agora um modelo
+  completo no disco não é consultado — o que também faz a preparação funcionar sem internet
+  e terminar na hora quando não falta nada. Quem quiser forçar a verificação continua podendo,
+  pela linha de comando (`--force`, que até aqui não fazia nada).
+  - A caixa de erro passou a **dizer qual modelo falhou e por quê**, em português: "o Hugging
+    Face recusou o acesso (401): o token está ausente ou inválido", "a conta ainda não aceitou
+    os termos deste modelo", "sem conexão". Antes, a causa real só sobrevivia no log.
+  - Quando a preparação precisa mesmo ir ao Hugging Face por um modelo restrito, ela usa o
+    token que você já guardou, mesmo que a caixa não o tenha pedido.
+
 - **Correções da revisão de 7 de setembro**, sobre as três novidades acima, antes que
   saíssem do canal de teste:
   - **Ajuda → Novidades desta versão** passou a existir de verdade como item de menu. Era
