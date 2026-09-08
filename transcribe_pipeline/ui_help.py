@@ -29,10 +29,7 @@ from . import comandos as _comandos
 from . import ui_tokens
 
 SITE_MANUAL = "https://antrologos.github.io/Transcritorio/pt/manual/"
-# Ate a pagina de novidades do site existir, a lista completa e o CHANGELOG
-# no GitHub — que ja e escrito em lingua de usuario. Mandar para a landing
-# era um beco (revisao 2026-09-07).
-SITE_HISTORICO = "https://github.com/antrologos/Transcritorio/blob/beta/CHANGELOG.md"
+SITE_HISTORICO = "https://antrologos.github.io/Transcritorio/pt/novidades/"
 
 
 def texto_do_manual() -> str:

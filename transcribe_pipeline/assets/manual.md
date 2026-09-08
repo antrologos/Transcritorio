@@ -40,8 +40,9 @@ Tudo acontece **no seu computador**. Nenhum áudio é enviado para a internet.
 
 ## 4. Dizer quem é cada voz
 
-Ao abrir uma transcrição nova, o programa toca uma amostra de cada voz e pergunta
-de quem é. Se você adiar, a pergunta volta em
+Quando a separação das vozes termina, o programa toca uma amostra de cada uma e
+pergunta de quem é. Se você adiar, uma faixa acima do texto lembra que as vozes
+ainda não foram confirmadas, e a pergunta continua em
 Entrevista → Dar nome às vozes…
 
 Os nomes que você der valem para os documentos exportados, e o programa passa a
