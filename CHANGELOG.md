@@ -40,6 +40,14 @@
   - Em computador recém-instalado ela não aparece: quem acabou de instalar não tem
     novidade em relação a nada.
 
+- **Uma volta guiada pela janela.** Na primeira vez que você abre um projeto, uma faixa
+  oferece uma volta de dois minutos: oito passos curtos, cada um **apontando o lugar real** na
+  janela — o botão de adicionar gravações, o Transcrever, a lista, o Estúdio, as teclas, as
+  vozes, os documentos, a ajuda — e explicando em duas linhas o que ele faz. Não é uma
+  janela que trava o programa: é um cartão que fica por cima, e você pode mexer na janela
+  enquanto lê. Dá para recusar e fazer depois: fica em **Ajuda → Volta guiada**. Com o
+  Estúdio fechado, os passos dele apontam a lista e dizem como abrir uma entrevista.
+
 - **Preparar modelos não vai mais à internet pelo que já está no seu disco.** Uma transcrição
   em espanhol falhou com "A tarefa terminou com erro" — e a causa não era o espanhol. Faltava
   só o pacote de alinhamento desse idioma, que é aberto; a caixa de preparação, vendo isso,

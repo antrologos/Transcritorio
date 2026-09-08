@@ -280,6 +280,9 @@ win._init_novidades()
 assert win._novidades_pendentes == (), "a semente ja foi gravada: nao repete"
 print("OK: a semente distingue maquina nova de instalacao que ja existia")
 
+# A oferta da volta guiada (2026-09-07) tem precedencia sobre a novidade —
+# toy_tour_window prova isso. Aqui a novidade e testada SOZINHA.
+win._marcar_tour_oferecida()
 win._novidades_pendentes = _novidades.NOVIDADES[:1]
 for nome in ("engine_offer_banner", "diar_offer_banner",
              "busy_hint_banner", "voice_batch_banner"):

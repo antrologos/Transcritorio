@@ -23,6 +23,7 @@ TETOS = {
     "review_studio_qt.py": 0,
     "gui_launcher.py": 0,
     "ui_help.py": 0,
+    "ui_tour.py": 0,
 }
 
 HEX_RE = re.compile(r"#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b(?![0-9a-fA-F])")

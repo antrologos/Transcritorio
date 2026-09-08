@@ -145,6 +145,16 @@ _CHAVES_AUTOMATICAS = frozenset({
 })
 
 
+def volta_guiada_oferecida() -> bool:
+    """A faixa "Primeira vez aqui?" ja foi respondida nesta maquina?
+
+    Gravada ao clicar Começar ou Agora não, e tambem ao abrir a volta pelo
+    menu Ajuda (quem achou sozinho nao precisa da oferta). Ausente = ainda
+    nao ofereceu.
+    """
+    return bool(load().get("volta_guiada_oferecida", False))
+
+
 def instalacao_ja_usada() -> bool:
     """Ha alguma preferencia que so um USO anterior grava?
 

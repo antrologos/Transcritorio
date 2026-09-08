@@ -68,6 +68,8 @@ from transcribe_pipeline.review_studio_qt import (
     _apply_dark_theme,
 )
 from transcribe_pipeline.ui_help import HelpWindow
+from transcribe_pipeline.ui_tour import TourPanel
+from transcribe_pipeline.volta_guiada import PASSOS
 
 _apply_dark_theme(app)
 win = ReviewStudioWindow(project_root=tmp)
@@ -128,6 +130,7 @@ dialogos = {
     "preparar-modelos/": ModelSetupDialog(),
     "gerenciar-modelos/": ModelManagerDialog(lambda: None),
     "ajuda/": HelpWindow(None),
+    "volta/": TourPanel(None, PASSOS),
 }
 for prefixo, dlg in dialogos.items():
     for act in dlg.findChildren(QAction):

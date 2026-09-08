@@ -7364,6 +7364,15 @@ if QT_IMPORT_ERROR is None:
                 "O que mudou na versão instalada, com o caminho ou a tecla de cada coisa.")
             self.novidades_action.triggered.connect(self._on_novidades_ver)
 
+            # Volta guiada (2026-09-07): ensina a JANELA apontando os lugares
+            # reais, sem trava-la — por isso nao e um assistente modal. E
+            # oferecida uma vez por uma faixa, e fica aqui para sempre.
+            self.tour_action = QAction("Volta guiada", self)
+            self.tour_action.setToolTip(
+                "Uma volta de dois minutos pela janela: cada passo aponta onde fica uma "
+                "coisa e explica o que ela faz. Dá para fazer de novo quando quiser.")
+            self.tour_action.triggered.connect(self.open_tour)
+
             # Ate 2026-09-05 este item se chamava "Documentação" e era um
             # beco: procurava um README_transcricoes.md que nenhuma parte
             # do codigo gera, e respondia que nao encontrou. Agora abre o
@@ -7773,6 +7782,7 @@ if QT_IMPORT_ERROR is None:
             ajuda_menu = self.menuBar().addMenu("Ajuda")
             ajuda_menu.addAction(self.shortcuts_action)
             ajuda_menu.addAction(self.documentation_action)
+            ajuda_menu.addAction(self.tour_action)
             ajuda_menu.addAction(self.novidades_action)
             ajuda_menu.addSeparator()
             if not _install_tools.is_frozen():
@@ -8661,6 +8671,32 @@ if QT_IMPORT_ERROR is None:
             novidades_ok_button.clicked.connect(self._on_novidades_dispensar)
             novidades_layout.addWidget(novidades_ok_button)
             layout.addWidget(self.novidades_banner)
+            # Oferta da volta guiada (2026-09-07): uma vez, na primeira
+            # abertura com projeto; faixa, nunca modal. Tem precedencia
+            # sobre a de novidades (quem acabou de chegar precisa mais do
+            # mapa do que do que mudou) e cede as quatro que pedem acao.
+            self.tour_offer_banner = QFrame()
+            self.tour_offer_banner.setVisible(False)
+            self.tour_offer_banner.setStyleSheet(
+                f"QFrame {{ {ui_tokens.banner_style(ui_tokens.ACCENT)} }}"
+            )
+            tour_layout = QHBoxLayout(self.tour_offer_banner)
+            tour_layout.setContentsMargins(10, 6, 10, 6)
+            tour_label = QLabel(
+                "Primeira vez aqui? Uma volta de dois minutos mostra onde fica cada coisa.")
+            tour_label.setWordWrap(True)
+            tour_layout.addWidget(tour_label, 1)
+            tour_start_button = QPushButton("Começar")
+            tour_start_button.setToolTip(
+                "Abre a volta guiada: oito passos curtos, cada um apontando um lugar da janela.")
+            tour_start_button.clicked.connect(self._on_tour_comecar)
+            tour_layout.addWidget(tour_start_button)
+            tour_later_button = QPushButton("Agora não")
+            tour_later_button.setToolTip(
+                "Fecha a oferta. A volta continua em Ajuda → Volta guiada.")
+            tour_later_button.clicked.connect(self._on_tour_depois)
+            tour_layout.addWidget(tour_later_button)
+            layout.addWidget(self.tour_offer_banner)
             # 2026-09-02: migracao VISIVEL para o TAGARELA em maquinas sem
             # GPU — quem instalou antes da 0.2.2 ficou no Whisper, e a
             # QMessageBox ao Transcrever era facil de nao ver. Decisao pura:
@@ -9658,6 +9694,8 @@ if QT_IMPORT_ERROR is None:
 
             entradas = getattr(self, "_novidades_pendentes", ()) or ()
             ocupado = bool(self.worker and self.worker.isRunning())
+            # A oferta da volta guiada decide antes: ela tem precedencia.
+            self._update_tour_offer_banner()
             # isVisibleTo(self), nao isVisible(): no arranque este metodo
             # roda ANTES de window.show(), quando isVisible() de toda
             # faixa e False mesmo para as que acabaram de ser ligadas — e
@@ -9666,7 +9704,8 @@ if QT_IMPORT_ERROR is None:
             outras = any(
                 getattr(self, nome).isVisibleTo(self)
                 for nome in ("engine_offer_banner", "diar_offer_banner",
-                             "busy_hint_banner", "voice_batch_banner")
+                             "busy_hint_banner", "voice_batch_banner",
+                             "tour_offer_banner")
                 if hasattr(self, nome))
             visivel = bool(entradas) and not ocupado and not outras
             if visivel:
@@ -9694,6 +9733,93 @@ if QT_IMPORT_ERROR is None:
             self._marcar_novidades_vistas()
             self.progress_label.setText(
                 "Novidades dispensadas. Ajuda → Novidades desta versão mostra a lista quando quiser.")
+
+        # --- volta guiada (2026-09-07) ---
+        def _update_tour_offer_banner(self) -> None:
+            """Oferece a volta UMA vez: com projeto aberto, sem lote, sem outra
+            faixa que peca acao, e enquanto ninguem respondeu."""
+            if not hasattr(self, "tour_offer_banner"):
+                return
+            from . import app_settings as _st
+
+            try:
+                respondida = _st.volta_guiada_oferecida()
+            except Exception:  # noqa: BLE001
+                respondida = True
+            ocupado = bool(self.worker and self.worker.isRunning())
+            outras = any(
+                getattr(self, nome).isVisibleTo(self)
+                for nome in ("engine_offer_banner", "diar_offer_banner",
+                             "busy_hint_banner", "voice_batch_banner")
+                if hasattr(self, nome))
+            self.tour_offer_banner.setVisible(
+                self.context is not None and not respondida and not ocupado and not outras)
+
+        def _marcar_tour_oferecida(self) -> None:
+            from . import app_settings as _st
+
+            try:
+                _st.save({"volta_guiada_oferecida": True})
+            except Exception as exc:  # noqa: BLE001
+                _logger.warning("nao foi possivel gravar volta_guiada_oferecida: %s", exc)
+            if hasattr(self, "tour_offer_banner"):
+                self.tour_offer_banner.setVisible(False)
+            self._update_novidades_banner()
+
+        def _on_tour_comecar(self) -> None:
+            self._marcar_tour_oferecida()
+            self.open_tour()
+
+        def _on_tour_depois(self) -> None:
+            self._marcar_tour_oferecida()
+            self.progress_label.setText(
+                "Sem problema. A volta guiada fica em Ajuda → Volta guiada.")
+
+        def _tour_alvo(self, passo) -> tuple[Any, str]:
+            """O widget que o passo aponta, e a nota de reserva quando o
+            Estudio esta fechado."""
+            if passo.precisa_entrevista and not self.current_interview_id:
+                return getattr(self, passo.alvo_reserva, None), passo.reserva
+            if passo.alvo == "menuBar":
+                return self.menuBar(), ""
+            return getattr(self, passo.alvo, None), ""
+
+        def _tour_apontar(self, indice: int) -> None:
+            painel = getattr(self, "_tour_panel", None)
+            halo = getattr(self, "_tour_halo", None)
+            if painel is None or halo is None:
+                return
+            passo = painel.passo_atual()
+            alvo, nota = self._tour_alvo(passo)
+            if passo.aba is not None and not nota and hasattr(self, "review_tabs"):
+                self.review_tabs.setCurrentIndex(passo.aba)
+            painel.mostrar_nota(nota)
+            halo.cobrir(alvo if alvo is not None else None)
+
+        def _tour_encerrar(self) -> None:
+            halo = getattr(self, "_tour_halo", None)
+            if halo is not None:
+                halo.cobrir(None)
+
+        def open_tour(self, *_args: Any) -> None:
+            """Ajuda → Volta guiada. Nao modal: aponta a janela viva."""
+            from . import ui_tour as _ui_tour
+            from . import volta_guiada as _vg
+
+            self._marcar_tour_oferecida()
+            if getattr(self, "_tour_panel", None) is None:
+                self._tour_halo = _ui_tour.Halo(self)
+                self._tour_panel = _ui_tour.TourPanel(self, _vg.PASSOS)
+                self._tour_panel.passo_mudou.connect(self._tour_apontar)
+                self._tour_panel.encerrado.connect(self._tour_encerrar)
+            painel = self._tour_panel
+            painel.ir_para(0)
+            # Canto superior direito da janela, sem cobrir a lista.
+            geo = self.frameGeometry()
+            painel.adjustSize()
+            painel.move(geo.right() - painel.width() - 24, geo.top() + 96)
+            painel.show()
+            painel.raise_()
 
         def _explain_busy(self, acao: str) -> bool:
             """True (e explica na faixa) quando uma acao foi acionada durante um
