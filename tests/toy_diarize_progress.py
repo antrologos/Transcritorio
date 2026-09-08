@@ -42,7 +42,13 @@ print("PASS: mapeamento do hook do pyannote")
 # de audio em 19,3 min); GPU 0,0065x (62 min em 23 s).
 assert abs(expected_diarization_seconds(300, "cpu", 24) - (45 + 18)) < 1e-6
 assert abs(expected_diarization_seconds(3600, "cpu", 24) - (45 + 216)) < 1e-6   # 1 h ~ 4,4 min
-assert abs(expected_diarization_seconds(3600, "cpu", 8) - (45 + 648)) < 1e-6    # 8 nucleos: 3x
+# 2026-09-05: a escala com nucleos NAO e linear. Medido com afinidade em
+# 4 nucleos fisicos e entrevistas inteiras: 0,100 s por segundo de audio,
+# contra os 0,36 que a escala linear previa — expoente 0,3, nao 1.
+_quatro = expected_diarization_seconds(3600, "cpu", 4)
+assert abs(_quatro - (45 + 216 * (24 / 4) ** 0.3)) < 1e-6
+assert 340 < _quatro < 430, f"1 h em 4 nucleos deve dar ~7 min, deu {_quatro/60:.1f} min"
+assert expected_diarization_seconds(3600, "cpu", 4) > expected_diarization_seconds(3600, "cpu", 8)     > expected_diarization_seconds(3600, "cpu", 24), "menos nucleos, mais tempo"
 assert abs(expected_diarization_seconds(3600, "cuda", 24) - (20 + 23.4)) < 1e-6
 assert expected_diarization_seconds(0, "cpu", 24) == 45.0
 assert expected_diarization_seconds(3600, "cpu", 0) > 0   # cores invalido nao explode
@@ -66,18 +72,25 @@ print("PASS: heartbeat com real > creep")
 asr, diar = batch_time_estimate(3600, "parakeet_onnx", "cpu", 24)
 assert 200 < asr < 240 and abs(diar - 261) < 1e-6, (asr, diar)   # 45 + 0,06 x 3600 (passo 2 s)
 asr4, diar4 = batch_time_estimate(3600, "parakeet_onnx", "cpu", 8)
-assert abs(asr4 - asr) < 1e-6 and diar4 > diar
+# ATE 2026-09-04 este teste exigia asr4 == asr — ou seja, fixava o defeito:
+# o TAGARELA prometia o mesmo tempo em qualquer maquina, porque a correcao por
+# nucleos so era aplicada ao Whisper. Agora ele desce com os nucleos, mas
+# SATURANDO (limitado por banda de memoria; ver toy_estimativa_tempo).
+assert asr4 > asr, "a estimativa do TAGARELA tem de piorar com menos nucleos"
+assert asr4 < asr * (24 / 8), "mas nao linearmente, como a do Whisper"
+assert diar4 > diar
 asr, _ = batch_time_estimate(3600, None, "cpu", 24)
 assert abs(asr - 3960) < 1e-6                       # Whisper small 1,1x
 asr, diar = batch_time_estimate(3600, "whisper", "cuda", 24)
 assert abs(asr - 450) < 1e-6 and diar < 200
 assert batch_time_estimate(0, None, "cpu", 24) == (0.0, 0.0)
-# TAGARELA numa maquina CUDA sem o pacote onnx-gpu: transcricao em CPU (sem
-# escala por nucleos), separacao em GPU (2026-09-02)
+# TAGARELA numa maquina CUDA sem o pacote onnx-gpu: transcricao em CPU (agora
+# COM escala por nucleos, saturando), separacao em GPU (2026-09-02)
 a, d = batch_time_estimate(3600, "parakeet_onnx", "cuda", 24, asr_device="cpu")
 assert abs(a - 3600 / 16.5) < 1e-6 and abs(d - (20 + 0.0065 * 3600)) < 1e-6, (a, d)
-a8, _ = batch_time_estimate(3600, "parakeet_onnx", "cuda", 8, asr_device="cpu")
-assert abs(a8 - a) < 1e-6
+a8, d8 = batch_time_estimate(3600, "parakeet_onnx", "cuda", 8, asr_device="cpu")
+assert a8 > a, "a transcricao em CPU tambem depende dos nucleos aqui"
+assert abs(d8 - d) < 1e-6, "a separacao segue em GPU, sem escala por nucleos"
 g, _ = batch_time_estimate(3600, "parakeet_onnx", "cuda", 24, asr_device="cuda")
 assert abs(g - 3600 / 62.0) < 1e-6
 assert d < a

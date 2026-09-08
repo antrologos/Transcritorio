@@ -100,13 +100,26 @@ print("PASS: profile_size")
 assert "sem placa NVIDIA" in cap.describe_hardware(FRACA)
 assert "8 GB" in cap.describe_hardware(GPU_BOA)
 assert cap.cpu_speed_warning(GPU_BOA) == ""
-# 2026-09-02: o aviso fala do TAGARELA (poucos minutos) e da separacao de
-# falantes (a etapa que escala com os nucleos), nao mais do Whisper.
-# ...e usa a MESMA conta da barra/janela do lote (0,06x x 24/nucleos):
-# 16 nucleos -> 45 + 216*1,5 s = 6 min; 4 nucleos -> 45 + 216*6 = 22 min.
-assert "6 min" in cap.cpu_speed_warning(cap.Hardware(has_gpu=False, cores=16))
-assert "22 min" in cap.cpu_speed_warning(cap.Hardware(has_gpu=False, cores=4))
-assert "Separar falantes agora" in cap.cpu_speed_warning(MINIMA)
+# 2026-09-05: o aviso passa a dizer as DUAS etapas com numero, e a MESMA conta
+# da barra/janela do lote. Antes so falava da separacao de falantes, chamada de
+# "a etapa demorada", e mandava desmarcar "Separar falantes agora" a quem
+# tivesse pressa. Medido num notebook de 4 nucleos: transcrever 1 h leva
+# ~7,5 min e separar ~6 min — a separacao e a metade BARATA, em qualquer
+# contagem de nucleos, entao aquele conselho adiava o que menos pesa.
+for _n in (2, 4, 8, 16, 24):
+    _t, _d = cap.batch_time_estimate(3600.0, "parakeet_onnx", "cpu", _n)
+    assert 0.6 < _d / _t < 1.4, \
+        f"as duas etapas na mesma ordem em {_n} nucleos: {_t:.0f} vs {_d:.0f} s"
+# Na maquina alvo do plano (4 nucleos) a transcricao e a metade MAIOR. Antes
+# desta correcao a formula dava 341 s de transcricao contra 1341 s de
+# separacao — 3,9x — e era com esse numero que a janela do lote aconselhava.
+_t4, _d4 = cap.batch_time_estimate(3600.0, "parakeet_onnx", "cpu", 4)
+assert _t4 > _d4, f"4 nucleos: {_t4:.0f} vs {_d4:.0f} s"
+_aviso4 = cap.cpu_speed_warning(cap.Hardware(has_gpu=False, cores=4))
+assert "transcrever" in _aviso4 and "separar os falantes" in _aviso4
+assert "Separar falantes agora" not in _aviso4, "conselho derrubado pela medicao"
+assert "Separar falantes agora" not in cap.cpu_speed_warning(MINIMA)
+assert "deixar rodando" in cap.cpu_speed_warning(MINIMA), "poucos nucleos ganham ressalva"
 assert all("Sem placa de vídeo" in cap.cpu_speed_warning(h) for h in (MINIMA, cap.Hardware(has_gpu=False, cores=8)))
 print("PASS: textos de apoio")
 

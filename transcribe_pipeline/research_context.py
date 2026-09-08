@@ -72,6 +72,24 @@ def write_template_if_missing(paths: Paths) -> Path:
     return path
 
 
+def is_filled(context_text: str) -> bool:
+    """O usuario escreveu alguma coisa, ou o arquivo ainda e so o template?
+
+    Desde que o projeto passa a nascer com o template, TODO projeto tem o
+    arquivo — e mandar as instrucoes ao usuario ("Preencha o que fizer
+    sentido…", "(Descreva em poucas linhas…)") para a AI como se fossem o
+    contexto da pesquisa e ruido em todos os prompts. Conta como conteudo
+    qualquer linha que nao seja titulo `#`, nao esteja entre parenteses e
+    nao faca parte do paragrafo fixo do template (puro)."""
+    fixo = {" ".join(line.split()) for line in TEMPLATE.splitlines()}
+    for raw_line in str(context_text or "").splitlines():
+        line = " ".join(raw_line.split())
+        if not line or line.startswith("#") or line.startswith("(") or line in fixo:
+            continue
+        return True
+    return False
+
+
 def known_names(context_text: str) -> list[str]:
     """Extrai a lista da secao 'Nomes conhecidos' (linhas `- Nome`).
 

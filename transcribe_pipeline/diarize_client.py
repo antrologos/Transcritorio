@@ -57,8 +57,11 @@ class DiarizeServer:
     READY_TIMEOUT = 900.0
     STOP_TIMEOUT = 5.0
 
-    def __init__(self, project_root: Path, command: list[str] | None = None) -> None:
+    def __init__(self, project_root: Path, command: list[str] | None = None,
+                 threads: int = 0) -> None:
         self.project_root = Path(project_root)
+        # 0 = nao mexer (o filho fica como sempre foi).
+        self.threads = max(0, int(threads or 0))
         self._command = list(command) if command else runtime.cli_command(
             "--project", str(self.project_root), "diarize-serve",
         )
@@ -69,6 +72,19 @@ class DiarizeServer:
         self._dead = False
         self.failure_reason = ""
         self.served = 0
+
+    def _child_env(self) -> dict[str, str]:
+        """Ambiente do filho, composto LOCALMENTE sobre o funil comum.
+
+        `secure_subprocess_env()` vale para TODO subprocesso do app — ffmpeg,
+        ffprobe, canais, worker da LLM. Por um limite de threads la dentro
+        reafinaria todos eles em silencio, entao a composicao acontece aqui.
+        As variaveis precisam existir ANTES de o filho importar torch."""
+        from .capabilities import thread_env
+
+        env = dict(secure_subprocess_env())
+        env.update(thread_env(self.threads))
+        return env
 
     # --- ciclo de vida -------------------------------------------------
     def start(self) -> bool:
@@ -85,7 +101,7 @@ class DiarizeServer:
                 encoding="utf-8",
                 errors="replace",
                 bufsize=1,
-                env=secure_subprocess_env(),
+                env=self._child_env(),
                 **_no_window_flags(),
             )
         except Exception as exc:  # noqa: BLE001 - sem servidor, sem drama: fallback
@@ -172,6 +188,21 @@ class DiarizeServer:
                 if on_progress is not None:
                     on_progress(payload)
             elif kind == "done":
+                if "error" in payload:
+                    # O servidor avisa falha de carga por @DONE {"error": ...}.
+                    # Sem este ramo, `failures` ausente viraria 0 — sucesso
+                    # falso, com o arquivo marcado como separado sem nada ter
+                    # rodado.
+                    self._mark_dead(str(payload.get("error") or "")[:300])
+                    return None
+                recebidos = [str(item) for item in (payload.get("ids") or [])]
+                if recebidos and recebidos != ids:
+                    # Resposta de um pedido ANTERIOR. Nao ha correlacao no
+                    # protocolo, e a fila de linhas e compartilhada: aceitar
+                    # isto daria "pronto" a um arquivo que o servidor ainda nem
+                    # comecou. Continuar esperando o nosso.
+                    _logger.warning("@DONE de %s chegou enquanto se esperava %s", recebidos, ids)
+                    continue
                 self.served += 1
                 try:
                     return int(payload.get("failures", 0))

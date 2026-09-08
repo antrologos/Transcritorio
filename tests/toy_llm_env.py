@@ -7,6 +7,12 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# Estado da MAQUINA fora do teste: model_manager grava download_diagnostic.log
+# e cria models/ em runtime.app_data_dir() — sem isto, o teste deixava rastro
+# no diretorio REAL de quem roda a suite (revisao 2026-09-07).
+import os as _os_iso
+import tempfile as _tf_iso
+_os_iso.environ["TRANSCRITORIO_HOME"] = _tf_iso.mkdtemp()
 
 from transcribe_pipeline import llm_env, model_manager
 

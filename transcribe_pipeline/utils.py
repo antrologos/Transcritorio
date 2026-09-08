@@ -210,6 +210,12 @@ PROGRESS_JSON_PREFIX = "@PROGRESS "
 # protocolo na mesma familia do @PROGRESS.
 READY_JSON_PREFIX = "@READY "
 DONE_JSON_PREFIX = "@DONE "
+# Resultado de um worker pelo STDOUT (2026-09-03): o llm-venv criado a
+# partir do Python da Microsoft Store sofre virtualizacao de arquivos —
+# o que ele grava em %LOCALAPPDATA% cai em Packages\...\LocalCache e o
+# app (Python normal) nunca ve o arquivo ("A AI local falhou ao
+# responder"). A linha @RESULT chega sempre; o arquivo vira reserva.
+RESULT_JSON_PREFIX = "@RESULT "
 
 
 def parse_prefixed_json_line(line: str, prefix: str) -> dict[str, Any] | None:

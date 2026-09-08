@@ -24,6 +24,15 @@ import sys
 from pathlib import Path
 
 PROGRESS_PREFIX = "@PROGRESS "
+# Resultado tambem pelo stdout (2026-09-03): num llm-venv criado a partir
+# do Python da Microsoft Store, o arquivo gravado em %LOCALAPPDATA% cai na
+# pasta virtualizada do pacote (Packages\...\LocalCache) e o app nunca o
+# ve. A linha @RESULT chega sempre; o arquivo fica como reserva.
+RESULT_PREFIX = "@RESULT "
+
+
+def emit_result(payload: dict) -> None:
+    print(RESULT_PREFIX + json.dumps(payload, ensure_ascii=False), flush=True)
 MAX_WINDOW_CHARS = 9000  # ~2,5k tokens pt: prefill leve na GPU de 8 GB
 
 
@@ -110,17 +119,118 @@ def format_trechos(trechos: list[dict]) -> str:
 SEM_RESPOSTA = "Isso nao aparece nas entrevistas disponiveis."
 
 
+def _fold(text: str) -> str:
+    """Minusculas sem acentos (o Qwen escreve "não… disponíveis"; a recusa
+    canonica e sem acento — comparar de forma insensivel)."""
+    import unicodedata as _ud
+
+    return "".join(c for c in _ud.normalize("NFD", str(text).lower()) if _ud.category(c) != "Mn")
+
+
 def validate_answer(resposta: str, n_trechos: int) -> bool:
     """Resposta valida = cita ao menos um [n] existente OU e a recusa exata.
 
     Ancoragem por construcao: afirmacao sem citacao nao passa (puro,
-    testavel)."""
+    testavel). A recusa e reconhecida com ou sem acentos (2026-09-03)."""
     import re as _re
 
-    if SEM_RESPOSTA.lower() in resposta.lower():
+    if _fold(SEM_RESPOSTA).rstrip(".") in _fold(resposta):
         return True
     cited = {int(m) for m in _re.findall(r"\[(\d+)\]", resposta)}
     return bool(cited) and all(1 <= c <= n_trechos for c in cited)
+
+
+# --- Visao geral: perguntas sobre o CONJUNTO respondidas pelos resumos ---
+
+def split_resumo_sections(markdown: str) -> dict[str, str]:
+    """Secoes '## Resumo', '## Indice tematico', '## Observacoes' de um
+    {id}.resumo.md -> {"resumo", "indice", "observacoes"} (puro; aceita
+    cabecalhos com ou sem acento e em qualquer caixa)."""
+    sections = {"resumo": "", "indice": "", "observacoes": ""}
+    current = None
+    buf: dict[str, list[str]] = {k: [] for k in sections}
+    for line in str(markdown or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            title = _fold(stripped[3:])
+            if title.startswith("resumo"):
+                current = "resumo"
+            elif title.startswith("indice"):
+                current = "indice"
+            elif title.startswith("observac"):
+                current = "observacoes"
+            else:
+                current = None
+            continue
+        if current is not None:
+            buf[current].append(line.rstrip())
+    return {k: "\n".join(v).strip() for k, v in buf.items()}
+
+
+def batch_resumos(resumos: list[dict], max_chars: int = MAX_WINDOW_CHARS) -> list[list[dict]]:
+    """Lotes de resumos por tamanho (nunca parte um resumo; puro)."""
+    batches: list[list[dict]] = []
+    current: list[dict] = []
+    size = 0
+    for item in resumos:
+        length = len(str(item.get("resumo") or "")) + len(str(item.get("indice") or "")) + 40
+        if current and size + length > max_chars:
+            batches.append(current)
+            current, size = [], 0
+        current.append(item)
+        size += length
+    if current:
+        batches.append(current)
+    return batches
+
+
+def format_resumos(resumos: list[dict]) -> str:
+    """Bloco '=== [ID] === resumo / indice' para o prompt (puro)."""
+    parts = []
+    for item in resumos:
+        iid = str(item.get("interview_id") or "?")
+        titulo = str(item.get("titulo") or "").strip()
+        head = f"=== [{iid}]" + (f" ({titulo})" if titulo and titulo != iid else "") + " ==="
+        body = str(item.get("resumo") or "").strip()
+        indice = str(item.get("indice") or "").strip()
+        if indice:
+            body = f"{body}\nTemas: {indice}" if body else f"Temas: {indice}"
+        parts.append(f"{head}\n{body}")
+    return "\n\n".join(parts)
+
+
+def cited_interviews(resposta: str, known_ids: list[str]) -> list[str]:
+    """Ids de entrevista citados como [ID] na resposta, na ordem, sem
+    repeticao, so os conhecidos (puro)."""
+    import re as _re
+
+    known = {str(i) for i in known_ids}
+    seen: list[str] = []
+    for match in _re.findall(r"\[([^\[\]]{1,80})\]", str(resposta or "")):
+        candidate = match.strip()
+        if candidate in known and candidate not in seen:
+            seen.append(candidate)
+    return seen
+
+
+VISAO_MAP_PROMPT = (
+    "Voce ajuda um pesquisador a responder uma pergunta sobre um CONJUNTO de "
+    "entrevistas. Abaixo estao resumos de algumas entrevistas, cada um identificado "
+    "por [ID]. Liste, EM PORTUGUES, o que nesses resumos ajuda a responder a "
+    "pergunta: um item por ponto, sempre citando a(s) entrevista(s) no formato [ID]. "
+    "Use apenas o que esta nos resumos; se nada ajudar, escreva: nada relevante.\n\n"
+    "{contexto}=== RESUMOS ===\n{resumos}\n\n=== PERGUNTA ===\n{pergunta}"
+)
+
+VISAO_REDUCE_PROMPT = (
+    "Voce recebera NOTAS extraidas dos resumos de varias entrevistas (cada nota cita "
+    "entrevistas como [ID]). Escreva, EM PORTUGUES e em ate 300 palavras, a resposta "
+    "a pergunta do pesquisador sobre o conjunto: organize por temas ou padroes, diga "
+    "o que e comum e o que diverge, e cite as entrevistas [ID] que sustentam cada "
+    "afirmacao. Regras: use apenas as notas; nao invente; se as notas nao respondem, "
+    f"escreva exatamente: {SEM_RESPOSTA}\n\n"
+    "{contexto}=== NOTAS ===\n{notas}\n\n=== PERGUNTA ===\n{pergunta}"
+)
 
 
 PERGUNTA_PROMPT = (
@@ -178,8 +288,14 @@ def _make_asker(model_repo: str):
             text = tokenizer.apply_chat_template(
                 [{"role": "user", "content": prompt}], tokenize=False, add_generation_prompt=True)
         inputs = tokenizer(text, return_tensors="pt").to("cuda")
+        # Receita do fabricante para o modo sem "thinking" (model card do
+        # Qwen3.5): amostragem leve em vez de greedy puro, que tende a
+        # repetir em saidas longas. Semente fixa = resposta reprodutivel.
+        torch.manual_seed(0)
         with torch.no_grad():
-            output = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+            output = model.generate(
+                **inputs, max_new_tokens=max_new_tokens, do_sample=True,
+                temperature=0.7, top_p=0.8, top_k=20, repetition_penalty=1.05)
         return tokenizer.decode(output[0][inputs.input_ids.shape[1]:], skip_special_tokens=True).strip()
 
     return ask
@@ -272,6 +388,7 @@ def _run_entidades(args) -> int:
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps({"mencoes": mencoes}, ensure_ascii=False), encoding="utf-8")
+    emit_result({"mencoes": mencoes})
     emit(100, f"{len(mencoes)} mencoes de nomes encontradas.")
     return 0
 
@@ -296,8 +413,9 @@ def _run_perguntar(args) -> int:
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     if not trechos:
-        out_path.write_text(json.dumps(
-            {"resposta": SEM_RESPOSTA, "valida": True}, ensure_ascii=False), encoding="utf-8")
+        payload = {"resposta": SEM_RESPOSTA, "valida": True}
+        out_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        emit_result(payload)
         emit(100, "Sem trechos relevantes.")
         return 0
     contexto = ""
@@ -323,21 +441,128 @@ def _run_perguntar(args) -> int:
         # como resposta — vira recusa honesta.
         resposta = SEM_RESPOSTA
         valida = True
-    out_path.write_text(json.dumps(
-        {"resposta": resposta, "valida": valida}, ensure_ascii=False, indent=1),
-        encoding="utf-8")
+    payload = {"resposta": resposta, "valida": valida}
+    out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+    emit_result(payload)
     emit(100, "Resposta pronta.")
+    return 0
+
+
+def _run_visao_geral(args) -> int:
+    """Pergunta sobre o CONJUNTO: map (lotes de resumos -> notas com [ID])
+    e reduce (sintese citando entrevistas). Sem resumos = recusa."""
+    resumos = json.loads(Path(args.resumos_file).read_text(encoding="utf-8"))
+    out_path = Path(args.out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    known = [str(r.get("interview_id") or "") for r in resumos]
+    if not resumos:
+        payload = {"resposta": SEM_RESPOSTA, "citadas": [], "valida": True}
+        out_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        emit_result(payload)
+        emit(100, "Sem resumos no escopo.")
+        return 0
+    contexto = ""
+    if args.context_file:
+        context_path = Path(args.context_file)
+        if context_path.exists():
+            raw = context_path.read_text(encoding="utf-8").strip()
+            if raw:
+                contexto = f"=== CONTEXTO DA PESQUISA ===\n{raw[:4000]}\n\n"
+    emit(10, "Carregando o Qwen 3.5, nosso modelo de AI local...")
+    ask = _make_asker(args.model_repo)
+    batches = batch_resumos(resumos)
+    notas: list[str] = []
+    for index, batch in enumerate(batches, start=1):
+        emit(10 + int(70 * index / max(1, len(batches))),
+             f"O Qwen esta lendo os resumos ({index}/{len(batches)} lotes, "
+             f"{sum(len(b) for b in batches[:index])} de {len(resumos)} entrevistas)...")
+        answer = ask(VISAO_MAP_PROMPT.format(
+            contexto=contexto, resumos=format_resumos(batch), pergunta=args.question),
+            max_new_tokens=700)
+        if answer and _fold("nada relevante") not in _fold(answer)[:40]:
+            notas.append(answer.strip())
+    if not notas:
+        resposta = SEM_RESPOSTA
+    else:
+        emit(85, "Escrevendo a visão geral...")
+        resposta = ask(VISAO_REDUCE_PROMPT.format(
+            contexto=contexto, notas="\n\n".join(notas), pergunta=args.question),
+            max_new_tokens=900)
+    citadas = cited_interviews(resposta, known)
+    valida = bool(citadas) or _fold(SEM_RESPOSTA) in _fold(resposta)
+    if not valida:
+        resposta = SEM_RESPOSTA
+    payload = {"resposta": resposta, "citadas": citadas, "valida": True, "lotes": len(batches)}
+    out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+    emit_result(payload)
+    emit(100, "Visão geral pronta.")
+    return 0
+
+
+NOMEAR_TEMAS_PROMPT = (
+    "Voce ajuda um pesquisador a nomear TEMAS encontrados em entrevistas transcritas. "
+    "Para cada tema abaixo (identificado por id), com seus termos caracteristicos e "
+    "algumas passagens centrais, escreva um NOME curto (2 a 6 palavras, em portugues, "
+    "sem aspas) e uma DESCRICAO de uma frase do que as passagens tem em comum. "
+    "Nao invente: baseie-se so nas passagens.\n"
+    'Responda APENAS com JSON: [{{"id": "...", "nome": "...", "descricao": "..."}}, ...]\n\n'
+    "{contexto}=== TEMAS ===\n{temas}"
+)
+
+
+def format_temas(batch: list[dict]) -> str:
+    """Bloco de temas para o prompt de nomeacao (puro)."""
+    parts = []
+    for item in batch:
+        termos = ", ".join(item.get("terms") or [])
+        passagens = "\n".join(f"  - {p}" for p in (item.get("passages") or []))
+        parts.append(f"[{item.get('id')}] termos: {termos}\n{passagens}")
+    return "\n\n".join(parts)
+
+
+def _run_nomear_temas(args) -> int:
+    """Nomes e descricoes para lotes de temas (JSON por lote; robusto a lixo)."""
+    batches = json.loads(Path(args.temas_file).read_text(encoding="utf-8"))
+    out_path = Path(args.out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    contexto = ""
+    if args.context_file:
+        context_path = Path(args.context_file)
+        if context_path.exists():
+            raw = context_path.read_text(encoding="utf-8").strip()
+            if raw:
+                contexto = f"=== CONTEXTO DA PESQUISA ===\n{raw[:3000]}\n\n"
+    emit(10, "Carregando o Qwen 3.5, nosso modelo de AI local...")
+    ask = _make_asker(args.model_repo)
+    nomes: list[dict] = []
+    for index, batch in enumerate(batches, start=1):
+        emit(10 + int(85 * index / max(1, len(batches))),
+             f"O Qwen esta dando nome aos temas ({index}/{len(batches)} lotes)...")
+        answer = ask(NOMEAR_TEMAS_PROMPT.format(contexto=contexto, temas=format_temas(batch)),
+                     max_new_tokens=600)
+        for item in extract_json_list(answer):
+            if isinstance(item, dict) and item.get("id") and item.get("nome"):
+                nomes.append({"id": str(item["id"]), "nome": str(item["nome"]),
+                              "descricao": str(item.get("descricao") or "")})
+    payload = {"nomes": nomes}
+    out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+    emit_result(payload)
+    emit(100, f"{len(nomes)} temas nomeados.")
     return 0
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--task", required=True, choices=["sumario", "perguntar", "entidades"])
+    parser.add_argument("--task", required=True,
+                        choices=["sumario", "perguntar", "entidades", "visao_geral", "nomear_temas"])
+    parser.add_argument("--temas-file", default="")
     parser.add_argument("--question", default="")
     parser.add_argument("--trechos-file", default="")
+    parser.add_argument("--resumos-file", default="")
     parser.add_argument("--alvos-file", default="")
     parser.add_argument("--review", default="")
     parser.add_argument("--out", required=True)
+    parser.add_argument("--notes-out", default="")
     parser.add_argument("--model-repo", required=True)
     parser.add_argument("--context-file", default="")
     parser.add_argument("--glossario-file", default="")
@@ -354,6 +579,10 @@ def main() -> int:
         return _run_entidades(args)
     if args.task == "perguntar":
         return _run_perguntar(args)
+    if args.task == "visao_geral":
+        return _run_visao_geral(args)
+    if args.task == "nomear_temas":
+        return _run_nomear_temas(args)
 
     if not args.review:
         print("--review e obrigatorio para a tarefa sumario.")
@@ -387,6 +616,19 @@ def main() -> int:
             MAP_PROMPT.format(contexto=contexto, glossario=glossario, janela=window),
             max_new_tokens=500)
         window_notes.append(extract_json_list(answer))
+
+    # Notas de tema por janela persistidas (2026-09-03): materia-prima da
+    # funcao de temas e sementes de nomes; antes eram descartadas apos o
+    # reduce. Opcional; falha ao gravar nunca derruba o resumo.
+    if args.notes_out:
+        try:
+            notes_path = Path(args.notes_out)
+            notes_path.parent.mkdir(parents=True, exist_ok=True)
+            flat = [dict(n, janela=w) for w, notes in enumerate(window_notes)
+                    for n in notes if isinstance(n, dict)]
+            notes_path.write_text(json.dumps({"notas": flat}, ensure_ascii=False, indent=1), encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            print(f"Nao foi possivel guardar as notas de tema: {exc}")
 
     emit(85, "Montando o resumo e o indice tematico...")
     notas = merge_notes(window_notes)

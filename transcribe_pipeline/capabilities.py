@@ -74,6 +74,15 @@ CAPABILITIES: tuple[Capability, ...] = (
         "encontra trechos pelo significado, sem as palavras exatas",
         models=("search_encoder",),
     ),
+    # v3 (2026-09-03): tier de qualidade — encoder maior + reordenador que
+    # le pergunta e trecho juntos. Roda em CPU (mais devagar); com placa de
+    # video fica imediato. Instalado => aplicado (search.active_encoder).
+    Capability(
+        "busca_qualidade",
+        "Busca por sentido — qualidade",
+        "trechos mais certeiros, reordenados pela leitura de pergunta e trecho juntos",
+        models=("search_encoder_hq", "search_reranker"),
+    ),
     Capability(
         "glossario_nomes",
         "Glossário de nomes",
@@ -100,7 +109,7 @@ PROFILES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
      ("transcrever", "separar_falantes", "tempos_por_palavra")),
     ("completo", "Completo",
      ("transcrever", "separar_falantes", "tempos_por_palavra",
-      "busca_semantica", "glossario_nomes", "resumo_perguntar")),
+      "busca_semantica", "busca_qualidade", "glossario_nomes", "resumo_perguntar")),
 )
 
 
@@ -300,21 +309,24 @@ def profile_size(
 def cpu_speed_warning(hw: Hardware) -> str:
     """Aviso honesto de tempo em CPU; "" quando ha GPU (pura).
 
-    Ordem de grandeza, nao promessa, com o TAGARELA como motor (poucos
-    minutos por hora de audio em qualquer CPU) e a separacao de falantes
-    escalando com os nucleos (0,06x na maquina de 24 nucleos).
+    Diz as DUAS etapas com numero. Ate 2026-09-05 este texto so falava da
+    separacao de falantes, apresentada como a demorada, e sugeria desmarcar
+    "Separar falantes agora" a quem tivesse pressa. A medicao num notebook de
+    4 nucleos derrubou as duas coisas: transcrever 1 h leva ~7,5 min e separar
+    os falantes ~6 min. A separacao e a metade BARATA em qualquer contagem de
+    nucleos, entao o conselho antigo mandava adiar o que menos pesa.
     """
     if hw.has_gpu:
         return ""
-    # Mesma conta que a barra de progresso e a janela do lote usam
-    # (expected_diarization_seconds), para os textos nunca divergirem.
-    separacao = describe_seconds(expected_diarization_seconds(3600.0, "cpu", hw.cores))
-    if hw.cores >= 4:
-        return ("Sem placa de vídeo, 1 hora de entrevista leva poucos minutos para "
-                f"transcrever e cerca de {separacao} para separar os falantes.")
-    return ("Sem placa de vídeo e com poucos núcleos, transcrever é rápido, mas "
-            f"separar os falantes de 1 hora de entrevista leva cerca de {separacao} "
-            "— desmarque \"Separar falantes agora\" se tiver pressa.")
+    # Mesma conta da barra e da janela do lote, para os textos nunca divergirem.
+    transcricao, separacao = batch_time_estimate(3600.0, "parakeet_onnx", "cpu", hw.cores)
+    texto = ("Sem placa de vídeo, 1 hora de entrevista leva cerca de "
+             f"{describe_seconds(transcricao)} para transcrever e "
+             f"{describe_seconds(separacao)} para separar os falantes.")
+    if hw.cores < 4:
+        texto += (" Com poucos núcleos é mais devagar do que isso — um lote grande "
+                  "dá para deixar rodando e voltar depois.")
+    return texto
 
 
 # --- Estimativa de tempo de um lote (2026-09-02, puras) ---------------------
@@ -332,6 +344,115 @@ _ASR_SECONDS_PER_AUDIO_SECOND = {
     ("whisper", "cpu"): 1.1,
     ("whisper", "cuda"): 1 / 8.0,
 }
+# Como o TAGARELA escala com nucleos. A primeira medicao (2026-09-04) so
+# limitou o NUMERO DE THREADS nesta maquina de 24 nucleos: 1 thread 0,207;
+# 2 threads 0,107; 4 threads 0,093; 8 threads 0,080; 24 (referencia) 0,061 —
+# curva de expoente ~0,25. Mas limitar threads nao simula um notebook: as 4
+# threads continuavam com a banda de memoria e os caches de uma estacao de
+# trabalho, e o TAGARELA e limitado justamente por banda (varre 2,4 GB de pesos
+# a cada passada).
+#
+# Refeito em 2026-09-05 com AFINIDADE de processo (4 nucleos fisicos de
+# verdade) e entrevistas inteiras do acervo: 0,126 s por segundo de audio, e
+# nao os 0,093 de antes — 35% mais lento. Contra a referencia de 24 threads
+# isso da (24/4)^p = 0,126/0,0606, ou seja p = 0,41. A curva por afinidade,
+# em 4 min de audio: 1 thread 0,271; 2 threads 0,172; 3 threads 0,149;
+# 4 threads 0,138. Continua otimista para um notebook real (a banda de memoria
+# desta maquina e maior), e por isso `measured_ratio` manda quando ha
+# historico.
+_PARAKEET_CORE_EXPONENT = 0.4
+# A separacao de falantes TAMBEM satura, e a formula supunha escala LINEAR
+# (24/cores) — errava por quase 2x, para o lado pessimista. Medido em
+# 2026-09-05, 4 nucleos fisicos, entrevistas inteiras, com o modelo ja
+# carregado (que e o que o servidor de lote faz): 0,100 s por segundo de audio,
+# contra os 0,36 que a escala linear previa. (24/4)^p = 0,100/0,060 da p = 0,29.
+# Curva por afinidade em 4 min: 1 thread 0,273; 2 threads 0,176; 3 threads
+# 0,142; 4 threads 0,123.
+#
+# A consequencia dessa correcao nao e cosmetica: com a escala linear o app
+# dizia que separar falantes era 79% do tempo do lote, quando sao 44% — e
+# aconselhava adiar justamente a etapa BARATA.
+_DIARIZATION_CORE_EXPONENT = 0.3
+# Numero minimo de transcricoes ja feitas para preferir a MEDICAO desta
+# maquina a qualquer formula (ver measured_asr_ratio).
+MIN_SAMPLES_FOR_MEASURED = 2
+
+
+def cpu_budget(mode: str, cores: int, *, concurrent: bool = False) -> tuple[int, int]:
+    """Quantas threads para transcrever e para separar falantes (pura).
+
+    `(0, 0)` e o SENTINELA "nao mexer": nenhum SessionOptions, nenhuma variavel
+    de ambiente, nenhum set_num_threads — o caminho de hoje, identico por
+    construcao e nao por teste. So acontece no modo "tudo" sem sobreposicao,
+    que e o padrao; quem nunca abrir a opcao nao ve diferenca nenhuma.
+
+    Com sobreposicao NUNCA devolve 0. Medido em 2026-09-05: dois motores com o
+    pool dimensionado pela maquina inteira, disputando 4 nucleos, custam 5,9x o
+    de um pool do tamanho certo (0,815 contra 0,138 s por segundo de audio).
+    Sobrepor sem orcamento explicito seria pior que o sequencial de hoje.
+
+    A divisao ao meio na sobreposicao vem da medicao: as duas etapas custam a
+    mesma ordem de grandeza, e dar mais nucleos a uma so faz a outra virar
+    gargalo (3/1 e 1/3 ficaram 30% PIORES que o sequencial).
+    """
+    n = max(1, int(cores or 1))
+    metade = max(1, n // 2)
+    if not concurrent:
+        return (metade, metade) if mode == "metade" else (0, 0)
+    if mode == "metade":
+        quarto = max(1, n // 4)
+        return (quarto, quarto)
+    return (metade, max(1, n - metade))
+
+
+def should_overlap(hw: Hardware, device: str) -> tuple[bool, str]:
+    """Vale sobrepor transcricao e separacao de falantes? (motivo junto, pura)
+
+    Medido em 2026-09-05 num notebook de 4 nucleos: sobrepor corta 10,8% do
+    relogio do lote (706,9 s -> 630,7 s em 53 min de audio, duas repeticoes
+    intercaladas), com a saida identica — transcricao byte a byte, separacao
+    com DER 0,000%.
+
+    Os "nao" tem motivo medido, nao cautela:
+    - com placa, as duas etapas ja sao rapidas E disputariam a MESMA placa;
+      os pesos do pipeline em CUDA (70 contra 25) dizem que nao ha o que ganhar;
+    - com menos de 4 nucleos a divisao nao fecha. Com 3, o orcamento sairia
+      1 e 2 — e as divisoes ASSIMETRICAS foram as piores de toda a medicao
+      (3/1 deu 0,284 e 1/3 deu 0,291 s por segundo de audio, contra 0,220 do
+      sequencial): a etapa que fica com uma thread vira o gargalo e o `max()`
+      piora em vez de melhorar. Com 2, cada uma ficaria com uma so;
+    - com menos de 8 GB, as duas juntas arriscam paginar — e paginar e o pior
+      desfecho possivel aqui, porque o ASR ja e limitado por banda de memoria.
+      Um lote que pagina fica MAIS LENTO que o sequencial: a melhoria viraria
+      prejuizo.
+    """
+    if device == "cuda":
+        return False, "com placa de vídeo as duas etapas já são rápidas e disputariam a mesma placa"
+    if int(hw.cores or 1) < 4:
+        return False, "com poucos núcleos, dividir a máquina deixaria as duas etapas lentas"
+    if hw.ram_gb is not None and float(hw.ram_gb) < 8.0:
+        return False, "a memória não comporta as duas etapas ao mesmo tempo"
+    return True, ""
+
+
+def thread_env(threads: int) -> dict[str, str]:
+    """Variaveis que amarram os pools de BLAS/OpenMP num processo filho (pura).
+
+    Vazio quando nao ha orcamento — o filho fica como hoje. Precisam existir
+    ANTES de o filho importar torch, por isso ambiente e nao chamada de funcao.
+    Quem compoe isto sobre `secure_subprocess_env()` faz a composicao LOCAL:
+    aquela funcao e o funil de todo subprocesso (ffmpeg, ffprobe, canais, LLM)
+    e um limite la dentro reafinaria todos em silencio.
+    """
+    if not threads or int(threads) <= 0:
+        return {}
+    valor = str(int(threads))
+    return {
+        "OMP_NUM_THREADS": valor,
+        "MKL_NUM_THREADS": valor,
+        "OPENBLAS_NUM_THREADS": valor,
+        "NUMEXPR_NUM_THREADS": valor,
+    }
 
 
 def expected_diarization_seconds(audio_seconds: float, device: str, cores: int) -> float:
@@ -339,8 +460,32 @@ def expected_diarization_seconds(audio_seconds: float, device: str, cores: int) 
     audio = max(0.0, float(audio_seconds))
     if device == "cuda":
         return 20.0 + 0.0065 * audio
-    escala = _REF_LOGICAL_CORES / max(1, int(cores or 1))
+    escala = (_REF_LOGICAL_CORES / max(1, int(cores or 1))) ** _DIARIZATION_CORE_EXPONENT
     return 45.0 + 0.06 * audio * escala
+
+
+def measured_ratio(samples: list[tuple[float, float]],
+                   minimo: int = MIN_SAMPLES_FOR_MEASURED) -> float | None:
+    """Segundos de maquina por segundo de audio, MEDIDOS nesta maquina (puro).
+
+    `samples` = [(segundos de audio, segundos que a etapa levou)] do historico
+    do proprio projeto. Devolve a MEDIANA (um arquivo atipico nao contamina) ou
+    None quando ha amostra de menos.
+
+    Existe porque nenhuma formula da conta: a correcao por numero de nucleos
+    nao enxerga a velocidade de cada nucleo. Um caso real (2026-09-04): um
+    i7-10610U de 15 W com 8 threads logicos entregou 0,46 s por segundo de
+    audio, contra 0,08 previstos pela contagem de nucleos — 5,7x de diferenca,
+    toda ela em clock, IPC e reducao termica. Depois da primeira transcricao a
+    maquina ja disse a verdade sobre si mesma; a formula so vale antes disso."""
+    razoes = sorted(
+        elapsed / audio for audio, elapsed in (samples or [])
+        if audio and audio > 0 and elapsed and elapsed > 0
+    )
+    if len(razoes) < max(1, int(minimo)):
+        return None
+    meio = len(razoes) // 2
+    return razoes[meio] if len(razoes) % 2 else (razoes[meio - 1] + razoes[meio]) / 2.0
 
 
 def batch_time_estimate(
@@ -349,12 +494,17 @@ def batch_time_estimate(
     device: str,
     cores: int,
     asr_device: str | None = None,
+    asr_samples: list[tuple[float, float]] | None = None,
+    diar_samples: list[tuple[float, float]] | None = None,
 ) -> tuple[float, float]:
     """(segundos de transcricao, segundos de separacao de falantes) do lote.
 
     `asr_device` e o device REAL da transcricao quando difere do da maquina:
     o TAGARELA numa maquina CUDA roda em CPU ate o pacote onnx-gpu ser
     instalado (parakeet_runner.planned_device); a separacao usa `device`.
+
+    `asr_samples`/`diar_samples` sao o historico [(audio_s, levou_s)] DESTA
+    maquina: quando ha o bastante, mandam na estimativa (ver measured_ratio).
     """
     audio = max(0.0, float(total_audio_s))
     if audio == 0:
@@ -362,10 +512,26 @@ def batch_time_estimate(
     dev = "cuda" if device == "cuda" else "cpu"
     dev_asr = "cuda" if (asr_device or device) == "cuda" else "cpu"
     eng = "parakeet_onnx" if engine == "parakeet_onnx" else "whisper"
-    asr = audio * _ASR_SECONDS_PER_AUDIO_SECOND[(eng, dev_asr)]
-    if dev_asr == "cpu" and eng == "whisper":
-        asr *= _REF_LOGICAL_CORES / max(1, int(cores or 1))
-    return asr, expected_diarization_seconds(audio, dev, cores)
+    medido = measured_ratio(asr_samples or [])
+    if medido is not None:
+        asr = audio * medido
+    else:
+        asr = audio * _ASR_SECONDS_PER_AUDIO_SECOND[(eng, dev_asr)]
+        if dev_asr == "cpu":
+            escala = _REF_LOGICAL_CORES / max(1, int(cores or 1))
+            # Whisper escala quase linear com nucleos; o TAGARELA satura.
+            asr *= escala if eng == "whisper" else escala ** _PARAKEET_CORE_EXPONENT
+    diar_medido = measured_ratio(diar_samples or [])
+    diar = (45.0 + audio * diar_medido) if diar_medido is not None \
+        else expected_diarization_seconds(audio, dev, cores)
+    return asr, diar
+
+
+def estimate_is_measured(samples: list[tuple[float, float]] | None) -> bool:
+    """A estimativa veio da MEDICAO desta maquina? (puro) — a janela diz isso
+    ao usuario, porque "≈ 4 h" com base no historico e outra coisa que "≈ 4 h"
+    com base numa tabela de outra maquina."""
+    return measured_ratio(samples or []) is not None
 
 
 def describe_seconds(seconds: float) -> str:

@@ -24,7 +24,10 @@ REPO = Path(__file__).resolve().parents[1]
 # ---------------------------------------------------------------- pacote
 assert (REPO / "transcribe_pipeline" / "assets" / "transcritorio_icon.ico").exists()
 assert (REPO / "transcribe_pipeline" / "assets" / "transcritorio_icon.svg").exists()
-print("PASS: icones copiados para dentro do pacote")
+# O manual embutido (Ajuda > Como usar o Transcritorio) viaja pelo mesmo
+# assets/*: sem ele, a aba degrada para "nao veio nesta instalacao".
+assert (REPO / "transcribe_pipeline" / "assets" / "manual.md").exists()
+print("PASS: icones e manual copiados para dentro do pacote")
 
 texto = (REPO / "pyproject.toml").read_text(encoding="utf-8")
 assert '"assets/*"' in texto, "package-data sem assets/*"
@@ -55,7 +58,9 @@ else:
         nomes = zf.namelist()
     assert "transcribe_pipeline/assets/transcritorio_icon.ico" in nomes, \
         [n for n in nomes if "assets" in n]
-    print(f"PASS: wheel contem o .ico ({wheel.name})")
+    assert "transcribe_pipeline/assets/manual.md" in nomes, \
+        [n for n in nomes if "assets" in n]
+    print(f"PASS: wheel contem o .ico e o manual ({wheel.name})")
 
 # ------------------------------------------------------- app_asset_path
 from transcribe_pipeline.review_studio_qt import app_asset_path

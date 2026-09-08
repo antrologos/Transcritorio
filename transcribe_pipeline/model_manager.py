@@ -386,13 +386,41 @@ _OPTIONAL_MODELS: tuple[ModelAsset, ...] = (
         companion_repo="microsoft/mdeberta-v3-base",
         companion_revision="a0484667b22365f84929a935b5e50a51f71f159d",
     ),
+    # Busca por sentido v3 (2026-09-03): encoder de RECUPERACAO
+    # (pergunta -> trecho) no lugar do MiniLM de parafrase, que pontuava
+    # 0,02 em busca pt-BR (MTEB-BR) e casava a forma da pergunta, nao o
+    # tema. O e5-small tem a MESMA arquitetura e o MESMO download (470 MB)
+    # do antigo; o granite e o tier de qualidade (instalado => aplicado);
+    # o reordenador (cross-encoder) decide o que realmente responde.
     ModelAsset(
         "search_encoder",
-        "Busca por sentido (encoder multilingue)",
-        "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
-        "encontrar trechos por significado nas transcricoes",
+        "Busca por sentido (leve)",
+        "intfloat/multilingual-e5-small",
+        "encontrar trechos por significado nas transcricoes (qualquer maquina)",
         estimated_gb=0.5,
-        revision="86741b4e3f5cb7765a600d3a3d55a0f6a6cb443d",
+        revision="614241f622f53c4eeff9890bdc4f31cfecc418b3",
+        download_exclude=("pytorch_model.bin", "onnx/*", "openvino/*", ".eval_results/*"),
+    ),
+    # Gabarito de 2026-09-03 (8 entrevistas, 12 consultas): e5-large-instruct
+    # hit@1 0,92 / P@5 0,82 contra 0,83 / 0,75 do granite-311m e 0,67 / 0,60
+    # do e5-small — vira o tier de qualidade (1,1 GB, MIT, instrucao em pt).
+    ModelAsset(
+        "search_encoder_hq",
+        "Busca por sentido (qualidade)",
+        "intfloat/multilingual-e5-large-instruct",
+        "trechos mais certeiros; ~10x o custo do leve em CPU (ideal com placa de video)",
+        estimated_gb=1.1,
+        revision="274baa43b0e13e37fafa6428dbc7938e62e5c439",
+        download_exclude=("onnx/*", "openvino/*", "pytorch_model.bin"),
+    ),
+    ModelAsset(
+        "search_reranker",
+        "Reordenador da busca (cross-encoder)",
+        "BAAI/bge-reranker-v2-m3",
+        "le pergunta e trecho juntos e diz o que realmente responde",
+        estimated_gb=2.3,
+        revision="953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e",
+        download_exclude=("assets/*",),
     ),
 )
 
@@ -953,6 +981,39 @@ def _snapshot_has_weights(path: Path) -> bool:
     except OSError:
         pass
     return False
+
+
+def _asset_completo_no_cache(asset: "ModelAsset", cache_dir: Path) -> bool:
+    """O modelo pinado ja esta inteiro no disco? (sem tocar na rede)
+
+    Estrito de proposito: exige o snapshot da revision PINADA (nao o
+    fallback para refs/main de cached_snapshot_path, que aceitaria uma
+    revision antiga) e pesos presentes pelo mesmo criterio de status()/
+    verify. Um snapshot vazio — que download_optional_model aceita como
+    "cached" — NAO passa aqui.
+    """
+    if not asset.revision:
+        return False
+    snapshot = hf_cache_path(asset.repo_id, cache_dir) / "snapshots" / asset.revision
+    return snapshot.is_dir() and _snapshot_has_weights(snapshot)
+
+
+def motivo_da_falha(exc: BaseException) -> str:
+    """Traduz a excecao de um download para a lingua de quem le a caixa
+    de erro (pura). O texto cru ("HEAD .gitattributes: status 401") mandou
+    o usuario E o autor procurarem a causa no lugar errado (2026-09-05)."""
+    texto = sanitize_message(str(exc))
+    nome = type(exc).__name__
+    if "status 401" in texto or " 401" in texto:
+        return ("o Hugging Face recusou o acesso (401): o token está ausente ou "
+                "inválido. Confira em Ferramentas → Gerenciar modelos…")
+    if "status 403" in texto or " 403" in texto:
+        return ("o Hugging Face recusou o acesso (403): a conta ainda não aceitou "
+                "os termos deste modelo na página dele no Hugging Face.")
+    if ("Connection" in nome or "Timeout" in nome or "Max retries" in texto
+            or "getaddrinfo" in texto or "Failed to establish" in texto):
+        return "sem conexão com o Hugging Face — confira a internet e tente de novo."
+    return texto
 
 
 def has_partial_cache(
@@ -1574,7 +1635,19 @@ def download_required_models(
     include_diarization: bool = True,
     include_alignment: bool = True,
     align_languages: tuple[str, ...] | None = None,
+    relatorio: list[str] | None = None,
 ) -> int:
+    """Baixa o que falta dos modelos exigidos; devolve o numero de falhas.
+
+    `relatorio`, quando passado, recebe uma linha por falha em lingua de
+    usuario ("Separacao de falantes: o Hugging Face recusou o acesso...") —
+    e o que app_service poe em JobResult.message para a caixa de erro.
+    `force=True` re-verifica pela rede ate o que ja esta completo no disco.
+    """
+    # "" NAO e token: o dialogo devolve string vazia quando nao pediu token, e
+    # apply_secure_hf_environment gravaria esse "" por cima do token que ja
+    # estivesse no ambiente (so `None` preserva o ambiente). Revisao 2026-09-07.
+    token = token or None
     cache_dir = runtime.model_cache_dir()
     cache_dir.mkdir(parents=True, exist_ok=True)
     runtime.apply_secure_hf_environment(offline=False, token=token, token_env=token_env)
@@ -1586,7 +1659,7 @@ def download_required_models(
     # Remove stale filelock sentinels from previous crashed downloads so
     # snapshot_download doesn't deadlock. See _clear_stale_hf_locks.
     _clear_stale_hf_locks(cache_dir)
-    token_value = token if token is not None else os.environ.get(token_env)
+    token_value = token or os.environ.get(token_env)
     models = get_required_models(asr_variants, include_diarization=include_diarization,
                                  include_alignment=include_alignment,
                                  align_languages=align_languages)
@@ -1630,6 +1703,21 @@ def download_required_models(
                     "pinada; abortando download. Atualize ASR_VARIANTS / "
                     "_FIXED_MODELS com a SHA do revision."
                 )
+            # Ja completo no disco: nao ha o que baixar, e perguntar ao
+            # servidor custava caro — um HEAD num repositorio restrito sem
+            # token devolve 401 e derrubava o lote INTEIRO, com o modelo
+            # inteiro ja no disco (incidente 2026-09-05: faltava so o
+            # pacote de espanhol, e a re-verificacao do pyannote falhou).
+            # Tambem e o que faz a preparacao funcionar sem internet.
+            if not force and _asset_completo_no_cache(asset, cache_dir):
+                _download_diag_log(f"[manual:{asset.label}] ja instalado, sem consulta a rede")
+                if progress_callback is not None:
+                    progress_callback({
+                        "event": "model_download_done",
+                        "progress": end_pct,
+                        "message": f"{asset.label} já instalado ({index}/{total}).",
+                    })
+                continue
             _manual_snapshot_download(
                 repo_id=asset.repo_id,
                 revision=asset.revision,
@@ -1657,12 +1745,15 @@ def download_required_models(
             for line in traceback.format_exception(type(exc), exc, exc.__traceback__):
                 for subline in line.rstrip().splitlines():
                     _download_diag_log(f"  {sanitize_message(subline)}")
+            motivo = motivo_da_falha(exc)
+            if relatorio is not None:
+                relatorio.append(f"{asset.label}: {motivo}")
             if progress_callback is not None:
                 progress_callback(
                     {
                         "event": "model_download_error",
                         "progress": end_pct,
-                        "message": f"Falha ao baixar {asset.label}: {sanitize_message(str(exc))}",
+                        "message": f"Falha ao baixar {asset.label}: {motivo}",
                     }
                 )
             continue

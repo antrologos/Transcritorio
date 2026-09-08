@@ -540,12 +540,19 @@ def cmd_search(args: argparse.Namespace) -> int:
     for hit in exact:
         print(f"  {hit['interview_id']} {hit['start']:8.1f}s {hit['label']}: {hit['text'][:100]}")
     if search_mod.encoder_cached():
-        exclude = {(h["interview_id"], h["turn_index"]) for h in exact}
-        similar = search_mod.project_semantic_search(paths, ids, args.query, exclude=exclude)
-        print(f"== Trechos com sentido parecido ({len(similar)}) ==")
-        for hit in similar:
-            print(f"  sim={hit['similarity']:.2f} {hit['interview_id']} {hit['start']:8.1f}s "
-                  f"{hit['label']}: {hit['text'][:100]}")
+        # Mesmo pipeline da janela Perguntar (v3): passagens, hibrido com o
+        # literal, reordenador se instalado, secoes de relevancia.
+        from . import app_settings as settings_mod
+        result = search_mod.search_passages(
+            paths, ids, args.query, max_results=settings_mod.search_max_results())
+        print(f"== Trechos que tratam disso ({len(result['hits'])} de ate {result['max_results']}"
+              f"{', reordenados' if result['reranked'] else ', so por semelhanca'}) ==")
+        for section in result["sections"]:
+            rotulo = "Nada realmente proximo" if section.get("weak") else section["label"]
+            print(f"-- {rotulo} ({len(section['hits'])})")
+            for hit in section["hits"]:
+                nota = f"score={hit['score']:+.2f}" if hit.get("score") is not None else f"z={hit.get('z', 0):.1f}"
+                print(f"  {nota} {hit['interview_id']} {hit['start']:8.1f}s: {hit['text'][:110]}")
     else:
         print("(busca por sentido indisponivel: modelo ainda nao baixado)")
     return 0
@@ -562,9 +569,26 @@ def cmd_ask(args: argparse.Namespace) -> int:
         if search_mod.source_path_for(paths, r["interview_id"]) is not None
         and (not args.ids or r["interview_id"] in set(args.ids))
     ]
+    from .ask import question_kind, run_visao_geral
+
     search_mod.build_indexes(paths, ids)
-    result = run_ask(paths, ids, args.question,
-                     progress_callback=lambda d: print(d.get("message", ""), flush=True))
+    progress = lambda d: print(d.get("message", ""), flush=True)  # noqa: E731
+    if question_kind(args.question) == "global":
+        # Pergunta sobre o conjunto: pelos resumos, como a janela Perguntar.
+        result = run_visao_geral(paths, ids, args.question, progress_callback=progress)
+        if result.get("erro"):
+            print(result["erro"])
+            return 1
+        if not result.get("com_resumo"):
+            print("Pergunta sobre o conjunto: nenhuma entrevista do escopo tem resumo ainda "
+                  "(gere com `summarize`).")
+            return 1
+        print(f"\n(visao geral pelos resumos de {len(result['com_resumo'])} de {len(ids)} entrevistas)")
+        print("\n" + str(result.get("resposta") or ""))
+        if result.get("citadas"):
+            print("\nEntrevistas citadas: " + ", ".join(result["citadas"]))
+        return 0
+    result = run_ask(paths, ids, args.question, progress_callback=progress)
     if result.get("erro"):
         print(result["erro"])
         return 1

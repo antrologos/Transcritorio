@@ -39,7 +39,8 @@ EXCECOES_R3: set[str] = set()
 
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
-    QApplication, QAbstractButton, QGroupBox, QLabel, QLineEdit)
+    QApplication, QAbstractButton, QGroupBox, QLabel, QLineEdit,
+    QTabWidget, QTreeWidget)
 
 app = QApplication.instance() or QApplication([])
 
@@ -66,6 +67,9 @@ from transcribe_pipeline.review_studio_qt import (
     ReviewStudioWindow,
     _apply_dark_theme,
 )
+from transcribe_pipeline.ui_help import HelpWindow
+from transcribe_pipeline.ui_tour import TourPanel
+from transcribe_pipeline.volta_guiada import PASSOS
 
 _apply_dark_theme(app)
 win = ReviewStudioWindow(project_root=tmp)
@@ -92,6 +96,18 @@ def coletar(prefixo: str, raiz) -> None:
     for edt in raiz.findChildren(QLineEdit):
         if edt.placeholderText():
             textos.append((f"{prefixo}placeholder", edt.placeholderText()))
+    # Abas e cabecalhos de tabela tambem sao texto de UI (a janela de
+    # ajuda, 2026-09-05, e feita deles) — a revisao de 2026-09-07 notou
+    # que passavam invisiveis pela guarda.
+    for tabs in raiz.findChildren(QTabWidget):
+        for i in range(tabs.count()):
+            if tabs.tabText(i):
+                textos.append((f"{prefixo}aba", tabs.tabText(i)))
+    for arvore in raiz.findChildren(QTreeWidget):
+        cab = arvore.headerItem()
+        for c in range(arvore.columnCount()):
+            if cab is not None and cab.text(c):
+                textos.append((f"{prefixo}cabecalho", cab.text(c)))
     if raiz.windowTitle():
         textos.append((f"{prefixo}titulo", raiz.windowTitle()))
 
@@ -113,6 +129,8 @@ dialogos = {
     "novo-projeto/": NewProjectDialog(),
     "preparar-modelos/": ModelSetupDialog(),
     "gerenciar-modelos/": ModelManagerDialog(lambda: None),
+    "ajuda/": HelpWindow(None),
+    "volta/": TourPanel(None, PASSOS),
 }
 for prefixo, dlg in dialogos.items():
     for act in dlg.findChildren(QAction):

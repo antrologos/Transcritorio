@@ -86,6 +86,88 @@ def alignment_default() -> bool:
     return install_profile() != "essencial"
 
 
+COMPUTER_USE_MODES = ("tudo", "metade")
+COMPUTER_USE_DEFAULT = "tudo"
+
+
+def computer_use() -> str:
+    """Quanto do computador o app pode usar enquanto transcreve (por maquina).
+
+    "tudo" (padrao) e o comportamento de sempre: o app NAO define numero de
+    threads nenhum, e os motores usam o que acharem. "metade" deixa o
+    computador utilizavel enquanto o lote roda, ao custo medido de ~25% a mais
+    de tempo (2026-09-05, notebook de 4 nucleos: 0,172 contra 0,138 s por
+    segundo de audio) — com a transcricao saindo IDENTICA byte a byte.
+
+    Preferencia da MAQUINA, nunca do projeto: um projeto viaja pelo Dropbox
+    para outro computador com outra contagem de nucleos.
+    """
+    valor = str(load().get("computer_use") or "").strip().lower()
+    return valor if valor in COMPUTER_USE_MODES else COMPUTER_USE_DEFAULT
+
+
+SEARCH_MAX_RESULTS_DEFAULT = 20
+SEARCH_MAX_RESULTS_RANGE = (5, 100)
+
+
+def search_max_results() -> int:
+    """Quantos trechos a janela Perguntar traz NO MAXIMO (por maquina).
+
+    Padrao 20 (decisao do usuario 2026-09-03: mais que os 8 antigos), mas
+    a busca so devolve os que tratam do tema — pode vir menos.
+    """
+    try:
+        valor = int(load().get("search_max_results", SEARCH_MAX_RESULTS_DEFAULT))
+    except (TypeError, ValueError):
+        return SEARCH_MAX_RESULTS_DEFAULT
+    lo, hi = SEARCH_MAX_RESULTS_RANGE
+    return max(lo, min(hi, valor))
+
+
+def novidades_vista() -> str | None:
+    """Ultima versao cujas novidades ja foram mostradas (por maquina).
+
+    None significa "instalacao que ainda nao conhece este registro" — e
+    nesse caso NAO se mostra nada: a semente e gravada em silencio, para
+    maquina recem-instalada nao receber um aviso do que nunca usou.
+    """
+    valor = str(load().get("novidades_versao_vista") or "").strip()
+    return valor or None
+
+
+# Chaves que NAO provam uso: o app as grava sozinho, antes de a janela
+# nascer (install_tools.ensure_first_run_setup cria o atalho da area de
+# trabalho e grava shortcut_created no PRIMEIRO run). Conta-las como
+# "ja usava" fazia a faixa de novidades aparecer em maquina recem-
+# instalada no Windows — o contrario do prometido (revisao 2026-09-07).
+_CHAVES_AUTOMATICAS = frozenset({
+    "shortcut_created", "cuda_extra_installed", "novidades_versao_vista",
+})
+
+
+def volta_guiada_oferecida() -> bool:
+    """A faixa "Primeira vez aqui?" ja foi respondida nesta maquina?
+
+    Gravada ao clicar Começar ou Agora não, e tambem ao abrir a volta pelo
+    menu Ajuda (quem achou sozinho nao precisa da oferta). Ausente = ainda
+    nao ofereceu.
+    """
+    return bool(load().get("volta_guiada_oferecida", False))
+
+
+def instalacao_ja_usada() -> bool:
+    """Ha alguma preferencia que so um USO anterior grava?
+
+    Distingue "instalei agora" de "ja usava antes deste registro existir".
+    Sem isso, a primeira versao a trazer o aviso de novidades seria
+    justamente a unica que nao conseguiria anunciar as suas — e quem ja
+    usa o app e exatamente quem precisa do aviso. So contam as chaves que
+    o assistente ou uma escolha da pessoa gravam (perfil, motor, idioma,
+    separacao de falantes, uso do computador...).
+    """
+    return any(chave not in _CHAVES_AUTOMATICAS for chave in load())
+
+
 def language_default() -> str:
     """Idioma default de projetos NOVOS (escolha do assistente, etapa 4).
 
